@@ -1,0 +1,76 @@
+#!/usr/bin/env node
+// A stand-in for the Claude CLI, used only by the claude-proxy tests. It never
+// contacts a model. The prompt on stdin selects what it does:
+//
+//   FAKE:sleep   wait until killed
+//   FAKE:flood   write output without end
+//   FAKE:fail    write a sentinel to stderr and exit 3
+//   anything else  reply with {"findings":[]} plus the prompt's length
+//
+// Every invocation writes a record of its argv, cwd, pid and environment keys
+// (and whether any environment value hashes to FAKE_CLAUDE_SECRET_PROBE, a
+// SHA-256) into $FAKE_CLAUDE_LOG, so a test can assert what the proxy started and how.
+// FAKE_CLAUDE_HELP=old prints a --help without the flags the proxy requires.
+"use strict";
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+
+const args = process.argv.slice(2);
+if (args.includes("--help")) {
+  if (process.env.FAKE_CLAUDE_HELP === "old") {
+    process.stdout.write("Usage: claude [options]\n  -p, --print  Print response and exit\n");
+  } else {
+    process.stdout.write(
+      [
+        "Usage: claude [options] [command] [prompt]",
+        "  --disable-slash-commands              Disable all skills",
+        "  --no-session-persistence              Disable session persistence",
+        "  -p, --print                           Print response and exit",
+        "  --strict-mcp-config                   Only use MCP servers from --mcp-config",
+        "  --tools <tools...>                    Specify the list of available tools",
+        "",
+      ].join("\n"),
+    );
+  }
+  process.exit(0);
+}
+
+let input = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (d) => (input += d));
+process.stdin.on("end", () => {
+  const logDir = process.env.FAKE_CLAUDE_LOG;
+  if (logDir) {
+    const probe = process.env.FAKE_CLAUDE_SECRET_PROBE;
+    const record = {
+      argv: args,
+      cwd: process.cwd(),
+      pid: process.pid,
+      envKeys: Object.keys(process.env).sort(),
+      envHoldsProbe: probe
+        ? Object.values(process.env).some((v) => crypto.createHash("sha256").update(v).digest("hex") === probe)
+        : false,
+      prompt: input,
+    };
+    fs.writeFileSync(path.join(logDir, `${process.pid}.json`), JSON.stringify(record));
+  }
+  if (input.includes("FAKE:sleep")) {
+    setInterval(() => {}, 1000);
+    return;
+  }
+  if (input.includes("FAKE:flood")) {
+    const chunk = "x".repeat(64 * 1024);
+    const write = () => {
+      while (process.stdout.write(chunk)) {}
+      process.stdout.once("drain", write);
+    };
+    write();
+    return;
+  }
+  if (input.includes("FAKE:fail")) {
+    process.stderr.write("FAKE-STDERR-SENTINEL internal detail\n");
+    process.exit(3);
+  }
+  process.stdout.write(JSON.stringify({ findings: [], promptBytes: Buffer.byteLength(input) }) + "\n");
+});

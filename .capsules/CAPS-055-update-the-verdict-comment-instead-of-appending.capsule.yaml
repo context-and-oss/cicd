@@ -1,0 +1,158 @@
+kind: change-capsule
+schema: 1
+id: CAPS-055
+status: sealed
+intent: >
+  notify already renders a hidden marker as the first line of every PR comment
+  it builds, and delivery.go already contains upsertGitHubComment, which finds
+  the comment carrying that marker and PATCHes it. Neither reusable workflow
+  used any of it. Both ended their run with a bare `gh pr comment --body-file`,
+  which appends unconditionally, so the marker was rendered and then thrown
+  away by the step that posted it.
+
+  Measured on a pull request — three comments from
+  github-actions, one per push, every one of them opening with the identical
+  `<!-- cicd-pipeline:precommit -->`. A review bot's comment on the same PR shows
+  created and updated timestamps an hour apart on a single id, which is the
+  mechanism notify had already implemented and the workflow was not asking for.
+
+  This is not a false pass and no verdict was ever wrong. What it costs is the
+  reader: a thread of stale verdicts in which nothing says which one is live,
+  and the only way to tell is to compare each comment's Commit row against the
+  head of the branch. On a PR that takes ten pushes the live verdict is the
+  tenth of ten identically-shaped comments.
+impact:
+  visibility: internal
+  benefit: >
+    The `Post PR comment` step in .github/workflows/precommit.yml and in
+    .github/workflows/dogfood-precommit.yml now reads the marker off line 1 of
+    comment.md, looks for a Bot-authored comment whose body starts with it, and
+    PATCHes that comment through `gh api` — falling back to creating one when
+    there is no match. The marker format is never spelled in the lookup: it is
+    whatever notify's PipelineMarker put there, so src/notify/render.go keeps
+    its single ownership of the string and the step cannot drift from it.
+
+    The step body is duplicated across the two workflows because it cannot be
+    anything else. A reusable workflow runs against the caller's checkout, so
+    scripts/ci/ is not on disk when precommit.yml runs in a consumer
+    repository, and the body has to be inline. check_pr_comment_upsert in
+    scripts/repo_surface.py holds the two halves that duplication can break —
+    every workflow that posts a PR comment must also PATCH an issue comment,
+    and every copy of that step must be byte-identical — refusing an empty
+    sweep rather than passing vacuously when no workflow posts at all.
+
+    Five tests in scripts/tests/test_repo_surface.py drive it: the clean
+    fixture, a poster reverted to the exact inline shape that shipped, that
+    revert failing check-repo-surface.py, one copy drifted from the other, and
+    a repository where nothing posts. The numbered check list in
+    scripts/check-repo-surface.py's docstring carries the new entry, because a
+    test already refuses a docstring that has fallen behind CHECKS.
+  compatibility: compatible
+  risk:
+    - >
+      The `.user.type == "Bot"` filter is load-bearing and degrades quietly.
+      GITHUB_TOKEN carries issues write, which can edit anybody's comment in
+      the repository, so without the filter a human who quotes the marker in a
+      comment of their own becomes the PATCH target and the person being gated
+      hosts the gate's verdict. With it, a consumer running this workflow under
+      a user PAT matches nothing and falls back to appending — visibly noisy,
+      never a hijacked report, but nothing announces that the upsert stopped
+      working for them.
+    - >
+      Per-push history leaves the PR thread. The earlier verdicts survive in
+      the evidence artifacts and in each run's job summary, so nothing is
+      destroyed, but "did this get worse across pushes" stops being answerable
+      by reading the conversation. That is the trade the change is for.
+    - >
+      PRs already open across the upgrade keep the comments they accumulated.
+      The lookup takes the newest match, so the live verdict stays at the
+      bottom of the thread where a reader lands and the stale ones sit visibly
+      above it, but nothing deletes them.
+    - >
+      The prefix `<!-- cicd-pipeline:` is now spelled in two workflows as well
+      as in src/notify/render.go, and no check compares them. If PipelineMarker
+      changes shape the case guard stops matching, the step emits its warning
+      and posts a new comment every push — which is the behaviour being
+      repaired, arriving back loudly rather than silently. That is why it is
+      recorded here and not guarded.
+    - >
+      check_pr_comment_upsert requires every poster to be byte-identical, so a
+      future workflow that legitimately posts a differently-shaped comment
+      fails it. The check is the reason the copies stayed together; the cost is
+      that diverging on purpose means arguing with it first.
+decisions:
+  - id: d01
+    choice: do the upsert in the workflow with gh api rather than calling notify.Github
+    options:
+      - call notify.Github from the workflow and reuse the tested Go path (rejected)
+      - gh pr comment --edit-last --create-if-none (rejected)
+      - gh api list, PATCH or POST, in the step (chosen)
+    because: >
+      notify.Github is the better-tested implementation and it is already
+      driven against a local httptest server, so reusing it was the first
+      choice. It needs the write-scoped token handed to a module fetched from a
+      remote ref at a tag, which is a wider trust surface than handing it to a
+      GitHub-authored binary already on the runner — the token itself is not
+      new, the step has set GH_TOKEN from secrets.GITHUB_TOKEN all along.
+      --edit-last is the one-line version and the wrong one: it matches the
+      last comment by the actor rather than by marker, so any other
+      github-actions comment posted in between becomes the target.
+    confidence: high
+  - id: d02
+    choice: PATCH the newest marker match rather than the oldest
+    options:
+      - the oldest, keeping the comment's position in the thread stable (rejected)
+      - the newest (chosen)
+    because: >
+      On a PR opened after this change there is exactly one match and the
+      choice is inert. It matters only for PRs carrying comments from before
+      it, and there the newest is the one a reader reaches last — updating it
+      leaves the live verdict at the bottom with the stale ones above, which
+      reads as history. Updating the oldest would put the live verdict above
+      two comments that look newer.
+    confidence: medium
+  - id: d03
+    choice: warn and create when comment.md carries no marker, rather than failing
+    options:
+      - fail the step, since a lookup that cannot match is a step that could not do its work (rejected)
+      - emit a workflow warning and post a new comment (chosen)
+    because: >
+      This repository fails a tool that could not run, and the shape is close
+      enough to be worth stating why it is not that. Nothing is being reported
+      as clean: the comment is posted, the verdict in it is complete and
+      correct, and the only thing lost is the deduplication — whose failure
+      mode is the visible duplicate thread this change exists to end. Failing
+      the step would turn a cosmetic regression into a red pipeline on a run
+      whose gate result is sound.
+    confidence: high
+  - id: d04
+    choice: guard the duplicated step with a surface check rather than sharing a script
+    options:
+      - move the body into scripts/ci/ and call it from both workflows (rejected)
+      - keep it inline in both and check that the copies agree (chosen)
+    because: >
+      Sharing is not available. A reusable workflow executes against the
+      caller's checkout, so a script under scripts/ci/ exists on disk for the
+      dogfood run and does not exist for any consumer — the same asymmetry that
+      put the mechanics of the release delivery in a script the release
+      workflows can reach and kept precommit's shell inline. Given the copies
+      must exist, the thing worth defending is that they agree, and that
+      neither has quietly reverted to appending.
+    confidence: high
+  - id: d05
+    choice: detect an inline run step as well as a block scalar
+    options:
+      - read run block scalars only, reusing _run_block_bodies as it stands (rejected)
+      - read both forms through _run_scripts (chosen)
+    because: >
+      The step that shipped was a single inline `run: gh pr comment ...`, which
+      _run_block_bodies skips by design. A check reading only block scalars
+      would not have seen the exact line it exists to refuse, and worse, a
+      revert of one workflow to that form would leave one poster standing and
+      report nothing at all.
+    confidence: high
+tags:
+  - notify
+  - workflow
+  - github
+  - developer-experience

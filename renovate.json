@@ -1,0 +1,193 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "$comment": [
+    "Bounded update configuration for the two version families this repository",
+    "maintains by hand: the static runtime tool images (scripts/runtime-images.json)",
+    "and the Dagger version.",
+    "",
+    "Deliberately bounded three ways:",
+    "  1. enabledManagers is custom.regex only. No gomod, npm, nuget, pip, docker or",
+    "     github-actions manager runs. GitHub Actions stay SHA-pinned by Dependabot",
+    "     (.github/dependabot.yml) and the intent gate's approved machine-origin",
+    "     path recognises dependabot[bot] specifically — a second bot proposing",
+    "     action bumps would break that contract.",
+    "  2. Every managerFilePatterns entry is an explicit anchored regex naming the",
+    "     files this repository owns: src/**/images.go, the root Makefile, its own",
+    "     .github/workflows/, and module dagger.json files. templates/ (consumer",
+    "     copy-paste starters), docs/ and testdata/ are never rewritten, so consumer",
+    "     examples and unrelated version prose are left alone.",
+    "  3. packageRules group by tool family, one group per family, so a bad bump",
+    "     lands in its own reviewable pull request and can be reverted without",
+    "     touching any other tool.",
+    "",
+    "Installing/activating the Renovate App is a separate human action. Nothing in",
+    "ordinary CI reads this file to fetch versions: CI only proves the pins are",
+    "immutable and resolvable (scripts/check-runtime-image-pins.py, the Dagger",
+    "smokes). scripts/tests/test_update_config.py proves these managers actually",
+    "match the pins in the tree — and that they do not match consumer examples.",
+    "",
+    "Adding a static image means: add the constants to the module's images.go in the",
+    "// renovate-image: <depName> + version + image form, declare it in",
+    "scripts/runtime-images.json, and add a packageRule below with groupName",
+    "\"runtime image: <family>\". The checker fails until all three exist."
+  ],
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":dependencyDashboard"
+  ],
+  "enabledManagers": [
+    "custom.regex"
+  ],
+  "prConcurrentLimit": 3,
+  "labels": [
+    "dependencies"
+  ],
+  "customManagers": [
+    {
+      "description": "Static runtime tool images pinned in a module's images.go (readable tag + immutable digest)",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/.+/images\\.go$/"
+      ],
+      "matchStrings": [
+        "// renovate-image: (?<depName>[^\\s]+)[ \\t]*\\n[ \\t]*\\w+[ \\t]*=[ \\t]*\"(?<currentValue>[^\"]+)\"[ \\t]*\\n[ \\t]*\\w+[ \\t]*=[ \\t]*\"[^\\n]*@(?<currentDigest>sha256:[0-9a-f]{64})\""
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "description": "The conftest image `make policy-test` runs, kept identical to the risk module's gate",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^Makefile$/"
+      ],
+      "matchStrings": [
+        "# renovate-image: (?<depName>[^\\s]+)[ \\t]*\\n[ \\t]*\\w+[ \\t]*:?=[ \\t]*(?<currentValue>[^\\s@]+)[ \\t]*\\n[ \\t]*\\w+[ \\t]*:?=[ \\t]*[^\\s]*@(?<currentDigest>sha256:[0-9a-f]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "description": "Dagger CLI + engine version used by this repository's own workflows",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "DAGGER_VERSION: \"(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\""
+      ],
+      "depNameTemplate": "dagger/dagger",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
+      "description": "Dagger engine version recorded in every module's dagger.json",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/.+/dagger\\.json$/"
+      ],
+      "matchStrings": [
+        "\"engineVersion\": \"(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)\""
+      ],
+      "depNameTemplate": "dagger/dagger",
+      "datasourceTemplate": "github-releases"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Dagger CLI, engine and module engineVersion move together — a split leaves the CLI talking to an engine it was not tested against",
+      "matchDepNames": [
+        "dagger/dagger"
+      ],
+      "groupName": "dagger"
+    },
+    {
+      "matchDepNames": [
+        "semgrep/semgrep"
+      ],
+      "groupName": "runtime image: semgrep"
+    },
+    {
+      "matchDepNames": [
+        "zricethezav/gitleaks"
+      ],
+      "groupName": "runtime image: gitleaks"
+    },
+    {
+      "matchDepNames": [
+        "aquasec/trivy"
+      ],
+      "groupName": "runtime image: trivy"
+    },
+    {
+      "matchDepNames": [
+        "trufflesecurity/trufflehog"
+      ],
+      "groupName": "runtime image: trufflehog"
+    },
+    {
+      "matchDepNames": [
+        "ghcr.io/zaproxy/zaproxy"
+      ],
+      "groupName": "runtime image: zap"
+    },
+    {
+      "matchDepNames": [
+        "openpolicyagent/conftest"
+      ],
+      "groupName": "runtime image: conftest"
+    },
+    {
+      "matchDepNames": [
+        "golangci/golangci-lint"
+      ],
+      "groupName": "runtime image: golangci-lint"
+    },
+    {
+      "description": "The Node runtime stays below 25: quality's Node legs install pnpm and yarn projects through corepack, which Node 25 no longer ships. Moving past it means installing corepack (or the package managers) into the image first, which is a code change, not a pin bump.",
+      "matchDepNames": [
+        "node"
+      ],
+      "groupName": "runtime image: node",
+      "allowedVersions": "<25"
+    },
+    {
+      "matchDepNames": [
+        "python"
+      ],
+      "groupName": "runtime image: python"
+    },
+    {
+      "matchDepNames": [
+        "golang"
+      ],
+      "groupName": "runtime image: golang"
+    },
+    {
+      "matchDepNames": [
+        "mcr.microsoft.com/dotnet/sdk"
+      ],
+      "groupName": "runtime image: dotnet-sdk"
+    },
+    {
+      "description": "The .NET SDK is pinned once per supported band (src/quality/images.go dotnetSDKBands), and a band must never be updated across its own major: an SDK image carries its band in the tag, so proposing 10.0 for the 8.0 pin would delete support for every net8.0 consumer rather than bump a digest. Each band stays inside its major and takes digest refreshes and patch tags only.",
+      "matchDepNames": [
+        "mcr.microsoft.com/dotnet/sdk"
+      ],
+      "matchCurrentValue": "/^8\\./",
+      "allowedVersions": "<9"
+    },
+    {
+      "matchDepNames": [
+        "mcr.microsoft.com/dotnet/sdk"
+      ],
+      "matchCurrentValue": "/^10\\./",
+      "allowedVersions": "<11"
+    },
+    {
+      "matchDepNames": [
+        "alpine"
+      ],
+      "groupName": "runtime image: alpine"
+    }
+  ]
+}

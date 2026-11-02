@@ -1,0 +1,14 @@
+{
+  "name": "build",
+  "engineVersion": "v0.20.8",
+  "sdk": {
+    "source": "go"
+  },
+  "dependencies": [
+    {
+      "name": "quality",
+      "source": "../quality"
+    }
+  ],
+  "disableDefaultFunctionCaching": true
+}

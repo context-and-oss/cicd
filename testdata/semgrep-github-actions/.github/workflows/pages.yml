@@ -1,0 +1,24 @@
+name: Semgrep embedded Bash regression — expressions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Purge stale artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[] | select(.name == "github-pages") | .id' \
+          | while read -r id; do
+              [ -n "$id" ] || continue
+              gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id"
+            done

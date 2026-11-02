@@ -1,0 +1,3 @@
+# Build output from build.mjs — produced by archive-fixture tests, never committed.
+# (Root .gitignore only covers /dist/ at repo root.)
+dist/

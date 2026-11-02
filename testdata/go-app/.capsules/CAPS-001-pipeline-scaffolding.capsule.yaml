@@ -1,0 +1,45 @@
+kind: change-capsule
+schema: 1
+id: CAPS-001
+status: sealed
+intent: >
+  Introduce the go-app test fixture so that integration tests for lint,
+  unit-test, SAST, secrets-scan, and vulnerability-scan pipeline stages
+  have a reproducible Go target to run against instead of relying on
+  real production code.
+impact:
+  visibility: internal
+  benefit: deterministic CI feedback without touching production services
+  compatibility: additive
+  risk:
+    - secrets.go contains intentional credential fixtures; Trivy and Semgrep
+      must be tuned to treat them as test-only artefacts, not real leaks
+decisions:
+  - id: d01
+    choice: go-app as the primary language fixture
+    options:
+      - go-app (chosen)
+      - node-app
+      - python-app
+    because: >
+      Go is the language of the Dagger module host code, so a Go fixture
+      exercises the full lint, test, build, and scan surface without
+      introducing a second runtime into the test matrix for the very first
+      fixture. Node and Python fixtures were added later once the pipeline
+      proved stable.
+    confidence: high
+  - id: d02
+    choice: include intentional secrets in secrets.go
+    options:
+      - dedicated secrets fixture file (chosen)
+      - inline literals in main.go
+    because: >
+      A separate file makes it trivial to exclude it from production linting
+      rules while still giving the secrets scanner a known-bad target to
+      detect. Inline literals would require per-rule suppressions scattered
+      across main.go.
+    confidence: high
+tags:
+  - testdata
+  - pipeline
+  - ci

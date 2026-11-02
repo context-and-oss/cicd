@@ -1,0 +1,29 @@
+name: Semgrep embedded Bash regression — multiline argument
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open changelog draft
+        env:
+          RELEASE_TAG: v1.2.3
+        run: |
+          set -euo pipefail
+          branch="changelog/${RELEASE_TAG}"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "docs: changelog for ${RELEASE_TAG}" \
+            --body "Drafted changelog for \`${RELEASE_TAG}\` from the pull requests merged since the last tag (\`scripts/draft-changelog.sh\`).
+
+          **This is a draft.** Review the wording before merging — it's assembled from commit subjects. The file carries \`draft: true\` in its frontmatter; remove the flag (or edit freely) and merge. Once merged, the changelog page shows this note for the version in place of the generated list.
+
+          📝 Drafted by [the changelog script](https://example.com/changelog)" \
+            || echo "PR may already exist for $branch; branch pushed."

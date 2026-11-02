@@ -1,0 +1,134 @@
+kind: change-capsule
+schema: 1
+id: CAPS-033
+status: sealed
+intent: >
+  security.ScanSource runs Semgrep, Gitleaks and Trivy against one filtered
+  tree and writes ONE envelope behind a single passed. The three findings sets
+  are merged on the way, so by the time the envelope is written the split is
+  gone. A consumer that needs to say "SAST clean, SCA failed" cannot, and the
+  release report a consumer ships to its customers reconstructs the split by
+  string-matching Finding.Tool. That recovers findings and never recovers a
+  verdict, because the per-tool verdict was never written down anywhere.
+
+  SourceStatus already had the right shape. What changed is who is allowed to
+  fill it in. A module that fuses several tools under one envelope now declares
+  its constituents itself in envelope.Sources, and buildCombined propagates
+  those rows INSTEAD OF synthesising one row for the envelope. Instead of, not
+  in addition to, because the two describe the same findings and emitting both
+  would double every count for a consumer that sums the list. The envelope's
+  own verdict is not lost on the way, because it is the AND of the rows that
+  replace it by construction, and the rows say which one tripped.
+
+  Gitleaks now runs under two scopes and reports itself the same way in both,
+  so SourceStatus gains Scope. Without it one scanner over two scopes is
+  indistinguishable, and that ambiguity reaches customers as a report rendering
+  the same tool name twice with no way to say which scan each row came from.
+
+  ScanSource, ScanArchive and ScanImage keep their signatures, their return
+  types and their verdicts. Nothing about the gate moves.
+impact:
+  visibility: external
+  benefit: >
+    A consumer reading combined-evidence.json gets one row per tool with its
+    own passed, its own counts and the scope it ran in, and can gate on the SCA
+    result without gating on the SAST result. The release report deletes the
+    map that guessed the split from tool names.
+  compatibility: additive
+  risk:
+    - >
+      A consumer that counted rows in sources[] to learn how many envelopes
+      were merged now sees four rows where the security stage contributed one.
+      Accepted because sources[] was introduced as a per-source verdict list,
+      not an envelope census, and nothing in this repository or the known
+      consumer counts it. A consumer that SUMS the counts is unaffected, which
+      is the read the field was built for and the one the new tests pin.
+    - >
+      The rows are the module's own claim about itself rather than something
+      the aggregator can verify. If perToolSources and the fused gate ever
+      disagree, the combined document would state an AND that is not the
+      envelope's passed. TestPerToolSources_andEqualsTheFusedVerdict pins that
+      equality across the cases that matter, and the shared shouldFail keeps
+      one threshold rule rather than two.
+    - >
+      No per-tool duration or timestamp is recorded, so a reader cannot tell
+      which scanner was slow. Deliberate: the scanners run concurrently against
+      one filtered tree, so splitting the envelope's single duration between
+      them would be an invention, and an invented number in an evidence
+      document is worse than an absent one.
+    - >
+      src/internal/evidence/schema.json declares additionalProperties false and
+      already omits sources, findings and coverageLines. It is stale and
+      nothing validates against it, so Scope does not make it wrong in a new
+      way. Out of scope here and worth its own change.
+decisions:
+  - id: d01
+    choice: let a fusing module declare its own sources, revisiting CAPS-031 d04
+    options:
+      - keep sources[] aggregator-only and split ScanSource into three envelopes (rejected)
+      - keep sources[] aggregator-only and have consumers match on tool names (rejected)
+      - let a module that fuses tools declare its constituents (chosen)
+    because: >
+      CAPS-031 d04 chose aggregator-only because the aggregator is the one
+      place that sees every envelope, and a per-module copy of a summary about
+      itself would duplicate fields the envelope already carries. That holds
+      for an ordinary module and fails for a fusing one. The aggregator sees
+      the envelope, not the three verdicts inside it, so it cannot synthesise
+      what it cannot see. The module is the last place the split still exists.
+      Splitting ScanSource into three envelopes instead would change the return
+      type from File to Directory and touch stage-2, the ci.yml module-test
+      cells, the README and the CHANGELOG, for the same information. The
+      ordinary case is untouched, so the precedent narrows rather than
+      inverting.
+    confidence: high
+  - id: d02
+    choice: propagate declared rows instead of the envelope row, never both
+    options:
+      - append the declared rows alongside the synthesised envelope row (rejected)
+      - replace the envelope row with the declared rows (chosen)
+    because: >
+      Both lists describe the same findings, so a consumer that sums counts
+      would double every one of them, and a consumer that ANDs verdicts would
+      AND the same verdict twice. Nothing is lost by replacing, because the
+      envelope verdict is the AND of its rows by construction.
+      TestBuildCombinedSynthesisesWhenNoSourcesDeclared guards the branch from
+      being widened later to swallow every envelope.
+    confidence: high
+  - id: d03
+    choice: name each fused envelope once, in a const, and reuse it three ways
+    options:
+      - write the scope string at each use site (rejected)
+      - one const per fused envelope, used as Tool.Name and as Scope (chosen)
+    because: >
+      A consumer joins rows on these strings. Three literals per envelope would
+      let the Tool.Name be renamed without the Scope following, which produces
+      a document that parses and cannot be joined. One const makes drift
+      impossible rather than merely tested for.
+    confidence: high
+  - id: d04
+    choice: put the logic in an untagged file so it is testable without Dagger
+    options:
+      - leave perToolSources in main.go under the build tag (rejected)
+      - move it to sources.go with no build tag (chosen)
+    because: >
+      Files carrying the Dagger entrypoint need the generated client, which is
+      gitignored, so nothing under that tag is reachable by the unit suite. The
+      repository's established split is that pure logic lives untagged, and
+      this is the logic worth pinning. moduleName and moduleStage moved with
+      it rather than being duplicated.
+    confidence: high
+  - id: d05
+    choice: an errored scanner fails only its own row
+    options:
+      - fail every row on the envelope when any scanner errors (rejected)
+      - attribute the error to the scanner that produced it (chosen)
+    because: >
+      The fused verdict already fails on any error, so failing every row adds
+      nothing and destroys the one thing the split exists to state. A Trivy
+      outage should not make a customer report claim the secret scan was
+      inconclusive when it ran and was clean.
+    confidence: high
+tags:
+  - evidence
+  - security
+  - schema

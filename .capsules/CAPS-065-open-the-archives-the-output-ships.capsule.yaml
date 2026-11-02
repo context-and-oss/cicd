@@ -1,0 +1,97 @@
+kind: change-capsule
+schema: 1
+id: CAPS-065
+status: sealed
+intent: >
+  The archive stage's secrets scan read nothing inside an archive. gitleaks
+  v8.30.1 defaults --max-archive-depth to 0, and cicd passed no value, so an
+  output holding app.zip with two credentials inside reported "scanned ~0 bytes"
+  and "no leaks found", exit 0, passed=true. The tree legs of ScanArchive
+  and ScanSource now open three archive layers. Because gitleaks recognises an
+  archive by extension only, a jar, nupkg, war, whl or .tgz is still read as an
+  opaque binary at any depth; those, and archives nested deeper than the limit,
+  are named in warnings[] from gitleaks' own log, and the row states the bytes
+  the tree leg read.
+impact:
+  visibility: consumer
+  benefit: >
+    Measured end to end on engine v0.20.8: an output holding app.zip with a
+    secret inside now reports the finding at app.zip!.env, redacted (the raw
+    token occurs zero times in the envelope). lib/service.jar and a nupkg under
+    a path with spaces are named as not opened, a five-layer zip is named as too
+    deep, and the gitleaks row carries examined 68 "bytes read from the tree"
+    where it carried nothing.
+  compatibility: behavior-change
+  risk:
+    - >
+      ScanSource's tree leg gets the same depth, so precommit can report a secret
+      inside a zip committed to a repository that it reported nothing about
+      before, and turn a green gate red. That is intended: the secret was always
+      there and exposed to anyone who can clone.
+    - >
+      The tree leg runs at --log-level debug, and gitleaks' DBG lines quote
+      decoded file content. The shell filter drops every DBG line except one
+      field-matched shape before anything reaches the disk, and fails closed
+      (exit 125, errors[]) if the filter does not complete. A test replays a
+      decoded credential through the real script and asserts it reaches no file.
+    - >
+      The disclosure is coupled to gitleaks' log wording. A version bump that
+      rewords the DBG or WRN line silences the warnings without failing a unit
+      test; the fixture must be recaptured from the new image, and the ci.yml
+      jar assertion is the integration tripwire.
+    - >
+      Opening archives costs time in proportion to their expanded size. A 2 MB
+      zip of zeros expanding to 2.15 GB took 4m29s at bounded memory; nothing in
+      cicd bounds that beyond the job timeout.
+decisions:
+  - id: d01
+    choice: open three archive layers on the tree legs
+    options:
+      - leave gitleaks' default of 0 (rejected, the defect)
+      - unbounded depth (rejected)
+      - depth 1 (rejected)
+      - depth 3 (chosen)
+    because: >
+      The depth is the only bound on a recursive archive, so unbounded is not on
+      the table. A zip holding a tar.gz is already two layers. Cost scales with
+      expanded bytes rather than layers, and an archive deeper than three is
+      named in warnings[], not dropped.
+    confidence: medium
+  - id: d02
+    choice: apply the depth to ScanSource's tree leg as well as ScanArchive
+    options:
+      - ScanArchive only (rejected)
+      - both dir legs (chosen)
+    because: >
+      A committed zip holding a credential is the same leak in a different scope,
+      and two scopes answering differently about the same file is its own
+      inconsistency. The cost is new findings on repositories that commit
+      archives, disclosed in the risk above.
+    confidence: medium
+  - id: d03
+    choice: disclose unopened archives as warnings, not errors
+    options:
+      - errors[] and passed=false (rejected)
+      - warnings[] naming the files (chosen)
+      - unpack jars and nupkgs in cicd (rejected)
+    because: >
+      The scan ran over everything else and the remedy for an extension gitleaks
+      does not recognise is upstream's; a permanent red gets secrets scanning
+      switched off, the semgrepnotifications.go precedent. Unpacking in cicd
+      would add an extractor with its own bomb, symlink and path-escape surface.
+    confidence: high
+  - id: d04
+    choice: filter the debug log in the shell, before it reaches the disk
+    options:
+      - persist the debug log and filter in Go (rejected)
+      - field-matched awk filter that fails closed (chosen)
+    because: >
+      DBG lines quote decoded segments, so a persisted debug log would carry a
+      base64-encoded credential decoded, past --redact. Matching the kept shape
+      on whole fields stops a file containing that text from routing its own
+      content into the kept file.
+    confidence: high
+tags:
+  - security
+  - secrets
+  - doctrine

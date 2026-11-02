@@ -1,0 +1,39 @@
+rules:
+  - id: cicd.javascript.dom-text-to-html
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      DOM text is interpreted as HTML. Use textContent or construct DOM nodes
+      for text values; use an explicitly supported HTML sanitizer for markup.
+    metadata:
+      category: security
+      cwe: [CWE-79]
+      technology: [browser]
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: $NODE.textContent
+          - pattern: $NODE.innerText
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $NODE.innerHTML = $VALUE
+              - pattern: $NODE.outerHTML = $VALUE
+              - pattern: $NODE.insertAdjacentHTML($POSITION, $VALUE)
+          - focus-metavariable: $VALUE
+    pattern-sanitizers:
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  import $PURIFIER from "dompurify";
+                  ...
+              - pattern-inside: |
+                  import * as $PURIFIER from "dompurify";
+                  ...
+              - pattern-inside: |
+                  import $PURIFIER from "isomorphic-dompurify";
+                  ...
+          - pattern: $PURIFIER.sanitize(...)

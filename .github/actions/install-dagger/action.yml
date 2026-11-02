@@ -1,0 +1,90 @@
+name: Install Dagger
+description: >
+  Install a pinned Dagger CLI onto the runner's PATH from a download this
+  repository verifies itself, and pre-pull the matching engine image.
+
+# Why this exists instead of `curl -fsSL https://dl.dagger.io/dagger/install.sh | sh`:
+#
+# Dagger's installer already checks the tarball it downloads against the
+# checksums.txt beside it. What `curl | sh` adds on top is executing a script
+# fetched at run time and never read: a swapped install.sh runs whatever it
+# likes before any checksum is consulted. This action downloads the release
+# tarball and checksums.txt directly, verifies the one against the other in
+# shell this repository owns, and refuses a binary that does not report the
+# version it asked for.
+#
+# What that proves, and what it does not: checksums.txt is served from the same
+# origin as the tarball, so a matching sum proves the download arrived intact,
+# not that dl.dagger.io served what Dagger built. Pinning a constant sha256 here
+# instead was rejected because Renovate's one-line version bump could then no
+# longer be trusted on its own — every bump would need a human to fetch and
+# paste the new sum, which is the step that gets skipped.
+#
+# Why the version is an input and not a constant: every workflow already names
+# its DAGGER_VERSION once, Renovate's dagger/dagger manager already rewrites
+# that line, and a second copy here is the one the bump would miss.
+#
+# Reusable workflows cannot `uses:` a local action — they run in the caller's
+# checkout — so commit.yml, precommit.yml, dast.yml and commit-monorepo.yml
+# carry the same step body inline. scripts/tests/test_install_dagger.py asserts
+# the inline copies are byte-identical to the body below, and drives the body
+# against a tampered download.
+#
+# Third-party actions are not an option under this repository's `selected`
+# Actions policy: see .github/actions/install-git-cliff/action.yml.
+
+inputs:
+  version:
+    description: Dagger release to install, without the leading v (for example 0.20.8).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Dagger CLI (pinned, checksum-verified)
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        asset="dagger_v${VERSION}_linux_amd64.tar.gz"
+        base="https://dl.dagger.io/dagger/releases/${VERSION}"
+        tmp="$(mktemp -d)"
+        curl -fsSL --retry 3 -o "${tmp}/${asset}" "${base}/${asset}"
+        curl -fsSL --retry 3 -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+        # Keep only the line naming this asset, so a checksums.txt that lists
+        # every platform cannot match on a different file, and a checksums.txt
+        # that omits ours fails here rather than verifying nothing.
+        grep -E "^[0-9a-f]{64}  ${asset}\$" "${tmp}/checksums.txt" > "${tmp}/expected.sum"
+        (cd "$tmp" && sha256sum -c expected.sum)
+        tar -xzf "${tmp}/${asset}" -C "$tmp" dagger
+        install -m 0755 "${tmp}/dagger" "${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger"
+        rm -rf "$tmp"
+        # Prove the binary that landed is the one that will run, and fail the
+        # step if it is not — an install that silently produced nothing would
+        # otherwise surface later as a confusing "dagger: command not found".
+        installed="$("${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger" version)"
+        echo "$installed"
+        case "$installed" in
+          *"v${VERSION} "*) ;;
+          *) echo "installed dagger is not v${VERSION}: ${installed}" >&2; exit 1 ;;
+        esac
+        # Provision the Dagger engine from ghcr.io/dagger/engine (Dagger's
+        # official mirror, on GitHub's network) instead of registry.dagger.io,
+        # whose path from GitHub runners intermittently times out during engine
+        # provisioning (dagger/dagger #7548/#7593). Identical image + digest.
+        # Pre-pull with backoff to warm the cache and fail loud if ghcr is
+        # unreachable; _EXPERIMENTAL_DAGGER_RUNNER_HOST makes the CLI provision
+        # from the ghcr image directly in the dagger steps that follow.
+        engine="ghcr.io/dagger/engine:v${VERSION}"
+        ok=
+        for delay in 0 5 10 15 20 30 45 60; do
+          [ "$delay" = 0 ] || sleep "$delay"
+          if docker pull "$engine"; then ok=1; break; fi
+          echo "engine image pull failed; retrying"
+        done
+        if [ -z "$ok" ]; then
+          echo "::error::Failed to pull $engine after 8 attempts"
+          exit 1
+        fi
+        echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-image://$engine" >> "$GITHUB_ENV"

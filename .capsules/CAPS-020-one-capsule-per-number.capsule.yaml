@@ -1,0 +1,158 @@
+kind: change-capsule
+schema: 1
+id: CAPS-020
+status: sealed
+intent: >
+  A capsule number could be claimed twice and nothing said so. Three branches
+  cut off the same main each sealed a CAPS-017 — CAPS-017-detect-the-dotnet-
+  test-runner, CAPS-017-say-what-no-artifact-left-unattested and
+  CAPS-017-expose-dockerfile-and-platform — and because the slugs differed no
+  filename collided, git merged the tree without a conflict, and
+  scripts/check-capsules.py printed OK (18 capsule(s)) over a .capsules
+  directory holding two capsules numbered 017. Measured while preparing those
+  three branches for review. This change adds check_identity to
+  scripts/capsules.py, which asks three questions the existing scan could not:
+  the filename carries a readable CAPS-NNN, the top-level id field inside
+  agrees with it, and no number is claimed more than once.
+
+  Then the same day, a second fault this module had already called clean took CI
+  down. The CAPS-017 capsule for the change beside this one held the line
+  `- "artifact: NOT ATTESTED — no artifact was built" (rejected)`, which
+  check-capsules.py passed and PyYAML refused at `line 90: did not find expected
+  '-' indicator` — the policy scan in the dogfood precommit run died there. Rule
+  1 could not see it because _MAPPING_RE reads that line as a legal mapping whose
+  key is `"artifact`. So scan_text gained a third rule, _quoted_tail, checked
+  before _MAPPING_RE: a quoted scalar with content after its closing quote.
+  scripts/tests/test_capsules.py covers both halves, and the lint-repo row in
+  CLAUDE.md names all three faults.
+impact:
+  visibility: internal
+  benefit: >
+    A capsule number is the whole handle. It is what a doctrine paragraph, an
+    ADR or a spec cites, it is not derivable from anything else in the file,
+    and a shared one is a citation that resolves to whichever of the claimants
+    the reader happens to open. The check also catches the mechanical half of
+    a renumber: a git mv leaves the id field behind, which happened once while
+    renumbering these very three capsules and was caught by hand rather than
+    by anything in the repository.
+  compatibility: fix
+  risk:
+    - >
+      This is deliberately not the "a tool that could not run must never read
+      as clean" class the rest of this repository is built around, and the
+      capsule says so rather than borrowing the language. Nothing was
+      mis-scanned and no verdict was wrong: check-capsules.py did parse both
+      files and both parsed. The cost is an ambiguous citation and a renumber
+      owed later, on main, where the capsule is already sealed. The case for
+      asking rests on the question being nearly free, not on the answer being
+      grave — the same footing CAPS-016 argued from.
+    - >
+      A false failure here costs an author a rename and one field edit, so the
+      check has no override flag. It cannot fail a tree that was previously
+      passing: every one of the 17 capsules on main is covered by
+      test_shipped_capsule_numbers_are_unique, which passes unchanged.
+    - >
+      The check does not read the capsule's body, so it cannot tell whether a
+      unique number is the *right* number, nor whether a doctrine paragraph
+      citing CAPS-009 means the CAPS-009 that exists. Uniqueness is a necessary
+      condition for a citation to resolve, not a sufficient one.
+    - >
+      scan_text is a hand-rolled reader of a YAML subset and its docstring has
+      always carried the caveat that it catches the faults that have actually
+      occurred rather than every fault possible. Rule 3 is the standing proof
+      that the caveat is not boilerplate: it was added after a capsule this
+      module had already passed took the policy scan down. A third rule makes
+      the reader stricter, not complete, and the next fault of a shape nobody
+      has written yet will reach CI the same way this one did.
+decisions:
+  - id: d01
+    choice: uniqueness only — a gap is legal
+    options:
+      - require the numbers to be contiguous from 001 (rejected)
+      - require only that no number is claimed twice (chosen)
+    because: >
+      Branches merge in whatever order review finishes, which is precisely the
+      situation that produced the collision. Of the three branches here, 019
+      is independent of main and may land before 017 and 018, leaving main
+      holding 016, 019 and a gap — a legitimate state that a contiguity rule
+      would turn red with no remedy but reordering unrelated reviews. A
+      collision is unambiguously wrong; a gap is only untidy.
+    confidence: high
+  - id: d02
+    choice: check the filename and the id field against each other, not either alone
+    options:
+      - trust the filename, since that is what the eye reads (rejected)
+      - trust the id field, since that is what a parser reads (rejected)
+      - require the two to agree (chosen)
+    because: >
+      They are edited separately and by different means — the filename by git
+      mv, the field by an editor — so either alone is a number that can drift
+      from the other silently. Measured on this change: renaming
+      CAPS-017-expose-dockerfile-and-platform to CAPS-019 left id: CAPS-017 in
+      the file, and a check reading only the filename would have called that
+      tree clean. Requiring agreement makes the pair self-verifying and needs
+      no third source of truth.
+    confidence: high
+  - id: d03
+    choice: a new function beside scan_text, not more work inside it
+    options:
+      - extend scan_text to notice duplicate numbers (rejected)
+      - add check_identity and call it from check_capsules (chosen)
+    because: >
+      scan_text reads one file's text and answers a question about YAML syntax;
+      a collision is a property of the *set* and has no textual fault in either
+      file — test_a_collision_has_no_yaml_fault_to_find states that as a test,
+      so the reason the old check could never have caught this is recorded
+      rather than implied. Keeping the two apart also keeps check_capsules the
+      single entry point, so the CLI and its message stay in one place.
+    confidence: high
+  - id: d04
+    choice: no spec under specs/
+    options:
+      - write specs/one-capsule-per-number.md as the recent changes did (rejected)
+      - the capsule and the module docstring carry it (chosen)
+    because: >
+      specs/ in this repository is reserved for a measured false pass, and the
+      risk section above is explicit that this is not one. Filing a spec would
+      put a paragraph of doctrine weight behind an ambiguous citation, which
+      overstates it in exactly the way the repository refuses elsewhere. The
+      measured collision, the three filenames and the not-a-false-pass framing
+      live in the scripts/capsules.py module docstring, where the next reader
+      of that file finds them.
+    confidence: high
+  - id: d05
+    choice: a quoted scalar with a tail is a finding; one with no closing quote on the line is not
+    options:
+      - reject any line whose quote count is odd (rejected)
+      - walk the scalar, and stay silent when the closing quote is absent (chosen)
+    because: >
+      A quoted scalar may legally span lines, and a walk that stops at the end of
+      the line cannot tell a multi-line scalar from an unterminated quote. Guessing
+      would make the check fail capsules that parse, which is the failure mode this
+      repository refuses in checkRefsCoupling: a false failure whose cheapest
+      remedy is deleting good prose. So _quoted_tail returns None on a missing
+      closing quote and reports only when it has seen the quote close and found
+      content after it that is not a comment. It honours \" and '' as escapes for
+      the same reason. Cross-checked against PyYAML over all 84 capsule files in
+      the three branches: zero false positives, and the reconstructed CAPS-017
+      line caught at the line PyYAML names.
+    confidence: high
+  - id: d06
+    choice: rule 3 goes before _MAPPING_RE, not after
+    options:
+      - append it as a fourth check after the existing two (rejected)
+      - run it first, and skip the mapping read when it fires (chosen)
+      - fix _MAPPING_RE so it stops treating `"artifact` as a key (rejected)
+    because: >
+      _MAPPING_RE matches the measured line and consumes it as a legal mapping,
+      so a rule appended after it never sees the line at all — that ordering is
+      the whole reason the fault shipped. Tightening _MAPPING_RE instead would
+      make one regex answer two questions, and a key that starts with a quote is
+      not itself the fault; the tail is. Running the tail check first keeps each
+      rule answering one question and makes the precedence visible at the call
+      site, where a comment records why it cannot be moved.
+    confidence: high
+tags:
+  - tooling
+  - ci
+  - capsules

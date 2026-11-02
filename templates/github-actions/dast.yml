@@ -1,0 +1,187 @@
+# ============================================================
+# Starter template: Running-app DAST (caller stub)
+#
+# Copy this file to your repository at .github/workflows/dast.yml.
+# The orchestration lives in the reusable workflow at
+# context-and-oss/cicd/.github/workflows/dast.yml — you call it.
+#
+# DAST attacks your application while it RUNS. It is not a merge gate and is
+# wired into no other pipeline: an active scan is minutes-to-hours of traffic,
+# which is the wrong thing to put in front of a merge. The cadence below is
+# the one this template exists to set up:
+#
+#   push to main       baseline — the cheap passive pass, on every mainline commit
+#   nightly  02:00 UTC baseline — catches drift in a dependency or a config
+#   weekly   Sun 03:00 full     — the active attack, where the real findings are
+#   on demand          your pick, from the Actions tab
+#
+# ─── One decision: who starts the app? ──────────────────────────────
+#   app: container  (W2) cicd builds your Dockerfile and starts it. Single
+#                        container only — no database, no sidecar. The ONLY
+#                        shape whose evidence may say the scanned code is the
+#                        code this commit produced.
+#   app: service    (W1) YOU start it on the runner with start-cmd (compose,
+#                        dotnet run, npm start). Works with any shape at all.
+#                        No provenance — the evidence says so on every run.
+#   app: url        (W1) you already run it somewhere the internet can reach.
+#                        Same provenance caveat. NOTE: a localhost URL does not
+#                        work here; that is what app: service is for.
+#
+# If you can do both, do W2 — but a scan of a real running app with no
+# provenance line beats no scan. Full guide:
+# https://github.com/context-and-oss/cicd/blob/main/docs/how-to-guides/scan-a-running-app.md
+#
+# No secret is required: the cicd modules are fetched from the public
+# repository. TEAMS_WEBHOOK is optional.
+#
+# ─── Stay up to date (Renovate) ─────────────────────────────────────
+# Renovate tracks the `uses:` ref below automatically. To enable:
+#   { "extends": ["config:recommended", "github>context-and-oss/cicd"] }
+# ====================================================================
+
+name: DAST
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Baseline every night, full scan every Sunday. Cron is UTC, and GitHub
+    # runs scheduled workflows only from the DEFAULT branch — a schedule added
+    # on a feature branch never fires, and says nothing when it doesn't.
+    - cron: '0 2 * * *'
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Scan mode'
+        required: true
+        type: choice
+        default: baseline
+        options: [baseline, api, full]
+
+concurrency:
+  # One DAST run per ref at a time, and deliberately NOT cancel-in-progress: a
+  # scan killed halfway writes no evidence at all, which is exactly the non-run
+  # this pipeline exists to make visible. Queueing costs runner minutes;
+  # cancelling costs the answer.
+  group: dast-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  dast:
+    uses: context-and-oss/cicd/.github/workflows/dast.yml@v5.1.2
+    with:
+      # ─── the cadence, resolved to a mode ──────────────────────────────
+      # The cron strings live HERE, not in the reusable workflow, so this
+      # expression is the only place that knows which schedule means what.
+      # Edit the crons above and this line together — a weekly cron whose
+      # string no longer matches quietly buys you a second nightly baseline.
+      # You would still see it: a baseline run says `dast: BASELINE ONLY` in
+      # the evidence and in the job summary, on every run.
+      mode: >-
+        ${{ github.event_name == 'workflow_dispatch' && inputs.mode
+         || github.event.schedule == '0 3 * * 0' && 'full'
+         || 'baseline' }}
+
+      # ─── W2: cicd builds and starts your container (recommended) ──────
+      app: container
+      port: '8080'
+      health-path: /health
+      # dockerfile: docker/api.Dockerfile
+      # platform: linux/arm64
+      #
+      # ─── W1: you start it on the runner ───────────────────────────────
+      # Swap `app: container` above for this block. start-cmd runs from the
+      # repository root and must RETURN once the app is starting — the
+      # workflow does the waiting, on the same path and port you name below.
+      # app: service
+      # port: '5000'
+      # health-path: /health
+      # start-cmd: docker compose -f docker-compose.dev.yml up -d
+      # stop-cmd: docker compose -f docker-compose.dev.yml down -v
+      # A dev server that does not daemonise needs backgrounding and a log:
+      # start-cmd: nohup dotnet run --project src/Api > /tmp/api.log 2>&1 &
+      # How long to wait on the runner for it to answer. This is NOT
+      # ready-timeout-seconds, which is how long the SCANNER waits once cicd
+      # is running — the two exist to tell "my app never started" apart from
+      # "the scanner could not reach it".
+      # start-timeout-seconds: 180
+      #
+      # ─── W1: an environment you already run ───────────────────────────
+      # Only point this at an environment you are authorised to attack. A full
+      # scan submits forms, follows every link and sends real attack payloads.
+      # app: url
+      # target: https://staging.example.com
+      #
+      # ─── scan ─────────────────────────────────────────────────────────
+      # Cap every scan. An uncapped active scan against a slow target runs for
+      # hours; capped, ZAP stops and cicd still writes a report.
+      max-duration-minutes: '45'
+      # HIGH is the default. Do not use CRITICAL: ZAP's maximum risk is High,
+      # so CRITICAL can never fail over findings — the evidence warns rather
+      # than reporting a green run that could not have been anything else.
+      # fail-on: HIGH
+      #
+      # Name the configuration the app ran under. Recorded verbatim and never
+      # interpreted — it is how a reader knows which surface these findings
+      # describe, and "dev mode with mock data" is a very different surface
+      # from production.
+      profile: dev-mock-data
+      #
+      # ─── mode: api ────────────────────────────────────────────────────
+      # Drives the scan from your API document instead of a spider — the only
+      # way an API with no HTML gets meaningful coverage. Path is on the
+      # RUNNING APP; cicd fetches it from the target.
+      # api-spec-path: /swagger/v1/swagger.json
+      # ...or a document committed in this repo (mutually exclusive):
+      # api-spec-file: docs/openapi.json
+      #
+      # ─── suppressions you can read ────────────────────────────────────
+      # A ZAP rule config (-c). Every rule it names is reported in the
+      # evidence, including any that raised no alert.
+      # rule-config: .zap/rules.tsv
+      #
+      # ─── run ──────────────────────────────────────────────────────────
+      # Hard ceiling on the whole job, including the image build and the
+      # engine pull. Raise it before you raise max-duration-minutes.
+      # job-timeout-minutes: 90
+    secrets:
+      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+
+  # ─── Consume the results (ADR-006) ──────────────────────────────────
+  # The reusable workflow declares outputs so you can gate, notify or publish
+  # without parsing cicd's internals:
+  #   evidence-artifact    name of the uploaded evidence artifact
+  #                        (combined-evidence.json, findings.sarif,
+  #                        sbom.cdx.json, comment.md). The mode is in the name.
+  #                        sbom.cdx.json is present but EMPTY — a DAST run
+  #                        produces no component inventory; do not read it as
+  #                        one. 90-day retention.
+  #   passed               "true" only when the scan ran and found nothing at
+  #                        or above fail-on. "false" also covers a scan that
+  #                        could not run — a target that was never reached
+  #                        fails at every threshold, NONE included.
+  #   findings-count       total alerts ZAP raised
+  #   findings-by-severity compact JSON, e.g. {"HIGH":1,"MEDIUM":4}
+  #   gates                compact JSON array of per-gate status
+  # `if: always()` matters: a tripped gate fails the dast job, and without it
+  # your consumer job is skipped exactly when you most want the verdict.
+  # file-an-issue:
+  #   needs: dast
+  #   if: always() && needs.dast.outputs.passed != 'true'
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     issues: write
+  #   steps:
+  #     - env:
+  #         GH_TOKEN: ${{ github.token }}
+  #         COUNTS: ${{ needs.dast.outputs.findings-by-severity }}
+  #       run: |
+  #         gh issue create --repo "$GITHUB_REPOSITORY" \
+  #           --title "DAST findings on ${GITHUB_REF_NAME}" \
+  #           --body "$COUNTS — see ${{ needs.dast.outputs.evidence-artifact }}"

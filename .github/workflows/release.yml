@@ -1,0 +1,285 @@
+name: Release (manual override)
+# Emergency override: a hotfix, or a release when cd.yml itself cannot do the job.
+# Normal releases are automatic — cd.yml runs after CI passes on main and releases
+# when the conventional-commit history implies a version bump.
+#
+# This workflow is independent on purpose. It shares the delivery mechanics with
+# cd.yml (scripts/ci/deliver-release-pins.sh) so there is one implementation of
+# how a bump reaches main, but it owns its own tagging path: an override that
+# depended on cd.yml finishing the job would be useless in exactly the situation
+# it exists for. The cost is an idle runner while the pull request merges, which is
+# the right trade for a manually triggered emergency path.
+#
+# See specs/deliver-release-pins-by-pull-request.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (semver, no v prefix — e.g. 1.0.0)'
+        required: true
+        type: string
+      merge-timeout-seconds:
+        description: 'How long to wait for the release pull request to merge'
+        required: false
+        default: '2400'
+        type: string
+
+env:
+  DAGGER_VERSION: "0.20.8"
+  VERSION: ${{ inputs.version }}
+  # Keep helper scripts from writing scripts/__pycache__/*.pyc into the tree.
+  PYTHONDONTWRITEBYTECODE: "1"
+
+# Least-privilege default. Jobs that need to write (SARIF upload, PR comments,
+# Pages deploy, release push) widen scope with their own job-level permissions.
+permissions:
+  contents: read
+jobs:
+  release:
+    name: Release v${{ inputs.version }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # Everything cheap and everything refusable goes first: this workflow
+      # provisions a Dagger engine and loads fifteen modules, and finding out
+      # afterwards that the version was malformed or the PAT is missing wastes the
+      # whole run for a reason knowable in the first second.
+      - name: Guard — main, semver, and a usable release credential
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}
+          MERGE_TIMEOUT: ${{ inputs.merge-timeout-seconds }}
+        run: |
+          set -euo pipefail
+          fail=0
+          if [ "$REF_NAME" != "main" ]; then
+            echo "::error::releases must be triggered from main (got '${REF_NAME}')"
+            fail=1
+          fi
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version '${VERSION}' is not valid semver (expected X.Y.Z)"
+            fail=1
+          fi
+          if ! printf '%s' "$MERGE_TIMEOUT" | grep -qE '^[0-9]+$'; then
+            echo "::error::merge-timeout-seconds '${MERGE_TIMEOUT}' is not a positive integer"
+            fail=1
+          fi
+          # Every release rewrites .github/workflows/ pins, and no `permissions:`
+          # key can authorise that — only a credential carrying the `workflow`
+          # scope can. The PAT is also what makes the release pull request's checks
+          # run: one opened by GITHUB_TOKEN triggers no workflow runs, so `ci`
+          # would never report and auto-merge would never fire.
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::CICD_RELEASE_TOKEN is required — without it workflow pins cannot be pushed and the release pull request would never be checked"
+            fail=1
+          fi
+          exit "$fail"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # Leave NO persisted credential behind. checkout persists the default
+          # GITHUB_TOKEN as an http.<host>.extraheader, and an Authorization header
+          # beats URL-embedded credentials — so it silently shadows the PAT set
+          # below and pushes fall back to the default token, which has no
+          # `workflows` scope and cannot touch .github/workflows/. That shadowing
+          # is what failed the v1.2.0 release from cd.yml; this workflow had the
+          # same latent bug and never hit it only because it had not been used.
+          persist-credentials: false
+
+      - name: Configure git and the release credential
+        env:
+          RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+      # Pinned, checksum-verified local install. A third-party action here fails
+      # the run at startup under this repo's Actions policy — see
+      # .github/actions/install-git-cliff/action.yml.
+      - name: Install git-cliff
+        uses: ./.github/actions/install-git-cliff
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: Validate all modules load at HEAD
+        # We validate from the local checkout (./module) rather than via
+        # github.com/...@SHA because the latter requires Dagger's engine
+        # container to authenticate to a private repo. The local path proves
+        # the module at this SHA loads cleanly; consumers handle their own
+        # git auth when fetching by tag.
+        run: |
+          # Defend the manifest before consuming it: a dagger.json discovered
+          # on disk but deliberately omitted from modules must abort release.
+          python3 scripts/check-repo-surface.py --modules
+
+          FAILED=0
+
+          # Drive this from the defended inventory, not a copied list — a
+          # hand-maintained list here previously omitted three modules
+          # (pages and intent among them), so a manual release could ship with those
+          # modules silently unverified.
+          for MODULE in $(python3 scripts/inventory-query.py modules)
+          do
+            echo "Checking ./$MODULE ..."
+            # Develop through the wrapper first. `dagger functions` generates
+            # the module's SDK exactly as `dagger call` does, so without this
+            # every module here is a module nobody developed: one
+            # sum.golang.org stream reset reads as "$MODULE did not load" and
+            # aborts a release that had nothing wrong with it. The
+            # wrapper retries a fetch fault and reports a real build failure at
+            # once, so a genuine non-loading module still fails this loop.
+            if ! bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" "$MODULE"; then
+              echo "FAIL: $MODULE could not be developed"
+              FAILED=1
+              continue
+            fi
+            if ! OUTPUT=$(dagger functions -m "./$MODULE" 2>&1); then
+              echo "FAIL: $MODULE did not load"
+              echo "$OUTPUT"
+              FAILED=1
+            fi
+          done
+
+          if [ $FAILED -ne 0 ]; then
+            echo ""
+            echo "One or more modules failed to load — aborting release."
+            exit 1
+          fi
+
+      # The bump reaches main as a pull request, not as a push. This step used to
+      # end in `git push origin HEAD:main`, which two branch rulesets refuse
+      # structurally — one requires a pull request, the other requires the check
+      # named `ci` on the commit being pushed, and a commit created and pushed in
+      # one motion can carry neither. The same dead line in cd.yml is why 64
+      # commits went unreleased from 2026-07-30 onward.
+      #
+      # Shared with cd.yml deliberately: one implementation of the delivery, two
+      # thin callers. It also bumps BOTH scopes and runs the coherence gate, which
+      # the previous version of this workflow did not — it bumped consumer-facing
+      # pins only, so a manual release left every .github/workflows/ pin behind
+      # and the gate that would have caught it never ran.
+      - name: Deliver bumped pins by pull request
+        id: deliver
+        env:
+          RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          GH_TOKEN="$RELEASE_TOKEN" \
+            bash scripts/ci/deliver-release-pins.sh "$VERSION" release.yml
+
+      # A superseded override is not a no-op to shrug at: the operator asked for a
+      # specific version and did not get it. Say so and stop, rather than exiting
+      # green having tagged nothing.
+      - name: Refuse a superseded release
+        if: steps.deliver.outputs.result == 'superseded'
+        run: |
+          echo "::error::main already carries a tag at or above the requested v${VERSION}, so nothing was tagged. Pick a version above the newest tag, or let cd.yml release normally."
+          exit 1
+
+      # Same shape as the refusal above, and the same reason: the operator asked
+      # for v${VERSION} and did not get it. Stale means main moved while the bump
+      # was being delivered, so this run's version no longer accounts for the tip.
+      - name: Refuse a stale release
+        if: steps.deliver.outputs.result == 'stale'
+        run: |
+          echo "::error::main moved while v${VERSION} was being delivered, so nothing was tagged. Re-run this workflow with a version above the newest tag once main is quiet, or let cd.yml release the newer history."
+          exit 1
+
+      # This is the idle-runner wait, and it is why this workflow can finish the
+      # job while cd.yml is broken. cd.yml deliberately does NOT wait: the merge
+      # starts a fresh CI run on main, and the CD run behind it tags. An override
+      # cannot rely on that, so it blocks here instead.
+      - name: Wait for the release pull request to merge
+        if: steps.deliver.outputs.result == 'pr-open'
+        env:
+          RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}
+          MERGE_TIMEOUT: ${{ inputs.merge-timeout-seconds }}
+        run: |
+          set -euo pipefail
+          GH_TOKEN="$RELEASE_TOKEN" bash scripts/ci/wait-for-release-merge.sh \
+            "chore/release-v${VERSION}" --timeout-seconds "$MERGE_TIMEOUT"
+
+      # Tag the MERGED tip, not the branch commit the delivery built. They differ
+      # by the merge commit, and a tag on the branch commit would point at a tree
+      # that is not on main.
+      - name: Move to the merged tip
+        if: steps.deliver.outputs.result == 'pr-open' || steps.deliver.outputs.result == 'released'
+        env:
+          RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}
+          DELIVERY: ${{ steps.deliver.outputs.result }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          git reset --hard FETCH_HEAD
+          # The delivery reported the pins were already at the target, or the wait
+          # observed the merge. Either way main must now carry them: verify rather
+          # than assume, because tagging a tree whose pins disagree with the tag is
+          # the exact incoherence check-workflow-pins.py exists to prevent.
+          python3 scripts/bump-version.py "$VERSION"
+          python3 scripts/bump-version.py "$VERSION" --scope workflows
+          if ! git diff --quiet; then
+            echo "::error::main does not carry the v${VERSION} pins even though the release pull request merged. Re-running the bump against the merged tip still changes files, so something landed that reverted or missed a pin. Nothing was tagged."
+            git diff --name-only >&2
+            exit 1
+          fi
+          python3 scripts/check-workflow-pins.py
+
+          # Pins matching is not the same question as "is this the commit the
+          # release was built for". A commit that touches no pin leaves them
+          # matching while moving the tip, and the tag then covers work this
+          # release never weighed: v2.2.3 was built for a pins merge, cut on a
+          # `refactor!` that landed seconds later, and swallowed the major that
+          # commit should have triggered -- after which git-cliff saw nothing
+          # unreleased and the major could never be computed again.
+          #
+          # Only the pr-open path is checked here. On the released path the
+          # delivery script already compared the live tip against the commit the
+          # version was computed for and answered `stale` if they had diverged.
+          if [ "$DELIVERY" = "pr-open" ]; then
+            tip=$(git rev-parse HEAD)
+            merge_sha=$(GH_TOKEN="$RELEASE_TOKEN" gh pr view "chore/release-v${VERSION}" \
+              --json mergeCommit --jq '.mergeCommit.oid // empty')
+            if [ -z "$merge_sha" ]; then
+              echo "::error::could not read the merge commit of chore/release-v${VERSION}. Whether main's tip is the commit v${VERSION} was built for is therefore unknown, which is not the same as confirmed -- and a tag cut on an unconfirmed tip is the failure this check exists to prevent. Nothing was tagged." >&2
+              exit 1
+            fi
+            if [ "$merge_sha" != "$tip" ]; then
+              echo "::error::main is at ${tip}, but v${VERSION} was built for the merge of chore/release-v${VERSION} (${merge_sha}). Something landed after the release merged, so tagging the tip would put v${VERSION} on work it never accounted for. Nothing was tagged -- re-run this override once main is quiet, or let cd.yml release the newer history." >&2
+              exit 1
+            fi
+          fi
+
+      # Generated before the tag exists: `--unreleased` means "since the newest
+      # tag", so running this after tagging would produce empty notes. Same
+      # generator as cd.yml rather than `gh release create --generate-notes`,
+      # which the previous version of this workflow used — two release runs
+      # producing differently formatted notes for the same repository is drift
+      # that only shows up on the releases page.
+      - name: Generate release notes
+        if: steps.deliver.outputs.result == 'pr-open' || steps.deliver.outputs.result == 'released'
+        run: git cliff --unreleased --strip header > /tmp/release-notes.md
+
+      - name: Create and push tag
+        if: steps.deliver.outputs.result == 'pr-open' || steps.deliver.outputs.result == 'released'
+        run: |
+          set -euo pipefail
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
+
+      - name: Create GitHub release
+        if: steps.deliver.outputs.result == 'pr-open' || steps.deliver.outputs.result == 'released'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file /tmp/release-notes.md

@@ -1,0 +1,96 @@
+kind: change-capsule
+schema: 1
+id: CAPS-041
+status: sealed
+intent: >
+  src/composites/precommit accepted dependencyTrackApiKey, dependencyTrackCustomer
+  and dependencyTrackProject, and carried a switch that either uploaded the
+  CycloneDX SBOM to Dependency Track or printed which of the three was missing.
+  No reusable workflow and no Azure DevOps template passed any of them.
+  .github/workflows/precommit.yml declares no dependency-track inputs and no
+  DEPENDENCY_TRACK secret, so dtAnySet was false on every run that has ever
+  executed through the workflow. The upload path was unreachable, and so was
+  the warning branch that exists to catch a half-configured triad — the branch
+  whose whole job is to stop a misconfiguration passing in silence could not
+  fire.
+
+  Both halves are removed: the three parameters, the switch, and
+  cross-cutting/dependency-track as a declared dependency in dagger.json. The
+  upload stays where it is reached, in src/composites/commit, wired end to end
+  through .github/workflows/commit.yml, templates/azure-devops/commit.yml and
+  templates/azure-devops/shared/commit.yml.
+
+  Keeping it and wiring precommit.yml was the other option and it is the wrong
+  shape. A Dependency Track project is an inventory of what shipped. The
+  precommit lane runs on a branch, before merge, so uploading from it would
+  push candidate dependency trees — including ones that never merge — into the
+  record the commit lane keeps, and the two lanes would then disagree about
+  what a project contains.
+
+  The reason for the parameters is still on record. The non-container-artifacts
+  brief that wired precommit tests asked for them and its contract still names a command that exercised the
+  warning through the precommit composite. That command no longer resolves.
+  The brief is left as written, because it is the record of a decision that
+  was made, not a live test — nothing in scripts/ or .github/workflows/
+  executes a brief contract.
+impact:
+  visibility: external
+  benefit: >
+    The precommit composite's signature stops advertising a capability it does
+    not have, so a reader of `dagger call run --help` and a reader of the
+    workflow inputs now see the same pipeline. Dependency Track configuration
+    has one home instead of two, one of which silently did nothing.
+  compatibility: breaking
+  risk:
+    - >
+      A consumer calling the precommit composite directly with
+      --dependency-track-api-key, outside the reusable workflow, now gets an
+      unknown-flag error. That failure is loud and names the flag, which is a
+      change from an upload that appeared to be configured and did not happen.
+      No template in this repository passes those flags to precommit.
+    - >
+      Anyone who wanted pre-merge visibility of dependency posture loses a path
+      they could have wired themselves. The SBOM is still produced on the
+      precommit lane and still exported as sbom.cdx.json, so that consumer can
+      upload it from their own job without cicd choosing the destination.
+decisions:
+  - id: d01
+    choice: delete the precommit upload rather than wire precommit.yml to it
+    options:
+      - add dependency-track inputs and the secret to precommit.yml (rejected)
+      - remove the parameters, the switch and the dagger.json dependency (chosen)
+    because: >
+      A DT project records what shipped. Uploading from a branch lane would
+      write candidate dependency trees into that record, including trees that
+      never merge, so the project would stop answering the question it exists
+      to answer. Two configured lanes writing one inventory is also two places
+      a customer's project name can be spelled differently.
+    confidence: high
+  - id: d02
+    choice: remove the misconfiguration warning with the upload
+    options:
+      - keep the warning branch as a configuration linter (rejected)
+      - remove both halves together (chosen)
+    because: >
+      The warning tells a caller their upload will not happen. With no upload
+      to configure, it would report a mistake that no longer has consequences,
+      which trains a reader to skim stderr on the lane where the same message
+      means something real.
+    confidence: high
+  - id: d03
+    choice: leave the brief and its contract as written
+    options:
+      - edit specs/.../08-wire-precommit-test-and-dt to match (rejected)
+      - leave it and record the supersession here (chosen)
+    because: >
+      A brief is the record of a decision taken at a point in time, and
+      rewriting it to agree with a later decision erases the fact that the
+      earlier one was made. Nothing executes brief contracts, so the stale
+      command is a reading hazard rather than a red build, and this capsule is
+      where a reader finds out why it no longer resolves.
+    confidence: medium
+tags:
+  - composites
+  - dependency-track
+  - dead-code
+  - breaking

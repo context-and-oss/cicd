@@ -1,0 +1,64 @@
+kind: change-capsule
+schema: 1
+id: CAPS-004
+status: sealed
+intent: >
+  Add scripts/check-capsules.py to lint-repo so a capsule whose YAML does
+  not parse is named where it can be acted on. A stray colon in CAPS-003
+  stopped conftest unmarshalling the file, which took down the whole infra
+  policy scan; the error read "yaml: line 24 ... path: /inputs/f0000",
+  because conftest renames every input before parsing it. Line 24 of an
+  unnamed file, reported by a job called "Precommit on self", four minutes
+  into a Dagger run. The fix was one character; finding it was the cost.
+impact:
+  visibility: internal
+  benefit: >
+    Names the file and the line in about two seconds during lint-repo,
+    instead of surfacing as a renamed input deep inside the dogfood run.
+    A capsule is prose in YAML and prose grows colons, so this is a typo
+    every future capsule author can make.
+  compatibility: additive
+  risk:
+    - >
+      The check is not a YAML validator and must never be read as one. It
+      has no PyYAML dependency, because scripts/ado_templates.py and
+      scripts/repo_surface.py both decline that dependency on the grounds
+      that PyYAML is not guaranteed on a bare runner. It recognises two
+      classes that are always invalid YAML — an unquoted colon-space in a
+      plain scalar, and a tab in leading whitespace. A passing capsule is
+      proven free of those two, rather than proven to parse.
+    - >
+      A hand-rolled scanner can misjudge context and fire on legal prose.
+      The negative controls in scripts/tests/test_capsules.py exist for
+      that risk specifically, since a checker that cries wolf on a folded
+      block would be switched off within a week.
+decisions:
+  - id: d01
+    choice: two targeted textual rules rather than a real YAML parse
+    options:
+      - depend on PyYAML and parse properly (rejected)
+      - conditional parse when PyYAML is importable (rejected)
+      - two targeted textual rules (chosen)
+    because: >
+      A dependency this repository has twice refused is not worth adding
+      for a typo check. A conditional parse is worse than either: the
+      check would be strong on a developer machine and weak in CI, so the
+      same capsule could pass in one place and fail in the other, which is
+      the environment-dependent gate this repository refuses everywhere.
+      Two deterministic rules behave identically in both.
+    confidence: high
+  - id: d02
+    choice: zero capsules is a failure, not a pass
+    options:
+      - report OK when the glob matches nothing (rejected)
+      - fail when the glob matches nothing (chosen)
+    because: >
+      A glob that silently matches nothing reports success over no work,
+      which is the same false clean this repository refuses from a scanner
+      that never ran. If .capsules moves, the check must say so instead of
+      going quiet.
+    confidence: high
+tags:
+  - capsules
+  - lint-repo
+  - conftest

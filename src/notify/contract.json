@@ -1,0 +1,11 @@
+{
+  "stage": "domain",
+  "step": "notify",
+  "function": "Teams",
+  "params": [
+    { "name": "webhookUrl",   "type": "Secret", "required": true },
+    { "name": "summary",      "type": "File",   "required": true },
+    { "name": "pipelineName", "type": "String", "required": true }
+  ],
+  "outputSchema": "evidence-1"
+}

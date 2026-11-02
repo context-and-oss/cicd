@@ -1,0 +1,26 @@
+{
+  "name": "stage-2",
+  "engineVersion": "v0.20.8",
+  "sdk": {
+    "source": "go"
+  },
+  "dependencies": [
+    {
+      "name": "quality",
+      "source": "../quality"
+    },
+    {
+      "name": "security",
+      "source": "../security"
+    },
+    {
+      "name": "risk",
+      "source": "../risk"
+    },
+    {
+      "name": "intent",
+      "source": "../cross-cutting/intent"
+    }
+  ],
+  "disableDefaultFunctionCaching": true
+}

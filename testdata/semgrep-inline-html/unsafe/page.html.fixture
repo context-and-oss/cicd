@@ -1,0 +1,8 @@
+<!doctype html>
+<div id="input">Untrusted evidence</div><div id="output"></div>
+<script>
+const evidence = JSON.parse(document.getElementById('input').textContent);
+</script>
+<script>
+document.getElementById('output').innerHTML = evidence.message;
+</script>

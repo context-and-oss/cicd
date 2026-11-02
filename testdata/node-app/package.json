@@ -1,0 +1,19 @@
+{
+  "name": "node-app",
+  "version": "1.0.0",
+  "description": "Node.js test fixture for CD module integration tests",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "lint": "eslint .",
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "lodash": "4.17.4"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.0.0",
+    "eslint": "^8.0.0",
+    "vitest": "^4.0.0"
+  }
+}

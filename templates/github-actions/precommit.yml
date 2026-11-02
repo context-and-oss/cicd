@@ -1,0 +1,178 @@
+# ============================================================
+# Starter template: Stage 2 — Pre-commit pipeline (caller stub)
+#
+# Copy this file to your repository at .github/workflows/precommit.yml.
+# That's it. The actual orchestration lives in the reusable workflow
+# at context-and-oss/cicd/.github/workflows/precommit.yml — you call it.
+#
+# ─── Stay up to date (Renovate) ─────────────────────────────────────
+# This `uses:` ref is the simplest integration — full pipeline, zero Dagger
+# knowledge needed. Renovate tracks it automatically via the built-in
+# github-actions manager. To enable auto-bump PRs, add to your renovate.json:
+#   { "extends": ["config:recommended", "github>context-and-oss/cicd"] }
+#
+# Not on GitHub Actions, or need individual modules? Use the ADO template
+# (dagger -m shape) or see docs/how-to-guides/mix-and-match-modules.md.
+# ─────────────────────────────────────────────────────────────────────
+#
+# ─── Secrets ────────────────────────────────────────────────────────
+# The cicd modules are fetched from the public repository, so no secret
+# is required to run the pipeline. All of these are optional:
+#   TEAMS_WEBHOOK    — Teams incoming webhook URL
+#   NPM_FEED_TOKEN   — Token for an internal npm registry
+#   NUGET_FEED_TOKEN — Token for an internal NuGet feed
+#
+# ─── Why the job names its secrets ──────────────────────────────────
+# The job below maps each secret by name instead of `secrets: inherit`,
+# which would hand the reusable workflow every secret this repository
+# can see. A map passes only the keys it lists, and only keys the
+# reusable declares can be listed at all. A secret you never configured
+# arrives empty, exactly as it would under `inherit`; delete its line to
+# withhold it outright.
+# ====================================================================
+
+name: Pre-commit
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+# ─── Concurrency ────────────────────────────────────────────────────
+# A new push to a pull request cancels that PR's run still in flight: its
+# verdict is for a commit the PR no longer points at. Every other run gets
+# a group of its own (the run id), so nothing else is ever cancelled or
+# queued behind another run. The group starts with the workflow name
+# because concurrency groups are shared across the whole repository.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  precommit:
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.2
+    secrets:
+      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
+      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+    # Override inputs if needed, e.g.:
+    # with:
+    #   fail-on: MEDIUM
+    #   npm-feed-url: https://npm.internal.example.com
+    #   npm-feed-routing: npmrc   # feed without a public upstream; .npmrc routes scopes
+    #   nuget-feed-url: https://nuget.internal.example.com
+    #
+    #   # ── SAST ruleset curation (Semgrep) ──
+    #   # Default is p/security-audit; "auto" is refused by the security module.
+    #   # Pass comma-separated packs (NO spaces), or point at a checked-in
+    #   # semgrep config to make it the single source of truth:
+    #   sast-rulesets: p/security-audit,p/secrets,p/typescript
+    #   #   sast-rulesets: ./security.yml
+    #   # To exclude specific files/paths from scanning, commit a
+    #   # .semgrepignore at your repo root — it is honored automatically.
+    #
+    #   # ── Which languages get scanned ──
+    #   # Omit this and cicd auto-detects by marker file (go.mod,
+    #   # package.json, pyproject.toml/requirements.txt, *.csproj/*.sln)
+    #   # within four directory levels. Set it to restrict the lint and
+    #   # unit-test legs to the languages you name:
+    #   include: go,node
+    #
+    #   # ── Dependency licence policy ──
+    #   # Defaults to warn mode with the permissive/notice/unencumbered
+    #   # allowlist. There is no "off": a licence verdict that can vanish is
+    #   # one nobody can rely on.
+    #   license-gate: gate
+    #   # license-allow takes CATEGORIES (permissive, notice, unencumbered,
+    #   # reciprocal, restricted, forbidden) and individual licence NAMES in
+    #   # one comma-separated list. A name matches the whole declared string,
+    #   # case- and whitespace-insensitive, so it narrows the policy by one
+    #   # declaration instead of by a whole category — the difference between
+    #   # accepting BlueOak-1.0.0 and accepting everything Trivy could not
+    #   # classify.
+    #   license-allow: permissive,notice,unencumbered,BlueOak-1.0.0
+    #   # "unknown" is deliberately NOT an allowable category, for that
+    #   # reason. A name shaped like an SPDX expression is allowed wherever
+    #   # it appears; anything else ("SEE LICENSE IN LICENSE") must be scoped
+    #   # to the package that declares it, because the same sentence turns up
+    #   # in unrelated packages.
+    #   license-allow: permissive,notice,example-sdk=SEE LICENSE IN LICENSE
+    #   # Every named allowance is counted in the evidence and one that
+    #   # matched nothing is reported as a warning, so an exception left
+    #   # behind by a dependency bump cannot pass for a clean tree.
+    #   # license-exclude narrows SCOPE, never findings: the declarations
+    #   # under these globs are reported and not judged.
+    #   license-exclude: docs/**,**/fixtures/**
+    #   # Reach for it when cicd cannot actually run a leg it detected — e.g.
+    #   # a language whose pinned tool image does not match what you target —
+    #   # since a leg that could not run fails the gate at every fail-on
+    #   # level, NONE included, and leaves no green setting.
+    #   # It is an exemption, not a fix: a language you leave out is not
+    #   # scanned, and the audit names it — one 'quality: NOT SCANNED —
+    #   # <language> detected (<marker>) but excluded by --include ...'
+    #   # warning per language dropped, rendered into the PR comment. Write
+    #   # down why, and take it back out when the leg can run.
+    #
+    #   # ── Witnessed BYO tests + coverage ratchet (ADR-002/ADR-003) ──
+    #   # Your test command runs witnessed in a cicd-controlled toolchain
+    #   # container; coverage is harvested and gated against the previous
+    #   # successful default-branch run's evidence artifact (no baseline
+    #   # file in your repo). Note: the baseline is seeded by runs on your
+    #   # default branch — until one exists the ratchet stays in fail-open
+    #   # bootstrap mode.
+    #   test-cmd: npm ci && npm test -- --coverage
+    #   coverage-path: coverage/coverage-summary.json
+    #   # Polyglot repo? test-cmd runs ONE command in ONE container, and the
+    #   # language it picks is the first of a fixed order (go, node, python,
+    #   # dotnet) — not a judgement about your repo. Use test-legs instead to
+    #   # witness each stack, and note that a detected language no leg tests is
+    #   # named in the PR comment rather than passing quietly. Mutually
+    #   # exclusive with test-cmd / coverage-path.
+    #   test-legs: |
+    #     [{"label":"web","language":"node","cmd":"npm ci && npm test -- --coverage","coveragePath":"coverage/coverage-summary.json"},
+    #      {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\"","coveragePath":"TestResults/coverage.cobertura.xml"}]
+    #   # (the collector name is one argument — `--collect:\"XPlat Code Coverage\"`
+    #   #  word-splits under `sh -c` and silently collects nothing)
+    #   coverage-tolerance: "1.0"        # allowed drop in percentage points
+    #   coverage-gate: gate              # gate | warn
+    #   toolchain-image: node:22-alpine  # optional override (ADR-004)
+    #
+    #   # ── Change-intent gate (opt-in) ──
+    #   # Requires every change to carry an artifact saying why it exists — a
+    #   # capsule, a spec, a *.intent.md, a .changes/ entry — and checks it for
+    #   # placeholder text, weasel words and coupling to the files changed.
+    #   # Off by default: it gates a team practice, not the code, so turn it on
+    #   # when your team already writes these and wants them enforced. While it
+    #   # is off, every audit says so — look for "intent-gate: NOT REQUIRED" in
+    #   # the PR comment's warnings, which is how you can tell a gate that was
+    #   # never asked from one that passed.
+    #   require-intent: true
+
+  # ─── Consume the results (ADR-006) ──────────────────────────────────
+  # The reusable workflow declares outputs (evidence-artifact, passed,
+  # findings-count, findings-by-severity, coverage-ratchet, gates) so a
+  # downstream job can gate or notify from needs.precommit.outputs.*
+  # without parsing cicd's internals. `if: always()` matters: a tripped
+  # gate fails the precommit job, and without it your consumer job is
+  # skipped exactly when you most want the verdict.
+  # on-verdict:
+  #   needs: precommit
+  #   if: always()
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+      # runs-on: ubuntu-latest  # An organisation larger-runner label for more CPU.
+      # parallelism: 1  # Source groups and test legs in flight; integer 1–4.
+      # node-project-limit: 4  # Raise explicitly for independent Node apps.
+  #         name: ${{ needs.precommit.outputs.evidence-artifact }}
+  #         path: reports
+  #     - run: |
+  #         echo "passed=${{ needs.precommit.outputs.passed }}"
+  #         echo 'gates=${{ needs.precommit.outputs.gates }}'

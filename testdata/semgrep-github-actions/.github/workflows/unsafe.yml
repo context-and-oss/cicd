@@ -1,0 +1,22 @@
+name: Semgrep curl pipe shell regression
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsafe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Unsafe single-line installer
+        run: curl -fsSL https://example.com/install.sh | bash
+      - name: Unsafe multiline installer
+        run: |
+          wget -qO- https://example.com/install.py \
+            | python3
+      - name: Separate commands are not curl pipe shell
+        run: |
+          curl -fsSL https://example.com/install.sh > install.sh
+          printf '%s\n' install.sh | bash

@@ -1,0 +1,128 @@
+kind: change-capsule
+schema: 1
+id: CAPS-031
+status: sealed
+intent: >
+  A consumer ships per-release SBOM, SCA and SAST reports to its customers
+  from a CDN, and the commit pipeline already produces every document involved.
+  What did not exist was a contract for consuming them. Neither reusable
+  workflow declared a workflow_call output, so a caller wanting the artifact
+  name or the verdict had to read cicd's workflow source and hard-code what it
+  found, and a rename inside cicd would break that consumer one release later
+  with no signal. Underneath that, buildCombined in
+  src/cross-cutting/evidence/main.go merged every source envelope into one
+  passed AND and dropped module identity on the way, so the combined envelope
+  could say a run failed but not which gate failed.
+
+  So the combined envelope gains sources[], one SourceStatus per input envelope
+  in input order, declared in src/internal/evidence/schema.go and synced to
+  every module copy. The counts carry no omitempty because an absent count and
+  a zero count are different claims. Both .github/workflows/commit.yml and
+  .github/workflows/precommit.yml declare six workflow_call outputs, and the
+  gate step writes pessimistic defaults to GITHUB_OUTPUT before either of its
+  exit paths, so a tripped or crashed gate still reports passed=false rather
+  than an empty string. The jq read of passed is a plain assignment on purpose,
+  because under set -e a document jq cannot parse exits the step before any
+  real value is written.
+
+  The chain those outputs travel is one GitHub never validates. A typo at any
+  of the three links resolves to the empty string at run time, inside a
+  caller's gate, and actionlint accepts unknown output names. So
+  check_workflow_output_chain in scripts/repo_surface.py requires every
+  declared output to resolve end to end, down to the literal name= write in
+  the producing step's run body, scoped by content so a new reusable workflow
+  cannot dodge it by being forgotten in a list. That requirement is also why
+  the gate steps write explicit echo lines rather than a helper function,
+  because a call spelled out passed false contains no passed= token the
+  checker could verify.
+
+  docs/decisions/ADR-006-the-consumer-publishes-release-reports.md records the
+  ownership split. cicd builds the reports and the consumer publishes them,
+  the artifact and file names become API, and the current vulnerability
+  posture is a separate mutable document regenerated from the frozen SBOM,
+  never an in-place rewrite of the release-time record.
+impact:
+  visibility: external
+  benefit: >
+    A caller reads needs.commit.outputs.evidence-artifact and downloads the
+    reports by name instead of reconstructing cicd's internals, gates on
+    passed, and tells a SAST failure from a coverage regression by reading
+    gates. The templates in templates/github-actions show the consuming job,
+    and docs/reference/index.md documents each output. Because the outputs are
+    now a declared surface, the new checker fails CI on the drift GitHub would
+    have resolved to an empty string in silence.
+  compatibility: additive
+  risk:
+    - >
+      sources[] is a new field every synced schema.go copy now carries, and the
+      hand-kept src/risk/schema.go does not. That is the designed asymmetry
+      for aggregator-only fields, the same one Findings already has, and the CI
+      evidence validator is presence-only so no consumer of an individual
+      module envelope can notice the addition.
+    - >
+      The checker verifies the step write textually, by finding the name= token
+      and GITHUB_OUTPUT in the run body, so a name that appears only in a shell
+      comment would satisfy it. Accepted because the drift it hunts is a typo,
+      which appears nowhere at all, and the alternative is executing shell to
+      find out.
+    - >
+      A uses: step's outputs are the action's own contract, so a job output
+      reading one is left unverified rather than failed. A reference to a step
+      id that does not exist is still named, so the unverifiable case is
+      narrow and deliberate.
+decisions:
+  - id: d01
+    choice: write pessimistic defaults before the gate can exit
+    options:
+      - write outputs only on the passing path (rejected)
+      - write passed=false and empty values first, then overwrite (chosen)
+    because: >
+      The gate step has two exit-1 paths, a missing evidence file and a tripped
+      gate, and both are exactly when a caller most needs the verdict. Outputs
+      written only on success would hand that caller an empty string, which in
+      a notify condition comparing against the string false reads as not
+      failed. GITHUB_OUTPUT keeps the last write per key, so overwriting is
+      the documented behaviour rather than a trick.
+    confidence: high
+  - id: d02
+    choice: explicit echo writes instead of the out helper the first draft used
+    options:
+      - keep the helper function and teach the checker its calling convention (rejected)
+      - write literal name= echoes the checker can verify (chosen)
+    because: >
+      A helper spelled out passed false contains no passed= token, so verifying
+      it means teaching the checker one workflow's private shell idiom, and a
+      second spelling of the same fact is the two-copies drift this repository
+      keeps getting bitten by. The explicit lines are longer and every one of
+      them is the string the checker greps for.
+    confidence: high
+  - id: d03
+    choice: scope the checker by workflow_call content rather than a manifest list
+    options:
+      - add a reusable_workflows key the checker iterates (rejected)
+      - grade any declared workflow surface containing a workflow_call trigger (chosen)
+    because: >
+      A second list is one more thing a new reusable workflow must be added to
+      before its outputs are defended, and forgetting it produces a green
+      check over an unexamined file, which is the vacuous pass this repository
+      refuses everywhere else. Content scoping is the same call
+      check-runtime-image-pins makes by discovering From references from
+      source.
+    confidence: high
+  - id: d04
+    choice: sources[] lives on the combined envelope only
+    options:
+      - have every module stamp its own SourceStatus (rejected)
+      - populate it in buildCombined like Findings (chosen)
+    because: >
+      The aggregator is the one place that sees every envelope and the order
+      they arrived in, and a per-module copy of a summary about itself would
+      duplicate fields the envelope already carries. The precedent is
+      Findings, which is also aggregator-populated and absent on individual
+      envelopes.
+    confidence: high
+tags:
+  - evidence
+  - workflows
+  - repo-surface
+  - adr

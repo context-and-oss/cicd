@@ -1,0 +1,72 @@
+[
+  {
+    "stage": "domain",
+    "step": "security",
+    "function": "ScanSource",
+    "params": [
+      { "name": "src",       "type": "Directory", "required": true },
+      { "name": "commitSha", "type": "String",    "required": true },
+      { "name": "branch",    "type": "String",    "required": true },
+      { "name": "repoUrl",   "type": "String",    "required": true },
+      { "name": "failOn",    "type": "String",    "required": false, "default": "HIGH" }
+    ],
+    "outputSchema": "evidence-1"
+  },
+  {
+    "stage": "domain",
+    "step": "security",
+    "function": "ScanArchive",
+    "params": [
+      { "name": "src",       "type": "Directory", "required": true },
+      { "name": "outputDir", "type": "Directory", "required": true },
+      { "name": "commitSha", "type": "String",    "required": true },
+      { "name": "branch",    "type": "String",    "required": true },
+      { "name": "repoUrl",   "type": "String",    "required": true },
+      { "name": "failOn",    "type": "String",    "required": false, "default": "HIGH" }
+    ],
+    "outputSchema": "evidence-1"
+  },
+  {
+    "stage": "domain",
+    "step": "security",
+    "function": "ScanImage",
+    "params": [
+      { "name": "image",     "type": "Container", "required": true },
+      { "name": "commitSha", "type": "String",    "required": true },
+      { "name": "branch",    "type": "String",    "required": true },
+      { "name": "repoUrl",   "type": "String",    "required": true },
+      { "name": "failOn",    "type": "String",    "required": false, "default": "HIGH" },
+      { "name": "verifySecrets", "type": "Boolean", "required": false, "default": "false" }
+    ],
+    "outputSchema": "evidence-1"
+  },
+  {
+    "stage": "domain",
+    "step": "security",
+    "function": "ScanWeb",
+    "params": [
+      { "name": "target",    "type": "String",    "required": false },
+      { "name": "service",   "type": "Service",   "required": false },
+      { "name": "container", "type": "Container", "required": false },
+      { "name": "mode",      "type": "String",    "required": false, "default": "baseline" },
+      { "name": "commitSha", "type": "String",    "required": true },
+      { "name": "branch",    "type": "String",    "required": true },
+      { "name": "repoUrl",   "type": "String",    "required": true },
+      { "name": "failOn",    "type": "String",    "required": false, "default": "HIGH" }
+    ],
+    "outputSchema": "evidence-1"
+  },
+  {
+    "stage": "domain",
+    "step": "security",
+    "function": "ScanSbom",
+    "params": [
+      { "name": "sbom",      "type": "File",   "required": true },
+      { "name": "commitSha", "type": "String", "required": true },
+      { "name": "branch",    "type": "String", "required": true },
+      { "name": "repoUrl",   "type": "String", "required": true },
+      { "name": "failOn",    "type": "String", "required": false, "default": "HIGH" }
+    ],
+    "outputSchema": "evidence-1"
+  }
+]

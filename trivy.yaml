@@ -1,0 +1,25 @@
+# Trivy scope for scans of THIS repository (the dogfood precommit run).
+#
+# Trivy auto-loads this file from its working directory; src/security mounts the
+# scanned tree at /src and works there, so a file at the root of any scanned
+# repository is honoured with no cicd configuration. See
+# src/security/CLAUDE.md — "Scoping a Trivy scan".
+#
+# Scope only. Anything that filters findings out of a scan cicd gates on
+# (severity, ignore-unfixed, ignore-status, pkg types, db freshness) is pinned on
+# Trivy's command line by src/security/trivyflags.go and cannot be weakened from
+# here. That is deliberate: this file narrows *what is scanned*, never *what is
+# reported* about it.
+scan:
+  skip-dirs:
+    # Language fixture apps. Their dependencies are pinned OLD ON PURPOSE — a
+    # vulnerable lodash, an ancient Newtonsoft.Json, a committed secret fixture —
+    # because the integration tests assert that the scanners find them. They are
+    # never installed, built or shipped by this repository, so their CVEs are
+    # this repo's test data, not this repo's supply chain. Excluding them is a
+    # scope correction; every finding outside them is real and must be fixed.
+    - testdata
+    # Agent worktrees: throwaway clones of this repo under .claude/worktrees.
+    # Scanning them double-reports the whole tree (and re-imports testdata under
+    # a nested path that the pattern above cannot match). Never present in CI.
+    - .claude

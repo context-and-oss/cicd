@@ -1,0 +1,71 @@
+[changelog]
+header = ""
+# Breaking changes are selected by `commit.breaking`, not by their parser group.
+#
+# `commit_parsers` cannot do this job. They are first-match-wins over the parsed
+# commit, and with `conventional_commits = true` a `BREAKING CHANGE:` footer is
+# lifted out of `commit.body` into `commit.footers` before any parser runs — so a
+# `{ body = ".*BREAKING CHANGE" }` rule cannot see a correctly written footer at
+# all, and the `^feat`/`^fix` rule below claims the commit instead. That is how
+# v2.0.0, this repository's first major since v1.0.0, published its one breaking
+# change under "### Bug Fixes".
+#
+# A `{ footer = "^BREAKING CHANGE" }` rule does match (measured on git-cliff
+# 2.13.1, the version .github/actions/install-git-cliff pins), but it has to be
+# ordered ahead of `^feat`/`^fix` to beat them, which also puts it ahead of the
+# `skip = true` rule — so a `chore:` carrying a breaking footer would stop being
+# skipped and start releasing a major. That is a change to what gets released,
+# and it would contradict the measured table in scripts/release_bump.py, whose
+# whole purpose is to fail the release when cliff disagrees with it. Combining
+# `message` and `footer` in one parser does not help either: the fields OR rather
+# than AND, so such a rule files every plain `feat:` and `fix:` as breaking.
+#
+# Selecting in the template instead touches nothing cliff uses to compute
+# `--bumped-version`, so the released version is unchanged for every commit
+# shape. Only the heading a commit is printed under moves.
+body = """
+{% set breaking = commits | filter(attribute="breaking", value=true) %}\
+{% if breaking | length > 0 %}\
+### Breaking Changes
+
+{% for commit in breaking %}\
+- {{ commit.message | trim }}
+{% endfor %}
+{% endif %}\
+{% for group, grouped in commits | group_by(attribute="group") %}\
+{% set rest = grouped | filter(attribute="breaking", value=false) %}\
+{% if rest | length > 0 %}\
+### {{ group | upper_first }}
+
+{% for commit in rest %}\
+- {{ commit.message | trim }}
+{% endfor %}
+{% endif %}\
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+# The `!` rule stays: it is what makes `feat!:`/`fix!:` release a major, and
+# scripts/release_bump.py reproduces this order to check cliff's answer.
+#
+# There is deliberately no `BREAKING CHANGE` rule here. The `{ body = ... }` one
+# that used to sit second was not merely dead — it was inverted. A real footer is
+# never in `body`, so the rule could fire only on a prose mention that is *not* a
+# breaking change, and when it fired it filed a non-breaking commit under
+# "Breaking Changes" while the release bumped a minor. The template above reads
+# `commit.breaking`, which is set from the footer and from `!` alike.
+commit_parsers = [
+  { message = "^[A-Za-z]+(\\([^)]*\\))?!",   group = "Breaking Changes" },
+  { message = "^feat",                        group = "Features" },
+  { message = "^fix",                         group = "Bug Fixes" },
+  { message = "^docs",                        group = "Documentation" },
+  { message = "^refactor",                    group = "Refactoring" },
+  { message = "^perf",                        group = "Performance" },
+  { message = "^chore|^ci|^test|^style",      skip = true },
+]
+filter_commits = false
+tag_pattern = "v[0-9]+"
+sort_commits = "oldest"

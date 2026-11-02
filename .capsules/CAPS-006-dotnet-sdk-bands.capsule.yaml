@@ -1,0 +1,194 @@
+kind: change-capsule
+schema: 1
+id: CAPS-006
+status: sealed
+intent: >
+  Pin the .NET SDK once per supported band instead of once, and select the
+  band from the consumer repository, so quality.Check can lint and unit-test
+  a net9.0 or net10.0 consumer at all. src/quality/images.go held a single
+  digest-pinned mcr.microsoft.com/dotnet/sdk:8.0, so every repository above
+  that band failed both .NET legs on cicd's own image choice rather than on
+  anything in its tree. Because the failure is a restore failure, it is
+  classified as a non-run, and a non-run fails at every --fail-on threshold
+  including NONE — so there was no setting a consumer could reach for.
+  images.go now carries dotnetSDK80Image and dotnetSDK100Image, dotnetSDKBands
+  is the ordered list, dotnetSDKBase maps a band to its From(), and
+  discoverDotnetBandRequest plus dotnetResolveBand read the band from
+  global.json sdk.version or the highest literal TargetFramework across
+  *.csproj and Directory.Build.props.
+impact:
+  visibility: consumer
+  benefit: >
+    A net9.0 or net10.0 consumer gets a real lint verdict and a real unit-test
+    verdict where it previously got two non-runs. This is the blocker of the
+    .NET cluster - the other three are about what the
+    legs do once they can run at all. The band that was chosen and why is
+    recorded in warnings[], so the evidence says which SDK the verdict came
+    from rather than leaving it implied.
+  compatibility: unchanged
+  risk:
+    - >
+      A net8.0 consumer must be byte-identical, and that is the property the
+      design is arranged around rather than a hope. Nothing readable, and any
+      request at or below 8.0, resolves to the 8.0 band - the same image, the
+      same digest, the same dotnet format analyser defaults as before. This is
+      also the decisive argument against simply raising the single pin.
+    - >
+      The band request is read from project files, which are not authoritative
+      - a TargetFramework can sit behind an MSBuild condition or an imported
+      .props this cannot see. So the read never fails a run on its own. A
+      request above every pinned band runs the highest pinned band with a
+      warning that says exactly that, and lets the SDK have the last word - if
+      the build really needs more, the restore dies, dotnetFormatRunError or
+      dotnetTestRunError classifies it a non-run, and gatedPassed fails it at
+      every threshold. What must never happen is a silent fallback to 8.0,
+      which would convert a correct hard failure into the false pass this
+      repository exists to prevent.
+    - >
+      The 8.0 digest is deliberately left at the value it already had, even
+      though the live 8.0 tag now resolves to a newer index. Refreshing it in
+      the same change would move a net8.0 consumer's toolchain inside a change
+      whose whole claim is that net8.0 is untouched. That refresh is renovate's
+      job, in its own reviewable pull request.
+    - >
+      9.0 is not pinned - it is STS and out of support - so net9.0 routes to
+      the 10.0 band by the lowest-pinned-band-at-or-above rule. A net9.0
+      consumer therefore builds on a newer SDK than it names, which is normal
+      .NET behaviour (roll-forward) but is worth knowing before reading a
+      net9.0 verdict.
+decisions:
+  - id: d01
+    choice: >
+      a pinned set of supported SDK bands, each fully three-place pinned,
+      selected from the detected band
+    options:
+      - a pinned set of supported bands, three-place pinned each (chosen)
+      - route the native legs through ResolveToolchain (rejected)
+      - a consumer-facing SDK band input on the lint and test legs (rejected)
+      - raise the single pin from 8.0 to 10.0 (rejected)
+    because: >
+      Routing the native legs through ResolveToolchain would have reused
+      existing machinery and reached the existing --toolchain-image input, and
+      it is the wrong seam. ResolveToolchain exists for the BYO path, where the
+      container runs a command the consumer wrote; here the container runs
+      cicd's own commands, dotnet format and dotnet test, whose verdict cicd
+      signs. Sending those into an arbitrary consumer-named image means the
+      linter version, the analyser set and the SDK behind a gate verdict are
+      all chosen by the party being gated, and an image without the dotnet CLI
+      at all turns the leg into a non-run for a reason no message would
+      explain. Raising the single pin was rejected on measurement, not taste -
+      see d03. A consumer-facing band input was rejected as premature - it
+      widens contract.json, both composites, two workflows and the templates
+      for a question the repository already answers in global.json and its
+      project files, and if a lever is needed later, global.json sdk.version
+      is already it.
+    confidence: high
+  - id: d02
+    choice: >
+      resolve the ADR-004 tension in favour of the digest-pin doctrine, and
+      make check-image-pins pass honestly
+    options:
+      - treat the band-selected SDK as a pinned tool image (chosen)
+      - treat it as an ADR-004 consumer-resolved toolchain (rejected)
+    because: >
+      A .NET SDK band chosen to match the consumer's TargetFramework is
+      arguably either, so the side has to be picked and stated. It is a pinned
+      tool image. ADR-004's own amendment says so explicitly - it names the
+      language images quality.Check's auto-detected lint and test passes select
+      as covered by the pin gate, on the grounds that they are a path with no
+      consumer image input at all. That is exactly this path. What ADR-004
+      exempts is a tag constructed at run time from consumer input, which can
+      name any image in the world and therefore cannot be reviewed in advance.
+      Selecting among N reviewed, digest-pinned constants is a bounded choice
+      over a set a human approved, not unbounded construction - the consumer's
+      input picks a row, it does not write one. Practically, this also keeps
+      the property the doctrine is for - every image cicd runs its own tools in
+      is reviewable and immutable at the digest, so a compromised upstream tag
+      cannot be swapped under a verdict (CWE-494).
+    confidence: high
+  - id: d03
+    choice: two bands pinned side by side rather than raising the one pin
+    options:
+      - pin 8.0 and 10.0 side by side (chosen)
+      - raise the single pin to 10.0 (rejected)
+      - pin 8.0, 9.0 and 10.0 (rejected)
+    because: >
+      Raising the one pin moves the same wall in the other direction instead of
+      removing it. The 10.0 SDK does not ship the 8.0 targeting pack, so every
+      net8.0 consumer would acquire a package dependency on a leg that must
+      work offline, and dotnet format's analyser defaults would change under
+      every .NET verdict this repository has ever produced - the existing spec,
+      specs/name-the-dotnet-target-band.md, had already flagged that as needing
+      its own change with its own proof runs. Two bands side by side keeps
+      net8.0 byte-identical while making net10.0 work. 9.0 was skipped because
+      it is out of support, and every pinned band is a digest a human has to
+      keep reviewing.
+    confidence: high
+  - id: d04
+    choice: >
+      dotnetSDKBase is a switch over constants, never a map or slice index
+    options:
+      - switch over constants, one literal From() per band (chosen)
+      - a map from band to image constant (rejected)
+    because: >
+      This one is a trap worth writing down, because the rejected option is the
+      tidier code and it silently switches the pin gate off.
+      scripts/check-runtime-image-pins.py discovers image selections by
+      resolving each From() argument through package constants and local
+      literals; an argument it cannot resolve is classified as an ADR-004
+      consumer-resolved toolchain and is never failed. So
+      From(dotnetSDKImages[band]) would not fail the check - it would pass it,
+      by looking exactly like the one thing the check deliberately exempts,
+      while cicd's own tool image went unpinned and nothing anywhere said so.
+      A switch over constants keeps one resolvable literal per band, which is
+      what make check-image-pins actually verified after the change - both
+      bands appear in its static, pinned, declared, update-covered list. There
+      is also no default arm, because substituting some other band for one
+      nobody pinned would attribute a verdict to an SDK nobody selected.
+    confidence: high
+  - id: d05
+    choice: >
+      an above-every-band request runs the highest pinned band with a warning,
+      rather than being refused up front
+    options:
+      - run the highest pinned band and warn (chosen)
+      - refuse before running, on the project-file read (rejected)
+      - fall back to the lowest band (rejected)
+    because: >
+      Falling back to the lowest band is not on the table at all - it is the
+      false pass. Refusing up front is the tempting one, and it makes a
+      non-authoritative read authoritative - the same reasoning that made
+      dotnetTFMAboveBand enrichment-only, since a TargetFramework can come from
+      a condition this cannot see, and guessing wrong turns a working
+      repository red. Running the newest pinned band keeps the SDK as the
+      decider - the restore either works, or dies and is classified as a
+      non-run that no threshold forgives. The warning is what makes the two
+      distinguishable in the evidence rather than after the fact. A band with
+      no pinned image at all is a different case and is refused outright,
+      dotnetUnpinnedBandError with ran=false, because there is nothing to run.
+    confidence: high
+  - id: d06
+    choice: honour global.json sdk.version as the top precedence
+    options:
+      - global.json first, then TargetFramework (chosen)
+      - TargetFramework only (rejected)
+    because: >
+      The remedy string this repository already shipped told consumers that
+      global.json could not fix a too-new target band and would swap a legible
+      error for exit 145 - true when exactly one band was pinned, and stale the
+      moment a second one is. With more than one band, sdk.version is the
+      selector among them, which is the closest thing to an explicit lever
+      without adding an input. The stale guidance in dotnetreport.go was
+      rewritten rather than left to mislead. Exit 145 is still reachable - a
+      sdk.version naming a band cicd pins no image for - and is still
+      classified as a non-run. Deliberately not routed through
+      src/quality/toolchain.go - that file is a verbatim copy of
+      src/internal/detect/toolchain.go answering a different, unpinned
+      question, and is outside this change's lane.
+    confidence: high
+tags:
+  - quality
+  - dotnet
+  - runtime-images
+  - adr-004
+  - false-pass

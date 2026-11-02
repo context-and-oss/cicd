@@ -1,0 +1,7 @@
+go 1.26.2
+
+// Only internal/ shared packages are in this workspace.
+// Dagger modules (stage-2/, stage-4/, cross-cutting/, composites/) each run
+// in their own isolated context via `dagger develop`, which generates the
+// internal/dagger package and resolves dagger.io/dagger.
+use ./src/internal

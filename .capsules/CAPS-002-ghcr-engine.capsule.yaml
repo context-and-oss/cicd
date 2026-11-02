@@ -1,0 +1,52 @@
+kind: change-capsule
+schema: 1
+id: CAPS-002
+status: sealed
+intent: >
+  Provision the Dagger engine from ghcr.io/dagger/engine instead of
+  registry.dagger.io because the registry.dagger.io path from GitHub-hosted
+  runners intermittently times out during engine provisioning, which surfaced
+  to consumers as a confusing "combined-evidence.json missing" gate failure.
+  The image is byte-identical (same digest), so this is a re-route to a host
+  reachable over GitHub's own network rather than a change of behaviour.
+impact:
+  visibility: internal
+  benefit: >
+    Removes the engine-pull timeout as a failure mode for every reusable
+    workflow and Azure DevOps template, so consumer pipelines stop going red on
+    a transient registry path problem they cannot control.
+  compatibility: additive
+  risk:
+    - _EXPERIMENTAL_DAGGER_RUNNER_HOST is an experimental Dagger surface; a
+      future engine bump could change its semantics. We accept that because our
+      own .github/workflows/ci.yml rides the same mechanism, so any regression
+      trips here before a single consumer sees it.
+decisions:
+  - id: d01
+    choice: re-route the engine pull to Dagger's official ghcr mirror across all workflows and templates
+    options:
+      - retry the registry.dagger.io pull with backoff (rejected)
+      - mirror the engine into our own GHCR package (rejected)
+      - point at ghcr.io/dagger/engine (chosen)
+    because: >
+      Retrying the same path cannot win during a multi-minute brownout, and
+      self-mirroring adds an authentication and sync cost across orgs. Dagger
+      already publishes the identical image to ghcr, so we point at it and set
+      the runner-host override in the install step of every workflow, for
+      example .github/workflows/ci.yml and .github/workflows/cd.yml.
+    confidence: high
+  - id: d02
+    choice: pre-pull the ghcr image with backoff before handing off to the override
+    options:
+      - rely on the dagger CLI to pull at first call (rejected)
+      - warm the cache with a bounded retry, then override (chosen)
+    because: >
+      A bare override still lets the CLI pull on first use under its own short
+      timeout, so the install step in .github/workflows/cd.yml warms the cache
+      with an eight-attempt backoff and fails loud with a clear error instead
+      of the misleading downstream symptom when ghcr is genuinely unreachable.
+    confidence: high
+tags:
+  - dagger-engine
+  - ghcr
+  - ci-reliability

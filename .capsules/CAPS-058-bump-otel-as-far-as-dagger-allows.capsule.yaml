@@ -1,0 +1,99 @@
+kind: change-capsule
+schema: 1
+id: CAPS-058
+status: sealed
+intent: >
+  Twenty OpenTelemetry findings appeared against four go.mod files — advisories
+  disclosed against a dependency set none of those modules had touched — and the
+  dogfood precommit gate went red on this repository's own tree. Nothing here is
+  a code change. Four go.mod files move as far as the Dagger SDK allows, and the
+  interesting part is where that stops.
+
+  The trace, metric and sdk family goes to v1.46.0. That clears CVE-2026-81870
+  (12 LOW rows) and it sticks, because those versions live in the `require`
+  block and `dagger develop` leaves the require block alone. Measured with the
+  pinned Trivy 0.70.0 over src/: 20 rows on main, 8 after.
+
+  The eight that remain are CVE-2026-39882 on otlploghttp v0.16.0 and
+  CVE-2026-81871 on otlploggrpc v0.16.0, four each. Those versions are not in
+  the require block. They are set by the four `replace … v0.16.0` lines
+  dagger.io/dagger's own go.mod carries and codegen copies into every module,
+  and this change deliberately does not touch them. CAPS-059 gives the eight
+  rows somewhere honest to live instead.
+impact:
+  visibility: internal
+  benefit: >
+    Twelve of twenty rows are gone from the four modules that carry
+    OpenTelemetry, and they stay gone. The eight that remain all have the same
+    named upstream cause rather than a backlog.
+  compatibility: additive
+  risk:
+    - >
+      `go mod tidy` WAS run here, against CAPS-034's explicit decision not to.
+      The reason that hazard does not apply: CAPS-034 tidied without the
+      generated Dagger client and would have dropped requires only the generated
+      code uses. Every module here was `dagger develop`-ed first, so the client
+      was present and the resulting require set is the true one. All four then
+      built with `go build ./...` against that client, and a second
+      `dagger develop` afterwards left every go.mod byte-identical.
+    - >
+      Tidy also moved unrelated indirects (gqlgen, gqlparser, grpc-gateway,
+      protobuf, golang.org/x/*). That is tidy resolving the graph against the
+      present SDK, not a curated set, and it is the same set `dagger develop`
+      would have produced on its own. It is noted because a reviewer reading the
+      diff for otel lines will find twenty other bumps beside them.
+    - >
+      The bumps are indirect. Nothing in this repository calls the changed code
+      and the unit suite cannot witness the difference; it ran green as a
+      regression check, not as evidence. The evidence is the scanner.
+decisions:
+  - id: d01
+    choice: bump only the four modules that actually require otel
+    options:
+      - touch all sixteen modules for uniformity (rejected)
+      - change only the go.mod files that carry an otel require (chosen)
+    because: >
+      Twelve modules carry the `replace` block with no matching require, so the
+      directive is inert and the scanner reads no dependency from it. Churning
+      twelve go.sum files changes nothing measurable. This is CAPS-034 d01, one
+      door over.
+    confidence: high
+  - id: d02
+    choice: leave the four `replace` pins at v0.16.0, and take the eight findings
+    options:
+      - raise the replace pins to v0.20.0 as well (rejected, measured)
+      - leave them to codegen and route the residue through an exception (chosen)
+    because: >
+      The replace pins were raised to v0.20.0 first, and the tree scanned 4 rows
+      instead of 8. It does not hold. `dagger develop` rewrites those four lines
+      from dagger.io/dagger's own go.mod on every run, and it does so **per
+      module** — so the repository ends up in a state where the reported version
+      depends on which job developed which module. Measured: with all four
+      committed at v0.20.0, running `dagger develop` against src/composites/
+      precommit alone — which is exactly what the dogfood job does before it
+      scans — took the scan from 4 rows to 5, and the report then named the same
+      package at two different versions in one document.
+
+      That is worse than either end of it. The go.mod would advertise v0.20.0
+      while the build used v0.16.0, which is a green scan over a dependency that
+      is not in the build: the founding false-pass shape, arriving through the
+      fix for a different one. This repository's own .trivyignore had already
+      recorded this and I re-measured it wrong; the entry was right.
+    confidence: high
+  - id: d03
+    choice: do not extend .trivyignore to cover the eight
+    options:
+      - add CVE-2026-81871 beside the existing CVE-2026-39882 entry (rejected)
+      - leave the residue visible and fix it in CAPS-059 (chosen)
+    because: >
+      .trivyignore drops the row from the report, so it is absent from the
+      evidence envelope too — four of these eight rows are already invisible in
+      this repository's own evidence for exactly that reason. Doubling that is
+      the wrong direction. An accepted vulnerability is a decision, and a
+      decision belongs in the envelope where a reader meets it, not in a file
+      that makes the finding disappear before anyone sees it.
+    confidence: high
+tags:
+  - security
+  - dependencies
+  - supply-chain

@@ -1,0 +1,205 @@
+kind: change-capsule
+schema: 1
+id: CAPS-063
+status: sealed
+intent: >
+  quality.Test runs a consumer's own test command in a toolchain container and
+  nothing else, so an integration suite that opens a database connection fails
+  at fixture initialisation on every run. A consumer's integration tests could
+  not move off their own CI even though unit tests could run under cicd.
+  At --fail-on NONE — the setting a team onboards on — the database connection
+  failures were collected and forgiven, so the envelope read passed=true.
+
+  A test leg can now declare `services`: alias, image, port, optional env,
+  optional readyCmd and readyTimeout, at most 4 per leg. The key lives inside
+  the existing --test-legs JSON document rather than behind a new Dagger
+  parameter, so it changes no contract, no starter surface, no check-19 wiring
+  and neither ADO template — and it is the only placement that can say which leg
+  a service belongs to. src/quality/services.go holds the rules, untagged;
+  src/quality/testlegs.go parses the key; src/quality/byotest.go keeps only the
+  container wiring, and the whole of it is unit-tested in
+  src/quality/services_test.go.
+
+  The engine already gated the dependent exec on a service's port becoming
+  reachable (measured on v0.20.8: 2m6s, "service exited before healthcheck"),
+  and ran/allRan/gatedPassed already turned that into a non-run. What was
+  missing was the declaration and the attribution. Each service is bound first
+  to a throwaway pinned-alpine container running echo — the same healthcheck,
+  detecting nothing new, but naming the alias instead of landing "invalid nil
+  ref" on the leg's own test command where it is indistinguishable from a
+  crashed suite. A failure is an errors[] entry, ran=false, and therefore
+  passed=false at every threshold including NONE.
+
+  No Docker socket is mounted. A socket mount hands a consumer-authored command
+  string root on the runner, depends on ambient daemon state and starts a
+  container the envelope cannot describe.
+impact:
+  visibility: consumer
+  benefit: >
+    A consumer whose suite needs a throwaway PostgreSQL, Redis or SQL Server can
+    run it under cicd instead of keeping it on their own CI, with the dependency
+    named in the leg document and each service's alias, image, port, env key
+    names and readiness state recorded per leg. A service that did not become
+    usable reddens the run at every --fail-on threshold rather than being
+    reported as a suite with failing tests.
+  compatibility: additive
+  risk:
+    - >
+      A leg that declares no services is byte-identical to before, down to the
+      bytes of its report: `services` is omitempty on both the spec and the
+      report, and no probe container is built. Pinned by
+      TestLegWithoutServicesIsUnchanged.
+    - >
+      A service that stays up and never listens costs about two minutes before
+      the run reddens, and that budget belongs to the Dagger engine's
+      healthcheck. cicd neither chose it nor exposes a knob for it; it is
+      disclosed in the docs and the spec rather than implied. A container that
+      exits is cheap — the smoke's dead case reddens in under two seconds.
+    - >
+      checkServiceKeyCase is a behaviour change for a document nobody has yet:
+      a service key differing only in case is refused. It is scoped to service
+      objects on purpose — the leg's own keys have been case-tolerant since
+      --test-legs shipped, and tightening those is a breaking change with
+      existing consumers and belongs to its own decision.
+    - >
+      readyCmd runs in the consumer's service image, which is ADR-004 level 3
+      and therefore not digest-pinned by cicd. From(spec.Image) must stay a
+      variable: check-runtime-image-pins.py exempts a From() argument it cannot
+      resolve, and a literal there would demand a pin cicd cannot own.
+decisions:
+  - id: d01
+    choice: services are a key inside the --test-legs document, not a new parameter
+    options:
+      - a --services flag on quality.Test (rejected)
+      - a second document parameter alongside --test-legs (rejected)
+      - a `services` key inside each leg object (chosen)
+    because: >
+      A service belongs to one leg, so any parameter outside the document has to
+      re-state which leg it is for — and a flag would need a contract change, a
+      Dagger parameter, check-19 reachability wiring on every starter surface and
+      both ADO templates. contract.json declares testLegs as a bare String, so a
+      key inside the document costs none of that. The cost is that two parsers
+      now read one document, which is d04.
+    confidence: high
+  - id: d02
+    choice: probe each service on its own before binding any to the leg
+    options:
+      - bind straight to the leg and let its exec carry the engine's verdict (rejected)
+      - poll the port from inside the leg before running the command (rejected)
+      - bind each service to a throwaway pinned-alpine exec first (chosen)
+    because: >
+      The engine's healthcheck is already the gate — the probe detects nothing
+      the leg's own exec would not have detected. It exists for attribution:
+      bound straight to the leg, "invalid nil ref / service exited before
+      healthcheck" lands on the consumer's test command, where it is
+      indistinguishable from a suite that crashed, and the errors[] entry names
+      the command rather than the alias. Polling from inside the leg was rejected
+      because the leg container is the consumer's image and may hold no shell
+      tool to poll with — the probe stays in the pinned image so the bind verdict
+      never depends on that.
+    confidence: high
+  - id: d03
+    choice: readyCmd runs in the service's own image, not pinned alpine
+    options:
+      - run it in pinned alpineImage, the probeReadiness precedent (rejected)
+      - run it in the leg's toolchain image (rejected)
+      - run it in the service's own image (chosen)
+    because: >
+      This reverses the approved plan, and the plan's own worked example is what
+      disproved it: pg_isready is not in alpine, and neither is redis-cli or
+      mysqladmin. Confined to alpine, readyCmd could express `nc -z` and nothing
+      else — the engine's port gate spelled by hand, which is precisely the claim
+      readyCmd exists to improve on. The readiness container is a client reaching
+      the service across a binding, so the service still does not vouch for
+      itself; what its image supplies is the client binary. The leg's toolchain
+      image was rejected for the same reason in reverse: a .NET SDK carries no
+      Postgres client either.
+    confidence: high
+  - id: d04
+    choice: one corpus answers for both parsers, rather than a fixture each
+    options:
+      - each parser tested against its own fixture (rejected)
+      - copy the leg types between modules and guard with check_synced_files (rejected)
+      - one testdata document read by a test in each module (chosen)
+    because: >
+      App mode marshals []appLeg straight into quality.Test's --test-legs, so a
+      key one parser models and the other drops is a service the consumer
+      declared and nothing binds — silent, in transit. Two fixtures drift, which
+      is that defect rather than a risk of it. The corpus found a real one on its
+      first run: DisallowUnknownFields refuses only keys matching no field and Go
+      matches field names case-insensitively, so "readycmd" was accepted by
+      quality and refused by the commit composite. A synced type copy was
+      rejected because the two structs legitimately differ — appLeg carries lint
+      keys quality has no field for. The corpus is
+      src/quality/testdata/leg-service-documents.json, answered by
+      src/quality/testlegs_test.go and src/composites/commit/appconfig_test.go
+      against src/composites/commit/appconfig.go's parseAppLegs.
+    confidence: high
+  - id: d05
+    choice: port is required, with no default inferred from the image
+    options:
+      - default the port from a table of well-known images (rejected)
+      - default to the image's first EXPOSE (rejected)
+      - require it, and error when absent (chosen)
+    because: >
+      A port cicd invented is a binding that looks configured and reaches
+      nothing, and it fails two minutes later inside the engine with a message
+      about a port the consumer never wrote. An image table is a second, quieter
+      policy that rots with every upstream retag; reading EXPOSE makes the
+      declaration depend on a pull before validation can run at all. The
+      declaration has to be attestable, and one cicd guessed is not.
+    confidence: high
+  - id: d06
+    choice: the floor disclosure fires only when a service rested on the engine gate
+    options:
+      - state readyVia on every leg that declares services (rejected)
+      - never disclose it; the structured field says it (rejected)
+      - warn only when at least one service has readyVia engine-healthcheck (chosen)
+    because: >
+      A leg whose services all passed a declared readyCmd has nothing to
+      disclose, and a line on every run is noise — the build.NoArtifact rule that
+      scripts/smoke/commit-shapes.sh already asserts in both directions. Silence
+      is not an option either: cross-cutting/evidence drops genericReport, so a
+      structured-only record never reaches the PR comment, which is where the
+      difference between "a port answered" and "your own check passed" has to be
+      readable.
+    confidence: high
+  - id: d07
+    choice: the alias charset is stricter than validLegLabel
+    options:
+      - reuse validLegLabel's charset, as the plan said (rejected)
+      - lowercase letters, digits and dashes only (chosen)
+    because: >
+      An alias is bound as a DNS label, where "." and "_" are illegal, and it is
+      upper-cased into CICD_SERVICE_<ALIAS>_HOST, where db-1, db.1 and db_1 all
+      collapse to one variable name and overwrite each other with no error
+      anywhere. Reusing the label charset would have produced both failures, one
+      loud and one silent. The env-prefix collision check is kept even though the
+      charset makes it unreachable today: it is the guard that survives someone
+      widening the charset.
+    confidence: high
+  - id: d08
+    choice: one smoke script binds a real service, in module-test and make smoke
+    options:
+      - rely on the unit suite over serviceProbe alone (rejected)
+      - assert the reachable case from evidence fields (rejected)
+      - scripts/smoke/test-leg-services.sh, whose leg command reaches the service itself (chosen)
+    because: >
+      Every rule here is unit-tested against a hand-built serviceProbe, and none
+      of that binds a container: a binding attached to the wrong container, an
+      env var injected after the exec, or a probe whose result is never read
+      passes the whole suite. Asserting the reachable case from `ready: true`
+      would prove nothing either, because cicd writes that field itself — so the
+      leg command reads CICD_SERVICE_CACHE_HOST/PORT under `set -eu` and speaks
+      Redis to them, and the dead case asserts what the leg did not do (passed
+      false, an errors[] entry naming the alias, and the leg's own echo absent
+      from the envelope). Both cases grep the serialised document for the
+      service's env value, since the field that leaks is the one nobody thought
+      to parse. It is registered in scripts/smoke-all.sh and run from the
+      module-test quality cell in .github/workflows/ci.yml.
+    confidence: high
+tags:
+  - quality
+  - evidence
+  - commit
+  - test-legs

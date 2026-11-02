@@ -1,0 +1,273 @@
+kind: change-capsule
+schema: 1
+id: CAPS-008
+status: sealed
+intent: >
+  Give quality.Test a --test-legs surface so a polyglot repository can witness
+  every stack, and make a partially witnessed repository impossible to mistake
+  for a fully witnessed one. Test took one --test-cmd, ran it in one container
+  and harvested one coverage report; the container came from langs[0], the first
+  entry of the fixed order (go, node, python, dotnet) in autoDetectLanguages. On
+  a repo with both a package.json and a .csproj that ordering decided which
+  stack got tested. The capability gap is the smaller half of the defect. The
+  envelope listed every DETECTED language under languages and reported
+  passed=true, so a run that tested half the repository was
+  byte-indistinguishable from one that tested all of it. That is this
+  repository's founding doctrine failing through a surface limitation instead of
+  a crashed scanner. Reported as a route enhancement, design left to
+  the implementer. Leg parsing and validation are new in src/quality/testlegs.go
+  with its unit suite in src/quality/testlegs_test.go, and the harvest loop that
+  now walks the legs is in src/quality/byotest.go.
+impact:
+  visibility: consumer
+  benefit: >
+    A consumer with two stacks gets both witnessed, each in its own container,
+    each with its own coverage report, in one evidence envelope and one ratchet.
+    Independently of the new flag, every existing single-command consumer now
+    learns from its own evidence which languages the run did not attest: the
+    envelope's languages field lists what was witnessed, a genericReport carries
+    the detected / witnessed / unwitnessed triple as structure, and a
+    "byo-test: NOT WITNESSED" warning goes verbatim into the PR comment.
+  compatibility: additive
+  risk:
+    - >
+      The API shape is a JSON document in a string argument, and that is a
+      commitment. Dagger has no repeatable-object argument, so the alternatives
+      were a key/value string list or a config file in the consumer repo, both
+      rejected below. Changing the shape later is a breaking change to
+      quality.Test, stage-2, both composites and both reusable workflows, plus
+      every consumer caller stub that adopted it. The mitigation is that the
+      document is validated strictly and every rejection names the leg index, so
+      a shape change would at least fail loudly rather than silently reinterpret
+      a document.
+    - >
+      testCmd moved from required to optional on quality.Test, because exactly
+      one of testCmd and testLegs is required and no static signature can say
+      that. The CLI surface is unaffected, but Dagger's generated Go client
+      drops optional arguments from the positional list, so stage-2's existing
+      call site had to change in the same commit. Any other in-repo caller added
+      later inherits that.
+    - >
+      An unwitnessed detected language is a warning and not passed=false. That
+      is a deliberate reading of gatedPassed(ran, severityOK, threshold) and it
+      is the one judgement in this change a reviewer could reasonably want
+      inverted. The argument is recorded in d04; the consequence if it is wrong
+      is that a repository can stay green while attesting less than a reader
+      assumes, which is exactly what the warning, the narrowed languages list
+      and the genericReport exist to make visible.
+    - >
+      Legs run sequentially, so N legs cost roughly N times the wall clock
+      against a 5-10 minute pre-commit budget. The cap is 8 and going over is an
+      error rather than a truncated run, but a consumer who declares 6 heavy
+      legs will feel it. The alternative, running legs concurrently, was left
+      out because no production module in this repository starts a goroutine and
+      this change was not the place to introduce that pattern.
+    - >
+      Verification was partial, deliberately and unevenly. The leg loop itself
+      was executed for real: a two-leg dagger call on a go fixture with python
+      forced into detection produced two different toolchain images, the
+      narrowed languages list, the NOT WITNESSED line naming python and the
+      genericReport triple; both refusal paths were exercised as negative
+      controls; and the pre-existing single-command path was re-run and still
+      reports what it reported before. What was NOT run locally is the part
+      that needs real coverage reports and real history: the multi-leg harvest
+      and coverable-line merge, the ratchet comparing merged per-language
+      figures against a baseline artifact, verify-contracts, and both composite
+      smokes. Those were skipped because six agents shared one Dagger engine on
+      one laptop, not because they are covered elsewhere. The module-test cell
+      added in d09 is what closes the first of them in CI on this pull request.
+decisions:
+  - id: d01
+    choice: one optional --test-legs string carrying a JSON array of leg objects
+    options:
+      - >
+        repeatable --test-cmd with a language key, e.g. --test-cmd
+        "node=npm test" (rejected)
+      - >
+        a per-language config block committed in the consumer repo, e.g.
+        .cicd/tests.yaml (rejected)
+      - >
+        fan-out at the workflow layer: a matrix calling the existing
+        single-command surface once per language (rejected)
+      - >
+        a single optional --test-legs string carrying a JSON array of leg
+        objects, mutually exclusive with --test-cmd (chosen)
+    because: >
+      The key/value form misparses silently, which is the worst failure class
+      this repository recognises. A test command legitimately contains "=" —
+      FOO=bar npm test, npm --prefix=web test — so splitting on the first "="
+      turns a valid command into a language nobody named plus a truncated
+      command. That is a configuration-level false pass, and it cannot be
+      validated away because both halves look plausible.
+      A config file in the consumer repo needs a YAML dependency inside a Dagger
+      module (the surface is otherwise stdlib JSON), creates a second source of
+      truth with precedence rules against the flags, and fails in the direction
+      that hurts: an absent or misspelled filename produces "no legs
+      configured", which reads exactly like "tests were witnessed".
+      Workflow-layer fan-out looks free and is not. It produces N
+      combined-evidence.json artifacts, N PR comments and N ratchet baselines,
+      while the baseline is a single artifact from the last successful
+      default-branch run (ADR-003) — so the legs would overwrite each other's
+      history. It also leaves the langs[0] bug in place for every direct module
+      caller, which is where the bug was reported.
+      One JSON string is ugly to type and honest about what it is: an ordered
+      list of objects, validated in one place, transmitted through Dagger as a
+      single scalar, and expressible identically from the CLI, a composite, a
+      GitHub Actions input and an ADO variable.
+    confidence: medium
+  - id: d02
+    choice: no second entry point, and no auto-detected shape
+    options:
+      - add quality.TestPolyglot alongside quality.Test (rejected)
+      - infer legs from the tree when test-cmd is absent (rejected)
+      - one entry point, shape selected by which argument is set (chosen)
+    because: >
+      ADR-005 settles the first: one entry point per composite, shape as a
+      parameter, because two entry points drift and consumers pick the wrong
+      one. Inference is worse than either. cicd cannot know a repository's test
+      command, so an inferred leg set would either guess commands or run
+      nothing, and running nothing while reporting an envelope is the exact
+      failure being fixed. Setting both arguments is an error rather than a
+      precedence rule: a consumer migrating from test-cmd to test-legs is
+      precisely the person who leaves both in place, and silently honouring one
+      would run half of what was asked and report success.
+    confidence: high
+  - id: d03
+    choice: coverage is keyed on the language, never on the leg label
+    options:
+      - key coverageByLanguage on the leg label, as the issue suggested (rejected)
+      - add a parallel coverageByLeg map to the envelope (rejected)
+      - key on the language and combine same-language legs by weighting (chosen)
+    because: >
+      coverageByLanguage is the only document shape parseBaselineCoverage
+      accepts, and the ratchet baseline is a previous run's
+      combined-evidence.json. Label keys would therefore compare this run
+      against a document that has no such keys, and the ratchet would skip or
+      compare nothing while looking configured. A parallel map is a schema
+      change to src/internal/evidence/schema.go, which is copied verbatim into
+      every module, so it is a wire change for every consumer — not something to
+      fold into this one. Legs sharing a language are combined by coverable-line
+      weighting instead, reusing mergeNodeCoverage, whose measured reason still
+      holds: an unweighted mean lets a 100%-covered 5-line package drag a
+      40%-covered 5000-line package up to 70% and clear a 60% gate. Per-leg
+      figures survive in the genericReport, where nothing compares them to a
+      baseline.
+    confidence: high
+  - id: d04
+    choice: a detected-but-unwitnessed language warns loudly and does not fail
+    options:
+      - fail the envelope, passed=false (rejected)
+      - stay silent, as before (rejected)
+      - warn unconditionally, and narrow what the envelope claims (chosen)
+    because: >
+      gatedPassed(ran, severityOK, threshold) keeps two things apart on purpose:
+      ran=false means the work could not be done and fails at every threshold
+      including --fail-on NONE, while severityOK is what a threshold may
+      forgive. A language nobody asked to be tested is neither — it is
+      lintLanguage's existing default branch, "nothing was asked of a tool, so
+      nothing failed to run", which returns ran=true, and it is how the intent
+      gate reports being switched off: loudly, without failing. Failing here
+      would turn a version bump red for every repository carrying an incidental
+      marker file, a docs/package.json in a Go service, which trades one silent
+      wrong answer for a loud wrong answer and teaches consumers to switch the
+      gate off.
+      Silence was never an option, so three things changed at once: languages in
+      the Test envelope now lists what was witnessed rather than what was
+      detected; a genericReport (genericFormat byo-test-legs) carries the
+      detected / witnessed / unwitnessed triple plus a per-leg record; and the
+      "byo-test: NOT WITNESSED" line is unconditional. Note the aggregate limit
+      that makes the warning load-bearing rather than decorative: in
+      combined-evidence.json the languages field cannot shrink, because
+      quality.Check's envelope still lists everything detected and the
+      aggregator unions the two. At that level the warning and the
+      genericReport are the only signals, and notify renders warnings verbatim
+      into the PR comment.
+    confidence: medium
+  - id: d05
+    choice: a leg's language accepts only the four canonical values
+    options:
+      - accept the --include alias set (nodejs, ts, py, c#) (rejected)
+      - accept only go, node, python, dotnet (chosen)
+    because: >
+      The value is not only an image selector: it is the key this leg's coverage
+      lands under in coverageByLanguage, and therefore the key the ratchet
+      baseline is compared on. Two accepted spellings would be two keys that
+      never meet, so a rename between releases would silently reset a
+      language's coverage history. It also keeps the alias table in lint.go
+      (another agent's lane in this batch) as the single place aliases exist.
+      The rejection message names the four values.
+    confidence: high
+  - id: d06
+    choice: >
+      a run-wide coverage-path beside legs is an error, a run-wide
+      toolchain-image is a warning
+    options:
+      - refuse both alongside legs (rejected)
+      - ignore both silently alongside legs (rejected)
+      - error on coverage-path, warn on toolchain-image (chosen)
+    because: >
+      Silently ignoring either is a knob that looks honoured and is not, so
+      neither could stay quiet. They differ in what refusal costs. Nothing else
+      consumes coverage-path, so refusing it costs a flag move and buys
+      certainty that the coverage a consumer named is actually harvested. But in
+      the commit composite the same toolchain-image input also selects the
+      archive build's image (ADR-004), so refusing it would make
+      "--artifact archive" and "--test-legs" mutually exclusive for no reason at
+      all. It is reported as ignored in the evidence instead, naming the image
+      so the line is actionable.
+    confidence: high
+  - id: d07
+    choice: >
+      over the leg limit is an error, and legs run sequentially
+    options:
+      - run the first 8 legs and warn about the rest (rejected)
+      - run legs concurrently (rejected)
+      - error over 8 legs, run sequentially (chosen)
+    because: >
+      Witnessing 8 of 30 legs and reporting no failures is the
+      partial-reads-as-complete result this whole change exists to remove — the
+      nodeProjectLimit precedent, for the same reason. Concurrency would cut the
+      wall-clock cost, but no production module in this repository starts a
+      goroutine, and introducing that pattern inside a change about honest
+      reporting would mean the first concurrent code here also has the least
+      review attention on its failure modes.
+    confidence: high
+  - id: d08
+    choice: >
+      the leg's command is not written into the evidence envelope
+    options:
+      - include cmd in the per-leg genericReport record (rejected)
+      - include label, language and image only (chosen)
+    because: >
+      A test command is consumer-authored text and can carry a credential
+      inline — npm config set //feed/:_authToken=... && npm test is a real
+      pattern. Evidence is uploaded as an artifact, rendered into PR comments
+      and pushed to Dependency Track, so a credential must never reach it. The
+      label, language and image identify a leg without quoting it.
+    confidence: high
+  - id: d09
+    choice: >
+      the ci module-test job gets a real two-leg dagger call, outside the
+      declared lane
+    options:
+      - unit tests only, integration proof left to a follow-up (rejected)
+      - add one two-leg assertion to the quality cell of module-test (chosen)
+    because: >
+      The leg loop lives in a Dagger-tagged file that no unit test can reach, so
+      the only standing proof it runs is an integration cell; a local one-off on
+      a developer laptop is not a proof that survives the next change. The added
+      cell forces python into detection with --include, declares a node leg and
+      a trivial go leg, and asserts the whole contract in one run: passed=true,
+      languages == ["go","node"], node coverage above zero, exactly one
+      NOT WITNESSED warning naming python, genericFormat byo-test-legs, the
+      unwitnessed / witnessed lists, and two legs that ran with exit code 0.
+      ci.yml was not in the declared lane for this issue; the alternative was
+      shipping an unexercised path, which this repository's own doctrine forbids
+      more strongly than it forbids a tidy diff.
+    confidence: medium
+tags:
+  - quality
+  - byo-test
+  - coverage-ratchet
+  - polyglot
+  - evidence

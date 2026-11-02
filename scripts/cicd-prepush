@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${SKIP_CICD_PREPUSH:-}" = "1" ]; then
+  echo "Skipping local CI/CD pre-push pipeline because SKIP_CICD_PREPUSH=1"
+  exit 0
+fi
+
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    echo "Install it, then rerun ./scripts/cicd-prepush." >&2
+    exit 127
+  fi
+}
+
+git_value() {
+  git "$@" 2>/dev/null || true
+}
+
+# Strip userinfo (https://user:token@host/...) so we never echo embedded
+# credentials when logging the dagger command.
+sanitize_url() {
+  local value="$1"
+  if [[ "$value" =~ ^([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@]+@(.*)$ ]]; then
+    printf '%s%s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+require_command git
+require_command dagger
+require_command docker
+# jq reads the verdict out of combined-evidence.json at the end of this script.
+# Required rather than optional on purpose: a gate that cannot parse the
+# evidence must say so loudly, never quietly wave the push through.
+require_command jq
+
+if ! docker info >/dev/null 2>&1; then
+  echo "Docker is not reachable. Start Docker Desktop, Colima, or your Docker-compatible runtime." >&2
+  exit 1
+fi
+
+src="${CICD_SRC:-.}"
+out_path="${CICD_OUT:-./out/prepush-evidence}"
+fail_on="${CICD_FAIL_ON:-${FAIL_ON:-HIGH}}"
+
+# Advisory has to be distinguishable at the gate, not only in the threshold
+# handed to the composite — NONE still fails the verdict for a step that could
+# not run, and advisory must not block on that either.
+mode="blocking"
+case "${CICD_PREPUSH_MODE:-}" in
+  advisory)
+    mode="advisory"
+    fail_on="NONE"
+    ;;
+  ""|blocking)
+    ;;
+  *)
+    echo "Unsupported CICD_PREPUSH_MODE=${CICD_PREPUSH_MODE}. Use blocking or advisory." >&2
+    exit 2
+    ;;
+esac
+
+if [ -n "${CICD_PRECOMMIT_MODULE:-}" ]; then
+  module="${CICD_PRECOMMIT_MODULE}"
+elif [ -f "./src/composites/precommit/dagger.json" ]; then
+  module="./src/composites/precommit"
+else
+  module="github.com/context-and-oss/cicd/src/composites/precommit@v0.1.0"
+fi
+
+sha="${CICD_COMMIT_SHA:-$(git_value rev-parse HEAD)}"
+branch="${CICD_BRANCH:-$(git_value branch --show-current)}"
+repo_url="${CICD_REPO_URL:-$(git_value config --get remote.origin.url)}"
+
+if [ -z "$sha" ]; then
+  sha="local"
+fi
+
+if [ -z "$branch" ]; then
+  branch="detached"
+fi
+
+if [ -z "$repo_url" ]; then
+  repo_url="local"
+fi
+
+repo_url="$(sanitize_url "$repo_url")"
+
+# Scope the diff-driven gates — the risk infra scan, and the intent gate when
+# CICD_REQUIRE_INTENT turns it on — to what this push actually changes. With no
+# diff they audit the whole tree (the entire backlog of artifacts) — noise for a
+# local "is MY change clean?" check. The Dagger module can't generate the diff
+# (it has no git), so we do it here.
+#
+# When no base can be found (no remote, no main) we pass no diff and the gates
+# audit the whole tree, and the run says so. When a base WAS found but git
+# cannot reach a merge base with it (a shallow clone) or cannot diff, the run
+# stops: an empty diff in its place read as a change that touched nothing, and
+# the intent gate then passed on whatever artifact elsewhere was well written.
+# Override with CICD_DIFF_BASE=<ref>, or CICD_DIFF_BASE=none to force a full audit.
+# specs/a-diff-the-workflow-could-not-compute-is-not-an-empty-diff.md
+CHANGE_DIFF_FILE=""
+merge_base=""
+# `return 0` is load-bearing: an EXIT trap's status becomes the script's exit
+# status, so without it a run where $CHANGE_DIFF_FILE is empty (the test returns
+# 1, && short-circuits, the function returns 1) exits 1 with every gate green.
+diff_tmp=""
+# shellcheck disable=SC2329  # invoked by the EXIT trap on the next line
+cleanup_change_diff() { [ -n "$diff_tmp" ] && rm -f "$diff_tmp"; return 0; }
+trap cleanup_change_diff EXIT
+
+diff_unavailable() {
+  echo "cicd-prepush: $1" >&2
+  echo "Without the change set the risk and intent gates would audit the whole tree and" >&2
+  echo "report on artifacts this push never touched. Fetch the base's history" >&2
+  echo "(git fetch --unshallow), point CICD_DIFF_BASE at a reachable ref, or set" >&2
+  echo "CICD_DIFF_BASE=none to ask for the full audit by name." >&2
+  exit 2
+}
+
+diff_base="${CICD_DIFF_BASE:-}"
+if [ -z "$diff_base" ]; then
+  diff_base="$(git -C "$src" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/@@' || true)"
+  if [ -z "$diff_base" ]; then
+    if git -C "$src" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+      diff_base="origin/main"
+    elif git -C "$src" rev-parse --verify --quiet main >/dev/null 2>&1; then
+      diff_base="main"
+    fi
+  fi
+fi
+[ "$diff_base" = "none" ] && diff_base=""
+
+if [ -n "$diff_base" ]; then
+  merge_base="$(git -C "$src" merge-base "$diff_base" HEAD)" \
+    || diff_unavailable "no merge base between ${diff_base} and HEAD (a shallow clone, or a ref that does not exist)."
+  diff_tmp="$(mktemp)"
+  # Committed changes on this branch (base...HEAD). --relative emits paths
+  # relative to $src so they line up with the module's in-source globs.
+  git -C "$src" diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ --relative "$merge_base" HEAD -- > "$diff_tmp" \
+    || diff_unavailable "git diff ${merge_base}..HEAD failed."
+  if [ ! -s "$diff_tmp" ] && [ -n "$(git -C "$src" status --porcelain)" ]; then
+    # No commits ahead of base yet, but the tree is dirty — scope to the
+    # working-tree change so validating before committing still runs scoped.
+    git -C "$src" diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ --relative "$merge_base" -- > "$diff_tmp" \
+      || diff_unavailable "git diff ${merge_base} (working tree) failed."
+  fi
+  if [ -s "$diff_tmp" ]; then
+    CHANGE_DIFF_FILE="$diff_tmp"
+  fi
+fi
+
+mkdir -p "$(dirname "$out_path")"
+
+args=(
+  dagger -m "$module" call run
+  --src "$src"
+  --fail-on "$fail_on"
+  --commit-sha "$sha"
+  --branch "$branch"
+  --repo-url "$repo_url"
+)
+
+if [ -n "${CICD_INCLUDE:-}" ]; then
+  include_values="${CICD_INCLUDE//,/ }"
+  for language in $include_values; do
+    args+=(--include "$language")
+  done
+fi
+
+if [ -n "${CICD_SAST_RULESETS:-}" ]; then
+  args+=(--sast-rulesets "$CICD_SAST_RULESETS")
+fi
+
+if [ -n "${NPM_FEED_URL:-}" ]; then
+  args+=(--npm-feed-url "$NPM_FEED_URL")
+fi
+
+if [ -n "${NPM_FEED_ROUTING:-}" ]; then
+  args+=(--npm-feed-routing "$NPM_FEED_ROUTING")
+fi
+
+if [ -n "${NPM_FEED_TOKEN:-}" ]; then
+  args+=(--npm-token env:NPM_FEED_TOKEN)
+fi
+
+if [ -n "${NUGET_FEED_URL:-}" ]; then
+  args+=(--nuget-feed-url "$NUGET_FEED_URL")
+fi
+
+if [ -n "${NUGET_FEED_TOKEN:-}" ]; then
+  args+=(--nuget-token env:NUGET_FEED_TOKEN)
+fi
+
+if [ "${CICD_LOCAL_NOTIFY:-}" = "1" ] && [ -n "${TEAMS_WEBHOOK:-}" ]; then
+  args+=(--teams-webhook env:TEAMS_WEBHOOK)
+fi
+
+if [ -n "${CICD_RUN_URL:-}" ]; then
+  args+=(--run-url "$CICD_RUN_URL")
+fi
+
+if [ -n "$CHANGE_DIFF_FILE" ]; then
+  args+=(--diff "$CHANGE_DIFF_FILE")
+fi
+
+# The change-intent gate is opt-in: it asks whether this change carries an
+# artifact saying why it exists, which is a team practice rather than a property
+# of the code, so a local pre-push hook does not enforce it unless you ask.
+# CICD_REQUIRE_INTENT=1 turns it on. Left off the composite still records that
+# nothing was checked ("intent-gate: NOT REQUIRED" among the warnings), so the
+# evidence never reads as though the gate passed. The flag only exists from the
+# release that introduced it onwards, so an older published module pin rejects it
+# loudly instead of ignoring it — which is the right failure: a local run that
+# silently dropped the flag would report a gate it never ran.
+if [ "${CICD_REQUIRE_INTENT:-}" = "1" ]; then
+  args+=(--require-intent)
+fi
+
+args+=(export --path "$out_path")
+
+echo "Running local CI/CD pre-push pipeline"
+echo "Module: $module"
+echo "Source: $src"
+echo "Evidence: $out_path"
+echo "Fail on: $fail_on"
+if [ "${CICD_REQUIRE_INTENT:-}" = "1" ]; then
+  echo "Intent gate: required (CICD_REQUIRE_INTENT=1)"
+else
+  echo "Intent gate: not required (set CICD_REQUIRE_INTENT=1 to enforce it)"
+fi
+if [ -n "$CHANGE_DIFF_FILE" ]; then
+  echo "Change scope: changed files vs ${diff_base}"
+elif [ "${CICD_DIFF_BASE:-}" = "none" ]; then
+  echo "Change scope: full audit (forced via CICD_DIFF_BASE=none)"
+elif [ -z "$diff_base" ]; then
+  echo "Change scope: full audit (no diff base resolved)"
+else
+  echo "Change scope: full audit (no changes vs ${diff_base})"
+fi
+printf "Command:"
+printf " %q" "${args[@]}"
+printf "\n"
+
+# The composite is a *producer*. Its `run` returns a non-nil error only when the
+# pipeline could not be executed at all — a gate trip is reported in the evidence
+# and never in the exit status. So a bare dagger call tells us whether the
+# machinery worked, not whether the change is shippable, and the gate below is
+# the only thing that reads the verdict. Without it `blocking` and `advisory`
+# behave identically, which is what this script did before.
+if ! "${args[@]}"; then
+  echo "" >&2
+  echo "The precommit composite could not run to completion." >&2
+  echo "That is an infrastructure failure, not a verdict on your change." >&2
+  exit 1
+fi
+
+evidence="$out_path/combined-evidence.json"
+
+if [ ! -f "$evidence" ]; then
+  echo "" >&2
+  echo "No evidence at $evidence — the run finished without producing a verdict." >&2
+  echo "Treating that as a failure: a gate that cannot read a verdict has not passed." >&2
+  exit 1
+fi
+
+# Checked before the reads below so an unparseable file reports itself as one,
+# rather than surfacing a bare jq parse error the developer has to interpret.
+if ! jq . "$evidence" >/dev/null 2>&1; then
+  echo "" >&2
+  echo "Evidence at $evidence is not valid JSON — no verdict could be read." >&2
+  echo "Treating that as a failure: a gate that cannot read a verdict has not passed." >&2
+  exit 1
+fi
+
+# Plain assignments under set -e, so a read that somehow still fails exits here
+# rather than leaving these empty and comparing an empty string against "true".
+passed="$(jq -r '.passed' "$evidence")"
+findings_total="$(jq '(.findings // []) | length' "$evidence")"
+errors_total="$(jq '(.errors // []) | length' "$evidence")"
+
+echo ""
+echo "Evidence: $evidence"
+echo "Verdict: passed=${passed}  findings=${findings_total}  errors=${errors_total}"
+
+if [ "$passed" = "true" ]; then
+  echo "Local gate: passed"
+  exit 0
+fi
+
+if [ "$findings_total" -gt 0 ]; then
+  echo ""
+  echo "Findings (${findings_total}):"
+  jq -r '(.findings // [])[:25][] | "  [" + (.severity // "?") + "] " + (.tool // "") + (if (.rule // "") != "" then "/" + .rule else "" end) + ": " + (.message // "") + (if (.artifactPath // "") != "" then " (" + .artifactPath + ")" else "" end)' "$evidence"
+  if [ "$findings_total" -gt 25 ]; then
+    echo "  ... +$((findings_total - 25)) more — see $evidence"
+  fi
+fi
+
+if [ "$errors_total" -gt 0 ]; then
+  # A step that could not run leaves no finding, only an errors[] entry. Even at
+  # --fail-on NONE such a step still fails the verdict, so without these a trip
+  # reporting zero findings is unexplainable.
+  echo ""
+  echo "Errors (${errors_total}) — a step that could not run is not a step that passed:"
+  jq -r '(.errors // [])[] | "  " + .' "$evidence"
+fi
+
+echo ""
+if [ "$mode" = "advisory" ]; then
+  echo "Advisory mode: reporting only, not blocking this push."
+  exit 0
+fi
+
+echo "Local gate FAILED (fail-on=${fail_on})."
+echo "Report only, without blocking:  CICD_PREPUSH_MODE=advisory ./scripts/cicd-prepush"
+echo "Bypass this one push:           SKIP_CICD_PREPUSH=1 git push"
+exit 1

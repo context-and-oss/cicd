@@ -1,0 +1,227 @@
+{
+  "$comment": [
+    "The defended inventory of static container images this repository's own code",
+    "selects — every scanner, linter, policy engine, helper and language runtime",
+    "cicd chooses on its own behalf. ADR-004 covers the *other* kind: the container",
+    "a consumer's own command runs in, resolved from --toolchain-image or from",
+    ".nvmrc / global.json. Those are consumer-controlled, cannot be pinned ahead of",
+    "time, and are deliberately absent from this file.",
+    "",
+    "Every digest here is the multi-arch image *index* digest, resolved with",
+    "`dagger core container from --address <repository>:<tag> image-ref` and verified",
+    "to be identical under --platform linux/amd64 and --platform linux/arm64 — so a",
+    "single reference works on CI (amd64 runners) and on local development machines",
+    "(including arm64 Macs). Never paste a `docker inspect RepoDigests` value: that",
+    "is the single-architecture manifest, which is how the previous build-module",
+    "Trivy pin ended up amd64-only.",
+    "",
+    "scripts/check-runtime-image-pins.py checks this file against the source in both",
+    "directions: an image the source selects but this file omits is an error, and an",
+    "entry no source references any more is an error too. It also refuses an entry",
+    "that renovate.json's custom managers would not match, so no pin here can rot",
+    "without an update path.",
+    "",
+    "family     the rollback unit — one renovate.json group, one revertable PR",
+    "role       scanner | linter | policy | helper | language-runtime",
+    "sources    every file that references this exact repository:tag@digest"
+  ],
+  "version": 1,
+  "platforms$comment": [
+    "The architectures every digest below was verified to resolve on. CI runs",
+    "amd64; arm64 is local development. Adding a platform means re-verifying every",
+    "entry, not widening this list."
+  ],
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "discovery$comment": [
+    "Where the checker looks for image selections. go_roots is walked for every",
+    ".go file (generated Dagger SDK trees excluded) and every `.From(...)` argument",
+    "is resolved through package constants and local literals. make_files is walked",
+    "for Makefile-style assignments, because `make policy-test` launches conftest",
+    "directly and claims to run the same image the real gate does."
+  ],
+  "discovery": {
+    "go_roots": [
+      "src"
+    ],
+    "make_files": [
+      "Makefile"
+    ]
+  },
+  "images": [
+    {
+      "family": "semgrep",
+      "role": "scanner",
+      "repository": "semgrep/semgrep",
+      "tag": "1.162.0",
+      "digest": "sha256:9349edbadf90c3f3c0c3f55867625354e89680e6fa10d9034042af52fdb0e0d0",
+      "purpose": "SAST scan of consumer source (security.ScanSource)",
+      "sources": [
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "gitleaks",
+      "role": "scanner",
+      "repository": "zricethezav/gitleaks",
+      "tag": "v8.30.1",
+      "digest": "sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f",
+      "purpose": "secrets scan of consumer source and of built archive output; also the git-carrying image risk.Scan's file collector runs in",
+      "sources": [
+        "src/risk/images.go",
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "trivy",
+      "role": "scanner",
+      "repository": "aquasec/trivy",
+      "tag": "0.70.0",
+      "digest": "sha256:be1190afcb28352bfddc4ddeb71470835d16462af68d310f9f4bca710961a41e",
+      "purpose": "dependency vulnerability scan of source and of built container images",
+      "sources": [
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "trufflehog",
+      "role": "scanner",
+      "repository": "trufflesecurity/trufflehog",
+      "tag": "3.78.0",
+      "digest": "sha256:731515da41fae0bee29b08b68928cebfe67183f6cb13facbf791b32dfd2aeabf",
+      "purpose": "secrets scan of a built container image's filesystem",
+      "sources": [
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "zap",
+      "role": "scanner",
+      "repository": "ghcr.io/zaproxy/zaproxy",
+      "tag": "2.17.0",
+      "digest": "sha256:8d387b1a63e3425beef4846e39719f5af2a787753af2d8b6558c6257d7a577a2",
+      "purpose": "DAST scan of a running target (security.ScanWeb)",
+      "sources": [
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "trivy",
+      "role": "scanner",
+      "repository": "aquasec/trivy",
+      "tag": "0.50.4",
+      "digest": "sha256:b7dc41ff0c3224dea024ee21bb9f6920a8af2fb343bba7139140d8fd0df1bac3",
+      "purpose": "CycloneDX SBOM generation from a built container image (build.Sbom)",
+      "sources": [
+        "src/build/images.go"
+      ]
+    },
+    {
+      "family": "conftest",
+      "role": "policy",
+      "repository": "openpolicyagent/conftest",
+      "tag": "v0.58.0",
+      "digest": "sha256:bad948972156bf96d27d1f510db346ca4f7c5996e6ab298c43036505b60f8cc8",
+      "purpose": "OPA policy gate over findings review and infrastructure files, and the `make policy-test` regression suite that must run the same build",
+      "sources": [
+        "Makefile",
+        "src/risk/images.go"
+      ]
+    },
+    {
+      "family": "golangci-lint",
+      "role": "linter",
+      "repository": "golangci/golangci-lint",
+      "tag": "v2.12.2",
+      "digest": "sha256:5cceeef04e53efe1470638d4b4b4f5ceefd574955ab3941b2d9a68a8c9ad5240",
+      "purpose": "Go lint pass in quality.Check",
+      "sources": [
+        "src/quality/images.go"
+      ]
+    },
+    {
+      "family": "node",
+      "role": "language-runtime",
+      "repository": "node",
+      "tag": "24-alpine",
+      "digest": "sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53",
+      "purpose": "repository-chosen default runtime for the Node lint and unit-test passes in quality.Check (NOT the ADR-004 consumer toolchain)",
+      "sources": [
+        "src/quality/images.go"
+      ]
+    },
+    {
+      "family": "python",
+      "role": "language-runtime",
+      "repository": "python",
+      "tag": "3.12-slim",
+      "digest": "sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de",
+      "purpose": "repository-chosen default runtime for the Python lint and unit-test passes in quality.Check",
+      "sources": [
+        "src/quality/images.go"
+      ]
+    },
+    {
+      "family": "golang",
+      "role": "language-runtime",
+      "repository": "golang",
+      "tag": "1.26-alpine",
+      "digest": "sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2",
+      "purpose": "repository-chosen default runtime for the Go unit-test pass in quality.Check, and the toolchain security.ScanLicenses downloads the Go module graph with so Trivy can read Go licences",
+      "sources": [
+        "src/quality/images.go",
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "dotnet-sdk",
+      "role": "language-runtime",
+      "repository": "mcr.microsoft.com/dotnet/sdk",
+      "tag": "8.0",
+      "digest": "sha256:3c0edbfe1549dd93fb789dc96299a40df865ad7bffefcaf38e8c05940686d641",
+      "purpose": "repository-chosen runtime for the .NET format and unit-test passes in quality.Check and for the lockfile-free NuGet dependency-graph restore in security.ScanSource, LTS band net8.0 and below (dotnetSDKBands)",
+      "sources": [
+        "src/quality/images.go",
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "dotnet-sdk",
+      "role": "language-runtime",
+      "repository": "mcr.microsoft.com/dotnet/sdk",
+      "tag": "10.0",
+      "digest": "sha256:e1fc6e423f543119c406d24e2e687d67c569f18f04a37a8b0005d80ad0dcee80",
+      "purpose": "repository-chosen runtime for the .NET format and unit-test passes in quality.Check and for the lockfile-free NuGet dependency-graph restore in security.ScanSource, LTS band net9.0 and above (dotnetSDKBands); one pin per band because an SDK image carries its band in the tag and a net10.0 consumer cannot restore in 8.0 at all",
+      "sources": [
+        "src/quality/images.go",
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "alpine",
+      "role": "helper",
+      "repository": "alpine",
+      "tag": "3.19",
+      "digest": "sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1",
+      "purpose": "language-marker probe of the consumer source tree (quality.Check, build.BuildArchive) and the dependency-input probe that reconciles declared ecosystems against the ones Trivy resolved (security.ScanSource, security.ScanArchive)",
+      "sources": [
+        "src/build/images.go",
+        "src/quality/images.go",
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "alpine",
+      "role": "helper",
+      "repository": "alpine",
+      "tag": "3.21",
+      "digest": "sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d",
+      "purpose": "file discovery, content collection and timestamps for the risk scan and OPA gate",
+      "sources": [
+        "src/risk/images.go"
+      ]
+    }
+  ]
+}

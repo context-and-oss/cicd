@@ -1,0 +1,154 @@
+kind: change-capsule
+schema: 1
+id: CAPS-016
+status: sealed
+intent: >
+  Nothing in this repository ran a formatter. No Makefile target, no workflow
+  step and no script invoked gofmt, and src/internal/.golangci.yml — the only
+  golangci-lint config here — declares four linters and no formatters key at
+  all, so `make lint` printed nothing about formatting on a tree holding two
+  unformatted files, exactly as it would have printed nothing on a clean one.
+  Measured before this change: 2 of 152 tracked Go files were not gofmt-clean,
+  src/internal/evidence/schema_test.go and src/risk/scanner.go, and the
+  offending lines arrived in two early commits and are contained in all 40
+  tags this repository has ever cut. This change adds scripts/go_format.py and
+  scripts/check-go-format.py, wires them into ci.yml's lint-repo job and into
+  make check-go-format / make fmt, and formats the two files. Found while
+  running gofmt by hand during the CAPS-015 work.
+impact:
+  visibility: internal
+  benefit: >
+    The absence of a formatter is no longer indistinguishable from a formatted
+    tree. The check covers every tracked Go file including the 15 Dagger
+    modules, which the existing golangci-lint step does not reach, and it
+    reports the two states a formatting check must never merge — clean, and
+    could-not-run — as different exit codes. `make fmt` makes the remedy one
+    command, so a failure costs an author nothing to clear.
+  compatibility: fix
+  risk:
+    - >
+      Formatting is the least consequential thing a gate here checks: an
+      unformatted file fails nothing and ships no wrong verdict. The claim is
+      narrower than the doctrine it borrows language from — that a tree with no
+      formatter reads identically to a formatted one — and the case for asking
+      rests on the question being cheap, not on the answer being important.
+    - >
+      The adjacent hole is larger and stays open. ci.yml runs golangci-lint
+      with working-directory: src/internal, so the Dagger modules receive no
+      errcheck, no govet and no staticcheck at all; src/risk/scanner.go was not
+      merely unformatted, it has never been statically analysed. That is
+      recorded in the module docstring, in the CI step comment and in the spec
+      rather than closed here, because a green formatting tick must not read as
+      a claim that static analysis reaches the modules.
+    - >
+      The formatting diff itself is whitespace only — struct literal field
+      alignment and one inline struct broken across lines — and was verified
+      behaviour-neutral by re-running the affected suites: src/internal
+      go test -count=1 clean, and src/risk 114 unit tests inside the 831-test
+      canonical module-unit run.
+    - >
+      A tracked-files scope means a Go file that is never committed is never
+      graded. That is the intended trade: it excludes the gitignored generated
+      SDKs without an exclusion list of its own to drift out of step with
+      .gitignore, and an uncommitted file cannot reach main.
+decisions:
+  - id: d01
+    choice: add a formatting check rather than just format the two files
+    options:
+      - format the two files and move on (rejected)
+      - format them and add a check that would have caught them (chosen)
+    because: >
+      Two files across 40 releases is not a formatting problem worth a change
+      on its own; the reason nothing noticed for 40 releases is. Formatting the
+      files without adding the check leaves the tree clean and the question
+      still unasked, so the next unformatted line would again be found by
+      accident — which is how these two were found, by running gofmt by hand
+      during unrelated work.
+    confidence: high
+  - id: d02
+    choice: gofmt, not gofumpt
+    options:
+      - gofumpt, which is stricter and would flag more (rejected)
+      - gofmt, the language's own floor (chosen)
+    because: >
+      gofmt's output is not a matter of taste, so a check landing across 15
+      modules at once produces no findings anyone can reasonably argue with.
+      gofumpt adds a style opinion, which means a larger initial diff and a
+      gate whose findings are debatable — and a gate people can argue with is a
+      gate they learn to route around. Nothing prevents a later, separately
+      argued move to gofumpt; this change deliberately does not smuggle a style
+      decision in alongside closing a hole.
+    confidence: high
+  - id: d03
+    choice: grade tracked files only, from git ls-files
+    options:
+      - walk the tree for *.go and maintain an exclusion list (rejected)
+      - ask git which Go files are tracked (chosen)
+    because: >
+      The generated Dagger SDKs (dagger.gen.go, internal/dagger/) are
+      gitignored, and grading them would report a code generator's output as
+      this repository's debt — a codegen emitting unformatted Go is an upstream
+      bug, not a diff to commit here. Walking the tree would need an exclusion
+      list that duplicates .gitignore and drifts from it silently, which is the
+      failure mode the inventory checks exist to prevent elsewhere. Asked of
+      git, the scope updates itself. Verified: an unformatted dagger.gen.go in
+      the working tree is not flagged.
+    confidence: high
+  - id: d04
+    choice: three exit codes, with an empty file list counted as could-not-ask
+    options:
+      - pass or fail only, trusting an empty gofmt listing (rejected)
+      - exit 0 clean, 1 unformatted, 2 the question could not be put to gofmt (chosen)
+    because: >
+      A formatting check whose only answers are clean and dirty reports a
+      missing gofmt as clean, which is the exact substitution this change
+      exists to remove. Four distinct states reach exit 2 and each has a test:
+      no gofmt on PATH and no go to locate one; a gofmt run that exits non-zero,
+      whose stdout is then an incomplete answer and not a shorter one; a failed
+      git ls-files or a root that is not a repository; and a working gofmt over
+      an empty file list. That last one is the subtle case — "0 of 0 files are
+      unformatted" is vacuously true in precisely the way allRan stayed
+      vacuously true over an empty language set in CAPS-014, and a broken glob
+      or a run outside the checkout would otherwise produce a green tick over
+      nothing examined. Same three-answer shape as check-release-bump.py and
+      check-release-gate.py, and no override flag, because the remedy is
+      make fmt and needs no judgement.
+    confidence: high
+  - id: d05
+    choice: a standalone script, not an eleventh check in scripts/repo_surface.py
+    options:
+      - add it to repo_surface.py's CHECKS tuple beside the other ten (rejected)
+      - scripts/go_format.py plus scripts/check-go-format.py (chosen)
+    because: >
+      Every check in repo_surface.py reads files and compares declarations: it
+      is hermetic, needs no binary on PATH, and its fixture tests build trees in
+      a temp directory. A formatting check needs a real gofmt and a real git,
+      so folding it in would make check-repo-surface.py — including its own unit
+      suite — fail wherever a Go toolchain is absent, and would convert a pure
+      text audit into something with an external dependency. The split matches
+      the existing pure-logic/CLI pair pattern (release_bump.py with
+      check-release-bump.py, release_gate.py with check-release-gate.py) and
+      keeps the pure classifier fully unit-testable without gofmt.
+    confidence: high
+  - id: d06
+    choice: record the golangci-lint coverage hole instead of closing it here
+    options:
+      - extend golangci-lint to the Dagger modules in the same change (rejected)
+      - close the gofmt half and write down what remains open (chosen)
+    because: >
+      golangci-lint needs a compilable package, because staticcheck and errcheck
+      are type-aware, and a Dagger module compiles only once dagger develop has
+      generated dagger.gen.go and internal/dagger/. Linting the modules
+      therefore means running Dagger inside lint-repo, the one CI job that
+      deliberately requires no Dagger session — a trade involving job runtime, a
+      new dependency in a job that has never needed one, and a first-run
+      finding count nobody has seen. That deserves its own argument. gofmt needs no compilation and can
+      cover the modules today, so the cheap half closes now; leaving the
+      expensive half undocumented is what would let a green formatting tick
+      imply coverage that does not exist.
+    confidence: high
+tags:
+  - tooling
+  - ci
+  - false-pass
+  - gofmt

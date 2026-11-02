@@ -1,0 +1,141 @@
+kind: change-capsule
+schema: 1
+id: CAPS-035
+status: sealed
+intent: >
+  The quality module's node test leg asks the fixture for coverage, and the
+  fixture declared no coverage provider. test.go handled that by heart: prefer
+  the repo's own pinned @vitest/coverage-v8, and only when the repo pins none
+  fall back to `npm install --no-save @vitest/coverage-v8`, unversioned. The
+  comment above that line names the exact hazard — "avoiding a version skew
+  where an unversioned --no-save install pulls a coverage-v8 newer than the
+  repo's pinned vitest" — and testdata/node-app was the repo that took the
+  fallback, so the hazard was armed against cicd's own fixture rather than
+  against a consumer.
+
+  @vitest/coverage-v8 5.0.0 published, and the unversioned install started
+  resolving to it. The provider peer-requires vitest at an exact version, the
+  fixture pins vitest ^4.0.0, and npm 11.16.0 does not report that as ERESOLVE:
+  arborist throws TypeError: Cannot read properties of null (reading
+  'children') at place-dep.js:299. The install dies, no coverage provider
+  lands, vitest runs without --coverage, /tmp/coverage/coverage-summary.json is
+  never written, and ci.yml's node assertion fails on `.coverageByLanguage.node
+  > 0` — a coverage number the module could not produce, presented as a
+  quality-gate failure.
+
+  So the fixture pins what it needs: "@vitest/coverage-v8": "^4.0.0" in
+  devDependencies, matching the vitest range beside it. `npm ls` now resolves,
+  the fallback branch is never taken, and the three explicit --test-cmd
+  invocations in ci.yml that call `npm install --no-save @vitest/coverage-v8`
+  unconditionally dedupe to the satisfying 4.1.11 instead of crashing — so
+  neither ci.yml nor the step contract's commands change, and the two
+  ci.yml comments asserting those strings are character-identical to the
+  contract stay true.
+impact:
+  visibility: internal
+  benefit: >
+    The quality module's node leg produces a coverage number again, and the
+    fixture stops exercising a fallback path that only exists for consumers who
+    pin nothing. Verified inside the digest-pinned node:20-alpine CI image on
+    linux/amd64, running ci.yml's exact command sequence: deps=0, vitest=0,
+    coverage lines pct=75. The unconditional --test-cmd form was run separately
+    in the same image and resolved `@vitest/coverage-v8@4.1.11 deduped`.
+  compatibility: none
+  risk:
+    - >
+      The lockfile diff is wide — 41 transitive versions move, 7 packages drop
+      and 18 arrive — for a change whose package.json diff is one line. That is
+      structural, not incidental: coverage-v8's peer on vitest is an exact
+      version in both directions, so admitting the provider forces vitest
+      4.1.8 -> 4.1.11 and cascades through vite, rolldown, lightningcss and
+      postcss. A control run regenerating the lockfile with package.json
+      untouched, in the same image, moved nothing at all, which is what
+      attributes the churn to the new dependency rather than to npm drift.
+    - >
+      The churn is bounded by what it cannot reach. build.mjs is Node stdlib
+      only and takes no devDependency, so the vite and rolldown bumps cannot
+      affect the archive shape; the smoke script's SBOM assertions are
+      properties (non-empty, no duplicate identity), not counts; and nothing
+      outside the fixture references any moved package. Trivy over the new
+      lockfile returns the same five lodash@4.17.4 findings as the old one and
+      not one more, so the 18 additions widen the SCA surface without changing
+      the verdict the fixture is there to produce.
+    - >
+      This does not fix the consumer-facing case. A repository that pins no
+      coverage provider still takes the fallback, still installs at `*`, and
+      now still gets 5.0.0 — where the outcome on a vitest 4 tree is the same
+      arborist crash, degrading to a silent coverage loss rather than a loud
+      one because test.go's `|| true` and its plain-vitest else branch are
+      built to protect pass/fail from coverage availability. Pinning the
+      fixture removes cicd's own exposure and leaves the consumer's intact;
+      that residue is filed as its own issue rather than smuggled into a fixture fix.
+    - >
+      Nothing enforces that the fixture keeps a provider pinned. The guard
+      against regression is the ci.yml assertion this change repairs, which
+      catches a missing coverage number but names it as a quality failure
+      rather than as a fixture defect — the same misattribution that made this
+      break read as a gate failure for a day.
+decisions:
+  - id: d01
+    choice: pin the provider in the fixture rather than version the install in test.go
+    options:
+      - constrain the fallback install to a ^4 range inside test.go (rejected)
+      - pin the provider in testdata/node-app/package.json (chosen)
+    because: >
+      A hardcoded major in the module would be cicd guessing which vitest its
+      consumers run, and would be wrong for every consumer on vitest 5 the day
+      after it shipped. The fixture pinning its own provider is what test.go's
+      preferred path already expects of a repository, so the fix makes the
+      fixture behave like the well-formed consumer the module was written for,
+      instead of teaching the module a version it cannot know.
+    confidence: high
+  - id: d02
+    choice: accept the full transitive refresh instead of an exact provider pin
+    options:
+      - pin the provider at exactly 4.1.8 for a zero-churn lockfile (rejected)
+      - pin the provider at ^4.0.0 and take the 41-version refresh (chosen)
+    because: >
+      The exact pin was measured, not assumed: it produces 0 version moves and
+      0 removals against 17 additions, a strictly smaller diff. It buys that by
+      lying. coverage-v8's peer is exact in both directions, so pinning the
+      provider at 4.1.8 also freezes vitest at 4.1.8 while package.json goes on
+      claiming ^4.0.0 — a constraint stated nowhere, which surfaces as an
+      ERESOLVE the next time someone regenerates after vitest 4.2 ships. That
+      is the same shape of defect this capsule exists to fix: a provider whose
+      real version constraint is invisible at the declaration site. Two
+      matching ^4.0.0 ranges let npm hold the lockstep in the open, and the
+      churn is a one-time cost paid in a fixture that asserts on none of it.
+    confidence: high
+  - id: d03
+    choice: regenerate the lockfile inside the digest-pinned CI image
+    options:
+      - commit the lockfile npm 11.16.0 produced on the maintainer's macOS host (rejected)
+      - regenerate under node:20-alpine, linux/amd64, npm 10.8.2 (chosen)
+    because: >
+      The host and the image do not run the same npm, and a lockfile is the one
+      artifact in this change CI consumes verbatim. Generating it where it will
+      be read removes a variable rather than reasoning about whether it
+      mattered. It also made the control experiment possible: same image, same
+      npm, package.json untouched, zero churn — which is the evidence behind
+      d02's attribution and could not have been produced from the host.
+    confidence: high
+  - id: d04
+    choice: ship this apart from the change it unblocks
+    options:
+      - fold the fixture pin into the branch whose CI it turns green (rejected)
+      - a separate branch and PR (chosen)
+    because: >
+      The fused-verdict work on a feature branch is blocked by this, but is not the
+      reason for it — the fixture would have broken on any branch that ran the
+      node quality leg after coverage-v8 5.0.0 published, including main. A
+      feature branch carrying an unrelated dependency move is a branch whose
+      revert takes something unintended with it, and the next author hitting
+      the arborist crash should find this by its symptom, not inside a commit
+      about security verdicts. Same reasoning as CAPS-034 for the grpc CVE.
+    confidence: high
+tags:
+  - testing
+  - fixtures
+  - quality
+  - npm
+  - dependencies

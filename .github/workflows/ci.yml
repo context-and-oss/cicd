@@ -1,0 +1,1407 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DAGGER_VERSION: "0.20.8"
+  GO_VERSION: "1.26"
+
+# Least-privilege default. Jobs that need to write (SARIF upload, PR comments,
+# Pages deploy, release push) widen scope with their own job-level permissions.
+permissions:
+  contents: read
+jobs:
+  # Keep the required `ci` context present for every PR, but do not spend
+  # Dagger-runner minutes proving container behaviour when the diff can only
+  # alter documentation. This is deliberately a job-level classifier rather
+  # than a `paths-ignore` workflow trigger: GitHub publishes no required check
+  # at all for a skipped workflow, which blocks a protected PR indefinitely.
+  classify-change:
+    name: Classify change scope
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: classify
+        name: Select documentation validation when safe
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [ "$EVENT_NAME" = pull_request ] && [ -n "${BASE_SHA:-}" ]; then
+            changed=false
+            docs_only=true
+            while IFS= read -r changed_path; do
+              changed=true
+              case "$changed_path" in
+                *.md|.capsules/*) ;;
+                # HTML may contain executable JavaScript, including embedded
+                # production templates. It must take the full validation path.
+                *) docs_only=false; break ;;
+              esac
+            done < <(git diff --name-only "$BASE_SHA"...HEAD)
+            # An empty or unresolvable diff is never evidence that it is safe to
+            # skip the full product validation.
+            [ "$changed" = true ] || docs_only=false
+          fi
+          echo "docs_only=$docs_only" | tee -a "$GITHUB_OUTPUT"
+
+  # Documentation can still publish invalid local links, stale module commands,
+  # version-pin drift, or an unparsable change capsule. Run the defended-surface
+  # and capsule checks for that path, but reserve compilation and Dagger smokes
+  # for code, workflow, template, fixture, and script changes.
+  docs-validation:
+    name: Validate documentation surface
+    runs-on: ubuntu-latest
+    needs: classify-change
+    if: needs.classify-change.outputs.docs_only == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check defended repository surface
+        run: python3 scripts/check-repo-surface.py
+
+      - name: Check change capsules parse
+        run: python3 scripts/check-capsules.py
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 1: Repo-level Go lint across all module source files.
+  # Does not require Dagger — validates Go code quality with golangci-lint.
+  # ──────────────────────────────────────────────────────────────────────────
+  lint-repo:
+    name: Lint Go source
+    runs-on: ubuntu-latest
+    needs: classify-change
+    if: needs.classify-change.outputs.docs_only != 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Go workspace
+        run: go work sync
+
+      - name: Run internal package tests
+        run: cd src/internal && go test -race ./...
+
+      # OPA policy regression suite (findings + infra, incl. DOCKER-002's
+      # multi-stage FROM..AS coverage). Same conftest image opa.go pins at
+      # runtime, so a pass here proves what the real gate will do. *_test.rego
+      # files are excluded from the gate itself (loadPolicyDir) — this is the
+      # only place they run, so it must block lint-repo like any other
+      # regression suite. ubuntu-latest ships a Docker daemon, so this runs
+      # for real here even though the authoring sandbox had none — all 90
+      # test_* rules across both policy directories were verified there with
+      # a real (differently-versioned) OPA binary before this was wired in.
+      - name: OPA policy tests (conftest verify)
+        run: make policy-test
+
+      # Run golangci-lint directly rather than through golangci/golangci-lint-action.
+      # Keep workflow dependencies compatible with a restrictive Actions policy.
+      # A disallowed action can reject the run at startup before any job exists,
+      # producing no check runs rather than a failed step. Destination Actions
+      # settings must be verified separately; scripts/repo_surface.py checks
+      # the action references in this tree.
+      #
+      # `go run <module>@<version>` is version-exact and its download is verified
+      # against the Go checksum database, so this is as pinned as the digest pins
+      # in src/*/images.go. Keep the version in step with src/internal/.golangci.yml,
+      # which declares `version: "2"` and therefore needs golangci-lint v2.x.
+      - name: golangci-lint
+        working-directory: src/internal
+        env:
+          GOWORK: "off"
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+
+      # Refuse to ship a reusable workflow or template whose cicd version pins
+      # disagree, or that calls a command its pinned module doesn't expose.
+      # Catches the stale-pin rot (.github/workflows frozen while everything
+      # else bumps) and the stale-command-vs-old-composite regression class.
+      # Narrower than check-repo-surface.py on purpose: this is the same guard
+      # cd.yml runs inside the release commit, so its scope must match what the
+      # release can actually repair.
+      - name: Check workflow & template version pins
+        run: python3 scripts/check-workflow-pins.py
+
+      # The full defended surface. Every path scripts/repo-inventory.json
+      # declares active must exist, its local markdown links must resolve, its
+      # cicd pins must agree on one version, and every Dagger command it
+      # documents must exist in module source — plus no active document may go
+      # undeclared. This is what rejects the drift class the pin gate cannot
+      # see: a guide calling a removed command, a link to a deleted file, a
+      # module README nothing ever bumped.
+      - name: Check defended repository surface
+        run: python3 scripts/check-repo-surface.py
+
+      # ADR-004 runtime image gate. Every static container image this
+      # repository's own code selects — scanner, linter, policy engine, helper,
+      # language runtime — must be `tag@sha256:<digest>`, declared in
+      # scripts/runtime-images.json, and covered by a renovate.json update
+      # group. References are discovered from source (every `From(...)` argument
+      # resolved through constants and local literals), so a brand new tool
+      # image cannot slip past a stale allowlist.
+      #
+      # Offline on purpose: it validates the immutable *form* of each pin. It
+      # never asks a registry what "latest" is — proposing bumps is Renovate's
+      # job, and proving a digest actually resolves is the Dagger smokes' job.
+      # ADR-004's consumer-resolved toolchains (--toolchain-image, .nvmrc,
+      # global.json) are classified dynamic and deliberately not failed.
+      - name: Check runtime image pins (ADR-004)
+        run: python3 scripts/check-runtime-image-pins.py
+
+      # Behavioural validation of the Azure DevOps templates consumers copy
+      # verbatim. The pin gate above checks two static tokens in these files;
+      # this checks what they do: they parse under ADO's YAML subset, call the
+      # unified `run` with the flags the pipeline depends on, hand every
+      # credential to Dagger as `env:NAME`, never splice a consumer-supplied
+      # $(VAR) macro into a bash body (ADO expands macros before the shell
+      # parses the line, so quoting cannot contain the value), and clear any
+      # credential they write to ~/.git-credentials.
+      - name: Check Azure DevOps templates
+        run: python3 scripts/check-ado-templates.py
+
+      # A capsule is prose in YAML and an unquoted `: ` stops it parsing. The
+      # infra policy scan feeds capsules to conftest, which renames every input,
+      # so the failure arrives as a line number against `/inputs/f0000` from a
+      # job called "Precommit on self" — four minutes into the dogfood run, with
+      # no filename. Named here in seconds instead. Not a YAML validator: see
+      # scripts/capsules.py for what a pass does and does not prove.
+      - name: Check change capsules parse
+        run: python3 scripts/check-capsules.py
+
+      # Formatting was asked about by nothing: no Makefile target, no workflow
+      # step, no script ran gofmt, so `make lint` printed nothing about a tree
+      # holding two files that had been unformatted since the commits that added
+      # them. The check covers every tracked Go file including the Dagger
+      # modules, which golangci-lint above does not reach — it runs with
+      # working-directory: src/internal, and a module only compiles once
+      # `dagger develop` has generated its SDK, which this Dagger-free job
+      # deliberately cannot do. gofmt needs no compilation, so it covers every
+      # module here; the lint-modules job below, which does run Dagger, is
+      # where the modules meet errcheck, govet and staticcheck.
+      - name: Check Go formatting
+        run: python3 scripts/check-go-format.py
+
+      # The checkers' own regression suite — fixture-driven proof that the
+      # checks above actually fail on a missing managed path, a removed
+      # command, a stale pin, a broken link, a tag-only tool image, a pin no
+      # update manager would match, a spliced ADO macro and an uncleared
+      # credential, rather than passing vacuously. It also runs
+      # src/risk/claude-proxy.test.js (scripts/tests/test_claude_proxy.py): the
+      # risk proxy's loopback suite, on the runner's preinstalled Node, with a
+      # fake Claude CLI — no model and no subscription.
+      - name: Unit tests for repository validation scripts
+        run: python3 -m unittest discover -s scripts/tests -t . -v
+
+      # The canonical clean-checkout module-unit runner covers every module
+      # in the defended inventory that ships a -tags
+      # unit_test suite — including risk and intent, which previously had no
+      # unit-test execution anywhere in CI — runs its COMPLETE suite here, no
+      # Dagger session required. Fails loudly on a failing test or on a
+      # module whose *_test.go files execute zero tests (a setup-only or
+      # build-constraint-filtered false pass).
+      - name: Canonical module-unit runner
+        run: bash scripts/test-module-units.sh
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 2: Verify every module's Go signature matches its declared contract.json.
+  # ──────────────────────────────────────────────────────────────────────────
+  verify-contracts:
+    name: Verify module contracts
+    runs-on: ubuntu-latest
+    needs: [classify-change, lint-repo]
+    if: needs.classify-change.outputs.docs_only != 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Unit tests for contract verifier helpers
+        run: go test ./internal/source/...
+        working-directory: src/cross-cutting/contract
+        env:
+          GOWORK: "off"
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: dagger develop (contract module)
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/cross-cutting/contract
+
+      - name: make verify-contracts
+        run: make verify-contracts
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 2b: golangci-lint over every Dagger module.
+  # lint-repo lints src/internal only, on purpose: it is the one job that
+  # needs no Dagger session, and a module compiles only once `dagger develop`
+  # has generated its SDK. So until this job existed the fifteen modules that
+  # decide every gate had been through gofmt and nothing else. One job rather
+  # than a matrix cell per module: one engine and one golangci-lint build
+  # serve all fifteen, and scripts/ci/lint-modules.sh lints every module
+  # before it reports, naming each red one, so no finding hides behind an
+  # earlier failure. Both tag sets are linted; the script says why.
+  # ──────────────────────────────────────────────────────────────────────────
+  lint-modules:
+    name: Lint Dagger modules
+    runs-on: ubuntu-latest
+    needs: [classify-change, lint-repo]
+    if: needs.classify-change.outputs.docs_only != 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: golangci-lint every module, both tag sets
+        run: bash scripts/ci/lint-modules.sh
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 3: Per-module integration tests via Dagger.
+  # Each matrix cell runs a module's test function against testdata fixtures.
+  # ──────────────────────────────────────────────────────────────────────────
+  module-test:
+    name: Test ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    needs: [classify-change, lint-repo]
+    if: needs.classify-change.outputs.docs_only != 'true'
+    env:
+      MODULE: ${{ matrix.module }}
+      SHA: ${{ github.sha }}
+      BRANCH: ${{ github.ref_name }}
+      REPO: ${{ github.server_url }}/${{ github.repository }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - src/quality
+          - src/security
+          - src/risk
+          - src/build
+          - src/notify
+          - src/stage-2
+          - src/stage-4
+          - src/cross-cutting/evidence
+          - src/cross-cutting/report
+          - src/cross-cutting/pages
+          - src/cross-cutting/intent
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      # Module unit tests are NOT run here. There is exactly one canonical
+      # module-unit runner — scripts/test-module-units.sh, executed in the
+      # lint-repo job this job `needs:` — and it covers every module in the
+      # defended inventory that ships a `-tags unit_test` suite. A second
+      # per-matrix-cell copy would (a) duplicate 8 complete suites across 12
+      # cells, and (b) re-introduce a hand-maintained module list that can drift
+      # from the inventory, which is the exact hazard the canonical runner
+      # exists to remove. It also has to run before `dagger develop` below:
+      # -tags unit_test excludes the Dagger entrypoint files, but the generated
+      # dagger.gen.go dispatch references those tagged methods, so with the SDK
+      # present the tagged build cannot compile (undefined: Build/Quality/...).
+      # lint-repo runs on a clean checkout, so that ordering holds for free.
+
+      - name: dagger develop (generate internal SDK)
+        # MODULE, not the ${{ }} expression: the module path reaches the script
+        # as an argument through the job's env, never spliced into the command
+        # line, for the reason check-ado-templates.py enforces one level up.
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" "$MODULE"
+
+      - name: Run module tests (quality)
+        # The case arms are split across three steps on purpose. A single `run:`
+        # body above roughly 24 KB makes GitHub reject the workflow at startup —
+        # the run is never created, so ci.yml does not go red, it vanishes from the
+        # check list entirely. check_workflow_step_sizes in scripts/repo_surface.py
+        # enforces the budget (run via scripts/check-repo-surface.py); see
+        # docs/reference/workflow-step-size.md before merging arms back.
+        run: |
+          case "$MODULE" in
+            src/quality)
+              dagger -m "./$MODULE" call check --src ./testdata/go-app \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-go.json
+              dagger -m "./$MODULE" call check --src ./testdata/node-app --include node \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-node.json
+              # A linter that could not run must not read as "no findings", and
+              # the evidence must name the ESLint that actually ran. Both legs
+              # report zero on a clean tree and on a non-run, so the version and
+              # the empty errors[] — not the exit code — are what prove they ran.
+              jq -e '((.errors // []) | length == 0)
+                and ([.sarifReport.runs[]? | select(.tool.driver.name == "eslint")
+                      | select((.tool.driver.version // "unknown") != "unknown")] | length > 0)
+                and (.coverageByLanguage.node > 0)' /tmp/evidence-node.json
+              # Monorepo layout: package.json in Client/, nothing at the root.
+              # cicd detects node here (the marker search is depth-4) and must
+              # lint and test where the project actually lives. Before that both
+              # legs ran at the root: eslint exited 127 and vitest exited 1 after
+              # npx fetched an unpinned vitest to run against a tree with no
+              # tests. Assertions below fail on that shape.
+              rm -rf /tmp/mono && mkdir -p /tmp/mono/Client
+              cp -R ./testdata/node-app/. /tmp/mono/Client/
+              rm -rf /tmp/mono/Client/node_modules
+              dagger -m "./$MODULE" call check --src /tmp/mono \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-mono.json
+              jq -e '(.languages == ["node"])
+                and ((.errors // []) | length == 0)
+                and (.findingsCount > 0)
+                and ([.sarifReport.runs[]? | select(.tool.driver.name == "eslint")
+                      | select((.tool.driver.version // "unknown") != "unknown")] | length > 0)
+                and (.coverageByLanguage.node > 0)
+                and ([.warnings[]? | select(test("linted Client"))] | length == 1)
+                and ([.warnings[]? | select(test("tested Client"))] | length == 1)' \
+                /tmp/evidence-mono.json
+              dagger -m "./$MODULE" call check --src ./testdata/python-app --include python \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-py.json
+              dagger -m "./$MODULE" call check --src ./testdata/dotnet-app --include dotnet \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-dotnet.json
+              # `check` returns a File, so passed=false does not fail the CLI —
+              # these assertions are what proves the .NET legs ran. Every one of
+              # them was false before this cell had teeth: dotnet test resolved
+              # the root non-test project, ran zero tests, exited 0; the coverage
+              # collector name was word-split so no report was ever written; and
+              # the reported version was the compile-time constant rather than
+              # the SDK that executed.
+              jq -e '.passed == true
+                and ((.errors // []) | length == 0)
+                and (.coverageByLanguage.dotnet > 0)
+                and (.coverageLinesByLanguage.dotnet > 0)
+                and ((.warnings // []) | map(select(test("ran [0-9]+ of [0-9]+ \\.csproj found under the source root"))) | length > 0)
+                and ((.warnings // []) | map(select(test("carr(y|ies) no test marker in the project file itself"))) | length > 0)
+                and ([.sarifReport.runs[]?
+                      | select(.tool.driver.name == "dotnet-format")
+                      | select(.tool.driver.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | length > 0)' \
+                /tmp/evidence-dotnet.json
+              # The coverage gate was structurally unfailable: a missing figure
+              # was skipped, and .NET never produced one. 33% against a 80% floor
+              # must fail.
+              dagger -m "./$MODULE" call check --src ./testdata/dotnet-app --include dotnet \
+                --min-coverage 80 \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-dotnet-cov.json
+              jq -e '.passed == false
+                and ((.errors // []) | map(select(test("below required"))) | length > 0)' \
+                /tmp/evidence-dotnet-cov.json
+              # A .NET repo with no test project must not read as tested. This
+              # fixture lives in /tmp rather than testdata/ because it exists to
+              # be rejected, and a permanently broken fixture under testdata/
+              # would be picked up by every other consumer of that directory.
+              mkdir -p /tmp/dotnet-notests
+              printf '%s\n' \
+                '<Project Sdk="Microsoft.NET.Sdk">' \
+                '  <PropertyGroup>' \
+                '    <OutputType>Exe</OutputType>' \
+                '    <TargetFramework>net8.0</TargetFramework>' \
+                '  </PropertyGroup>' \
+                '</Project>' > /tmp/dotnet-notests/App.csproj
+              printf 'class P { static void Main() { System.Console.WriteLine("hi"); } }\n' \
+                > /tmp/dotnet-notests/Program.cs
+              dagger -m "./$MODULE" call check --src /tmp/dotnet-notests --include dotnet \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-dotnet-notests.json
+              jq -e '.passed == false
+                and ((.errors // []) | map(select(test("is a test project"))) | length > 0)' \
+                /tmp/evidence-dotnet-notests.json
+              # The same non-run at --fail-on NONE. NONE suppresses findings and
+              # must not suppress this: it is the threshold a team sets while
+              # onboarding, so if it hid a leg that examined nothing then nobody
+              # would see the false pass until they tightened the gate. Before
+              # gatedPassed took ran and severityOK apart, this call reported
+              # passed=true with the cause sitting unread in errors[].
+              dagger -m "./$MODULE" call check --src /tmp/dotnet-notests --include dotnet \
+                --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-dotnet-notests-none.json
+              jq -e '.failOnSeverity == "NONE" and .passed == false
+                and ((.errors // []) | map(select(test("is a test project"))) | length > 0)' \
+                /tmp/evidence-dotnet-notests-none.json
+              # The other half of the contract: a leg that ran and found something
+              # still passes at NONE. dotnet-app's format leg reports findings the
+              # gate is asked to ignore, and coverage proves the test leg executed.
+              dagger -m "./$MODULE" call check --src ./testdata/dotnet-app --include dotnet \
+                --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-dotnet-none.json
+              jq -e '.passed == true and ((.errors // []) | length == 0)
+                and .coverageByLanguage.dotnet > 0' \
+                /tmp/evidence-dotnet-none.json
+              # Which `dotnet test` CLI ran is a question, not an assumption:
+              # VSTest and Microsoft.Testing.Platform share no flag set, and on
+              # the .NET 10 SDK an MTP project cannot be driven through the VSTest
+              # target at all — so cicd's one house invocation made every MTP
+              # repository a non-run at every threshold. This also proves the
+              # coverage harvest (MTP writes <guid>.cobertura.xml, and the old
+              # glob on coverlet's literal filename matched zero files) and that
+              # an empty cobertura no longer reads as 100%. Body kept in a script
+              # because this `run:` is the repository's largest and a body over
+              # roughly 24 KB makes GitHub refuse the workflow at startup.
+              bash scripts/smoke/dotnet-runner-shapes.sh
+              # BYO test happy path
+              dagger -m ./src/quality call test --src ./testdata/node-app --test-cmd "npm ci --ignore-scripts && ./node_modules/.bin/vitest run --coverage --coverage.reporter=json-summary --coverage.reportsDirectory=/tmp/cov" --coverage-path /tmp/cov/coverage-summary.json --commit-sha local --branch main --repo-url https://example.com export --path /tmp/qt.json && jq -e '.coverageByLanguage.node > 0 and .coverageRatchet == "skipped:no-baseline"' /tmp/qt.json
+              # Polyglot witnessing: two legs run, and the language that no leg
+              # witnesses is named. include forces python into detection without
+              # a marker file, which is the whole point — a detected-but-untested
+              # language must not render like a fully witnessed repository.
+              dagger -m ./src/quality call test --src ./testdata/node-app \
+                --include node --include python \
+                --test-legs '[{"label":"web","language":"node","cmd":"npm ci --ignore-scripts && ./node_modules/.bin/vitest run --coverage --coverage.reporter=json-summary --coverage.reportsDirectory=/tmp/cov","coveragePath":"/tmp/cov/coverage-summary.json"},{"label":"tools","language":"go","cmd":"go version"}]' \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/qt-legs.json
+              jq -e '.passed == true and .languages == ["go","node"]
+                and .coverageByLanguage.node > 0
+                and ((.warnings // []) | map(select(test("NOT WITNESSED.*python"))) | length == 1)
+                and .genericFormat == "byo-test-legs"
+                and .genericReport.unwitnessedLanguages == ["python"]
+                and .genericReport.witnessedLanguages == ["go","node"]
+                and ([.genericReport.legs[] | select(.ran == true and .exitCode == 0)] | length == 2)' \
+                /tmp/qt-legs.json
+              # A real Microsoft.Testing.Platform run read through a BYO leg —
+              # the only path that reaches sniffCoverageReport for a cobertura
+              # document. `passed` is TRUE on both sides of the stripBOM fix, so
+              # the merge count and the ratchet verdict are the assertion. Body in
+              # a script for the same startup-size reason as the line above.
+              bash scripts/smoke/mtp-byo-coverage.sh
+              # Ratchet gate fails below crafted baseline
+              sh -c 'echo "{\"coverageByLanguage\":{\"node\":99.0}}" > /tmp/qt-base.json' && dagger -m ./src/quality call test --src ./testdata/node-app --test-cmd "npm ci --ignore-scripts && ./node_modules/.bin/vitest run --coverage --coverage.reporter=json-summary --coverage.reportsDirectory=/tmp/cov" --coverage-path /tmp/cov/coverage-summary.json --baseline /tmp/qt-base.json --tolerance 1.0 --commit-sha local --branch main --repo-url https://example.com export --path /tmp/qt2.json && jq -e '.passed == false and .coverageRatchet == "fail"' /tmp/qt2.json
+              # A test leg's declared service, bound for real. The unit suite
+              # covers every rule in services.go with a hand-built probe, so
+              # nothing there would notice a binding attached to the wrong
+              # container or an env var injected after the exec. The second case
+              # is the load-bearing one: a service that never listens must be a
+              # NON-RUN at --fail-on NONE, where a failing test is forgiven and a
+              # non-run is not. Body in a script for the startup-size reason above.
+              bash scripts/smoke/test-leg-services.sh
+              ;;
+            *) ;;
+          esac
+
+      - name: Run module tests (security)
+        run: |
+          case "$MODULE" in
+            src/security)
+              dagger -m "./$MODULE" call scan-source --src ./testdata/go-app --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-src.json
+              # A scan that could not run must not read as clean. --fail-on NONE
+              # suppresses findings, so these assertions — not the exit code — are
+              # what proves SAST executed: no leg reported an error, and semgrep
+              # emitted a run with rules actually loaded. The `--config auto`
+              # default failed exactly here (exit 2, empty report, zero findings,
+              # green gate) and nothing in CI noticed. NONE no longer covers a
+              # non-run either, so passed=false here would also be caught — but
+              # keep asserting the report's own shape: passed alone cannot tell a
+              # scan that loaded no rules from one that found nothing.
+              # go-app pins jwt-go v3.2.0 (trivy CVE-2020-26160, HIGH), so this
+              # also pins the half of the NONE contract that must keep working:
+              # the scanners ran and found something, and NONE suppresses that.
+              # Its secrets.go is `gitleaks:allow`; the secrets leg's own positive
+              # control is the node-app scan below.
+              jq -e '.passed == true
+                and (.findingsCount > 0)
+                and ((.errors // []) | length == 0)
+                and ([.sarifReport.runs[]?
+                      | select(.tool.driver.name | test("semgrep"; "i"))
+                      | select((.tool.driver.rules // []) | length > 0)] | length > 0)' \
+                /tmp/evidence-src.json
+              # Regression for Semgrep's GitHub Actions embedded-Bash parser.
+              # 1.161.0 reported all three fixture files as partially scanned:
+              # expressions inside a quoted URL, command substitution around a
+              # multiline printf, and a multiline Markdown argument. The scan
+              # still exited 0, so only the SARIF notifications exposed the gap.
+              # The fixture also carries a Go lock graph so main's Trivy leg has
+              # a real target; the assertion below remains specifically about
+              # Semgrep's warning and proves it examined all six fixture files,
+              # including the three YAML parser targets and unsafe.yml.
+              dagger -m "./$MODULE" call scan-source \
+                --src ./testdata/semgrep-github-actions \
+                --sast-rulesets p/security-audit,r/yaml.github-actions.security.gha-curl-pipe-shell.gha-curl-pipe-shell \
+                --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-semgrep-gha.json
+              jq -e '.passed == true
+                and ((.errors // []) | length == 0)
+                and ([.warnings[]? | select(startswith("semgrep: PARTIAL SCAN"))] | length == 0)
+                and ([.warnings[]? | select(startswith("semgrep: RULE FALLBACK"))] | length == 1)
+                and ([.sarifReport.runs[]?
+                      | select(.tool.driver.name | test("semgrep"; "i"))
+                      | .results[]?
+                      | select(.ruleId | endswith("cicd.yaml.github-actions.security.gha-curl-pipe-shell"))] | length == 2)
+                and ([.sources[]?
+                      | select(.tool == "semgrep")
+                      | select(.examined.unit == "files" and .examined.count == 6)] | length == 1)' \
+                /tmp/evidence-semgrep-gha.json
+              # Secrets detection on source is proven here or nowhere. go-app's
+              # fixture carries `gitleaks:allow` and every testdata path is
+              # allowlisted when the repo root is the scan root, so no existing
+              # assertion fails if the secrets leg stops finding anything.
+              # node-app ships leaked.env.fixture as a deliberately detectable
+              # key for exactly this. The regression it guards: the leg ran
+              # gitleaks in git-log mode, and a fixture directory has no .git, so
+              # it reported "0 commits scanned", "no leaks found", exit 0 — this
+              # leg found nothing, ever, in every module-test and composite-smoke
+              # cell that claimed to prove it worked.
+              #
+              # The third clause pins redaction: gitleaks writes the credential
+              # it found into region.snippet.text, and this envelope is published
+              # as a CI artifact, so the raw key must not survive into it.
+              dagger -m "./$MODULE" call scan-source --src ./testdata/node-app --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-secrets.json
+              jq -e '((.errors // []) | length == 0)
+                and ([.sarifReport.runs[]?
+                      | select(.tool.driver.name == "gitleaks")
+                      | .results[]?
+                      | select(.locations[]?.physicalLocation.artifactLocation.uri
+                               | endswith("leaked.env.fixture"))] | length > 0)
+                and ((.sarifReport | tostring) | test("AKIAPLANTED") | not)' \
+                /tmp/evidence-secrets.json
+              # Semgrep copies the matched line, and so the credential, into its
+              # SARIF; the probe key must reach no field of the envelope. Body in
+              # a script: this step's run: body is at the startup-size budget.
+              bash scripts/smoke/semgrep-redaction.sh
+              bash scripts/ci/dagger-develop.sh src/composites/commit
+              bash scripts/ci/dagger-develop.sh src/composites/precommit
+              bash scripts/smoke/semgrep-inline.sh
+              # gitleaks history writes the commit author; it must not reach it either.
+              bash scripts/smoke/gitleaks-identity.sh
+              # Smoke-test path filtering and exclude
+              dagger -m "./$MODULE" call scan-source --src ./testdata/go-app \
+                --path . --exclude vendor \
+                --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-src-filtered.json
+              # The lockfile-free .NET dependency graph. testdata/dotnet-app-nolock
+              # commits no packages.lock.json and sets no
+              # RestorePackagesWithLockFile, which is what NuGet does by default
+              # and therefore what a real consumer repository looks like. Measured
+              # on trivy 0.70.0, a scan of that tree as committed resolves no
+              # .NET graph at all — no Results array, zero packages, zero
+              # vulnerabilities. So the fallback restores the graph itself and
+              # scans that (src/security/dotnetrestore.go).
+              #
+              # Four assertions, and none of them is the exit code. passed=true
+              # proves the restore satisfied the ecosystem reconciliation rather
+              # than tripping it. The warning must be present, because a restored
+              # graph is not a committed one — versions resolved now can differ
+              # from the ones the artifact builds against — and a green tick that
+              # does not say so is the fallback quietly overclaiming. And the two
+              # CVEs must BOTH be there: they live in two projects, in different
+              # directories, with no reference between them and no solution naming
+              # either, so a single `dotnet restore` at the tree root reaches at
+              # most one of them. A partial restore is the false pass this whole
+              # path exists to prevent — the lockfile the other project produced
+              # is what makes the reconciliation go quiet about the one that was
+              # never resolved.
+              dagger -m "./$MODULE" call scan-source --src ./testdata/dotnet-app-nolock \
+                --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-nolock.json
+              jq -e '.passed == true
+                and ((.errors // []) | length == 0)
+                and ([.warnings[]? | select(test("restored the NuGet graph itself"))] | length > 0)
+                and ([.findings[]? | select(.message | startswith("Newtonsoft.Json@9.0.1"))] | length > 0)
+                and ([.findings[]? | select(.message | startswith("System.Net.Http@4.3.0"))] | length > 0)' \
+                /tmp/evidence-nolock.json
+              # And the negative control: the fixture must never acquire a
+              # lockfile. If it does, the assertions above keep passing for the
+              # wrong reason — Trivy would simply read the committed graph and the
+              # fallback would never run, so this cell would prove nothing while
+              # staying green. That is the exact shape of silent coverage loss the
+              # warning assertion is there to catch, one level up.
+              if find ./testdata/dotnet-app-nolock -name packages.lock.json -o -name '*.deps.json' | grep -q .; then
+                echo "::error::testdata/dotnet-app-nolock committed a dependency graph; the lockfile-free fallback is no longer exercised"
+                exit 1
+              fi
+              dagger -m "./$MODULE" call scan-image --image "alpine:3.19" --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-img.json
+              # scan-web: baseline scan of testdata/vuln-app, which this job
+              # starts on the runner and reaches through a Dagger host tunnel.
+              # The fixture replaces scanme.nmap.org — a third-party host is not
+              # cicd's to depend on, and tolerating its unreachability left this
+              # cell with a green branch in which no scan happened at all.
+              docker build -t vuln-app:ci ./testdata/vuln-app
+              docker run -d --name vuln-app -p 18080:8080 vuln-app:ci
+              for _ in $(seq 1 30); do
+                if curl -fsS http://localhost:18080/health; then break; fi
+                sleep 1
+              done
+              dagger -m "./$MODULE" call scan-web \
+                --service tcp://localhost:18080 \
+                --port 18080 \
+                --health-path /health \
+                --mode baseline \
+                --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-web.json
+              docker rm -f vuln-app
+              python3 -c "
+          import json
+          d = json.load(open('/tmp/evidence-web.json'))
+          assert d['genericFormat'] == 'dast/1.0', f'wrong format: {d[\"genericFormat\"]}'
+          # No environmental branch. The target is a fixture in this repository,
+          # started by the step above, so unreachable is a regression and not
+          # weather -- the old cell tolerated it and could pass having scanned
+          # nothing.
+          assert not d.get('errors'), f'scan-web reported errors: {d[\"errors\"]}'
+          r = d['genericReport']
+          assert r['readiness']['ok'] is True, f'readiness failed: {r[\"readiness\"]}'
+          assert r['source'] == 'service', f'wrong source: {r[\"source\"]}'
+          assert r['mode'] == 'baseline', f'wrong mode: {r[\"mode\"]}'
+          assert d['passed'] is True, 'fail-on NONE suppresses findings, so a scan that ran must pass'
+          # Assert a named planted finding, not a count. A count is satisfied by
+          # any alert at all; only the name proves ZAP reached vuln-app and the
+          # report was parsed into findings[].
+          msgs = [f['message'] for f in d.get('findings') or []]
+          assert any('Content Security Policy' in m for m in msgs), f'planted CSP finding missing: {msgs}'
+          assert d['findingsBySeverity'].get('MEDIUM', 0) > 0, f'no MEDIUM finding: {d[\"findingsBySeverity\"]}'
+          w = ' '.join(d.get('warnings') or [])
+          assert 'PROVENANCE NOT ATTESTED' in w, 'a --service scan must disclose that cicd did not build the running code'
+          assert 'BASELINE ONLY' in w, 'a baseline scan must disclose that no attack payload was sent'
+          print(f'scan-web evidence OK -- {len(msgs)} finding(s)')
+          "
+              # Archive scan: lockfile SBOM + planted secret in built output.
+              #
+              # ./src/build is a second module in this cell, and the job's
+              # `dagger develop` step ran against "$MODULE" (src/security)
+              # only. Without this line the call generates src/build's SDK
+              # itself — outside the wrapper, so a sum.golang.org blip is
+              # reported as a compile error and never retried.
+              bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/build
+              dagger -m ./src/build call build-archive --src ./testdata/node-app --build-cmd "npm install --ignore-scripts && npm run build" --output-path dist --commit-sha local --branch main --repo-url https://example.com export --path /tmp/sa-dist && dagger -m ./src/security call scan-archive --src ./testdata/node-app --output-dir /tmp/sa-dist --fail-on NONE --commit-sha local --branch main --repo-url https://example.com export --path /tmp/sa.json && jq -e '(.cyclonedxReport != null) and ([.sarifReport.runs[]?.results[]? | select(.locations[]?.physicalLocation.artifactLocation.uri | test("leaked.env"))] | length > 0)' /tmp/sa.json
+              # node-app's lockfile pins known-vulnerable deps, so a working vuln
+              # scan always reports some. Trivy silently drops vulnerability
+              # scanning when --format cyclonedx is passed without --scanners vuln,
+              # and an SBOM-only report still carries an (empty) vulnerabilities
+              # array — so only a non-zero count proves the scanner ran.
+              jq -e '(.cyclonedxReport.vulnerabilities // []) | length > 0' /tmp/sa.json
+              # The same planted secret, shipped zipped. gitleaks opens
+              # no archive at its default depth, so this read `no leaks found`;
+              # the finding must carry its archive path. The jar holds the same
+              # file and is never opened (gitleaks decides by extension), so it
+              # must be named in warnings[] rather than read as clean.
+              mkdir -p /tmp/sa-zip && python3 -c "
+          import zipfile
+          for p in ('/tmp/sa-zip/app.zip', '/tmp/sa-zip/service.jar'):
+              with zipfile.ZipFile(p, 'w') as z:
+                  z.write('/tmp/sa-dist/leaked.env', 'leaked.env')
+          "
+              dagger -m ./src/security call scan-archive --src ./testdata/node-app --output-dir /tmp/sa-zip --artifact-only --fail-on NONE --commit-sha local --branch main --repo-url https://example.com export --path /tmp/sa-zip.json
+              jq -e '([.sarifReport.runs[]?.results[]? | select(.locations[]?.physicalLocation.artifactLocation.uri | test("^app[.]zip!leaked[.]env$"))] | length > 0) and any(.warnings[]?; test("not opened.*\"service[.]jar\""))' /tmp/sa-zip.json
+              # Vulnerabilities must also reach findings[]. They cannot be derived
+              # downstream: CycloneDX ships a bag of per-vendor ratings[] and no
+              # verdict, and SARIF collapses critical onto "error" — so the module
+              # states them itself from Trivy's native report. Two projections of one
+              # scan, cross-checked on cardinality here: measured 364/364 on
+              # debian:11.6 and 10/10 on node-app. Reading severity out of ratings[0]
+              # instead found 3 of debian:11.6's 9 CRITICALs and made 7 unrated CVEs
+              # vanish entirely, which is what this arithmetic catches.
+              python3 -c "
+          import json
+          d = json.load(open('/tmp/sa.json'))
+          rows = [f for f in (d.get('findings') or []) if f.get('tool') == 'trivy']
+          assert rows, 'no trivy rows in findings[] -- a vulnerability-only failure would render a count with an empty table'
+          affects = sum(len(v.get('affects') or []) for v in d['cyclonedxReport']['vulnerabilities'])
+          assert len(rows) == affects, f'{len(rows)} trivy findings vs {affects} affected packages in the SBOM -- the detail list and the SBOM describe different scans'
+          canonical = {'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'}
+          counts = d.get('findingsBySeverity') or {}
+          for f in rows:
+              # A row Trivy rated UNKNOWN is counted LOW, never passed through
+              # unmapped and never dropped: unrated is not low-risk, but it is
+              # also not invisible.
+              assert f['severity'] in canonical, f'non-canonical severity {f[\"severity\"]!r} on {f[\"rule\"]}'
+              assert f.get('rule') and f.get('artifactPath') and f.get('message'), f'unactionable row: {f}'
+              assert counts.get(f['severity'], 0) > 0, f'{f[\"rule\"]} is {f[\"severity\"]} but findingsBySeverity has none'
+          tally = {}
+          for f in rows:
+              tally[f['severity']] = tally.get(f['severity'], 0) + 1
+          for sev, n in tally.items():
+              assert counts[sev] >= n, f'{n} {sev} vulnerability rows but only {counts[sev]} counted -- rows and counts disagree'
+          print(f'trivy findings OK: {len(rows)} rows, {tally}')
+          "
+              # SBOM rescan: the frozen-SBOM entry point (ADR-006). The archive
+              # scan above proved this SBOM carries >0 vulnerabilities, so a
+              # rescan of the same document must report some too — only a
+              # non-zero count proves the scanner ran (same shape as above).
+              jq '.cyclonedxReport' /tmp/sa.json > /tmp/sa-bom.json
+              dagger -m ./src/security call scan-sbom --sbom /tmp/sa-bom.json --fail-on NONE --commit-sha local --branch main --repo-url https://example.com export --path /tmp/sbomscan.json
+              jq -e '(.cyclonedxReport != null) and (.findingsCount > 0) and ((.errors // []) | length == 0) and .passed' /tmp/sbomscan.json
+              # And a document that was never CycloneDX is a non-run: errors[]
+              # populated, passed=false at every threshold, NONE included.
+              echo '{"not":"an sbom"}' > /tmp/not-a-bom.json
+              dagger -m ./src/security call scan-sbom --sbom /tmp/not-a-bom.json --fail-on NONE --commit-sha local --branch main --repo-url https://example.com export --path /tmp/sbomscan-bad.json
+              jq -e '(.passed == false) and ((.errors // []) | length > 0)' /tmp/sbomscan-bad.json
+              ;;
+            *) ;;
+          esac
+
+      - name: Run module tests (remaining modules)
+        run: |
+          case "$MODULE" in
+            src/risk)
+              dagger -m "./$MODULE" call validate \
+                --source ./testdata/go-app \
+                --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-risk.json
+              ;;
+
+            src/build)
+              dagger -m "./$MODULE" call build --src ./testdata/go-app \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO"
+              dagger -m "./$MODULE" call sbom \
+                --image "alpine:3.19" \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-sbom.json
+              # Negative path: sbom with a non-existent image should surface an error.
+              if dagger -m "./$MODULE" call sbom \
+                --image "localhost:0/no-such-image:invalid" \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-sbom-fail.json 2>/dev/null; then
+                echo "ERROR: expected sbom to fail on invalid image" && exit 1
+              else
+                echo "sbom negative path: correctly returned error"
+              fi
+              # Archive build on node-app
+              dagger -m ./src/build call build-archive --src ./testdata/node-app --build-cmd "npm install --ignore-scripts && npm run build" --output-path dist --commit-sha local --branch main --repo-url https://example.com export --path /tmp/ba-out && test -f /tmp/ba-out/index.js
+              # Build failure propagates
+              sh -c '! dagger -m ./src/build call build-archive --src ./testdata/node-app --build-cmd "exit 1" --output-path dist --commit-sha local --branch main --repo-url https://example.com export --path /tmp/ba-fail'
+              ;;
+
+            src/notify)
+              # Rendering only: card/comment structure from real evidence. The
+              # outbound *protocol* — auth headers, status handling, malformed
+              # responses, timeout, no-retry, and secret redaction — is proven by
+              # src/notify/delivery_test.go against a local httptest server,
+              # executed by the canonical module-unit runner in lint-repo. No
+              # Teams/GitHub/ADO endpoint is ever contacted from CI.
+              echo '{"schemaVersion":"1.0.0","moduleName":"test","stage":"cross-cutting","tool":{"name":"test","version":"0"},"repo":{"repoUrl":"https://github.com/example/repo","commitSha":"abc123","branch":"main"},"timestampUtc":"2024-01-01T00:00:00Z","durationMs":100,"passed":true,"findingsCount":0}' \
+                > /tmp/mock-evidence.json
+              dagger -m "./$MODULE" call build-card \
+                --summary /tmp/mock-evidence.json \
+                --pipeline-name precommit \
+                export --path /tmp/card.json
+              python3 -c "
+          import json
+          d = json.load(open('/tmp/card.json'))
+          assert d['type'] == 'message', f'wrong type: {d[\"type\"]}'
+          assert len(d['attachments']) == 1, 'expected 1 attachment'
+          print('Teams card OK')
+          "
+              dagger -m "./$MODULE" call github-build-comment \
+                --summary /tmp/mock-evidence.json \
+                --pipeline-name precommit \
+                export --path /tmp/comment-gh.md
+              dagger -m "./$MODULE" call ado-build-comment \
+                --summary /tmp/mock-evidence.json \
+                --pipeline-name precommit \
+                export --path /tmp/comment-ado.md
+              python3 -c "
+          for path in ['/tmp/comment-gh.md', '/tmp/comment-ado.md']:
+              body = open(path).read()
+              assert '## precommit' in body, f'missing heading in {path}'
+              assert 'abc123' in body, f'missing commit sha in {path}'
+          print('notify comments OK')
+          "
+              ;;
+
+            src/stage-2|src/stage-4)
+              # Behavioral fixture execution, not function discovery alone:
+              # runs Run against testdata/go-app and asserts every expected
+              # dependency's evidence trace is present in the produced
+              # output, plus the precommit/stage-2 equivalence guard.
+              #
+              # The smoke calls stage-2 *and* stage-4, and neither is in the
+              # other's dependency closure, so whichever cell this is, one of
+              # the two is a module the wrapper never developed.
+              # Developing the one already developed is a no-op.
+              bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/stage-2
+              bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/stage-4
+              bash scripts/smoke/stage-orchestrators.sh
+              ;;
+
+            src/cross-cutting/evidence)
+              echo "Evidence module: tested in composite-smoke job"
+              ;;
+
+            src/cross-cutting/pages)
+              echo '{"schemaVersion":"1.0.0","moduleName":"cross-cutting/evidence","stage":"cross-cutting","tool":{"name":"cicd-evidence"},"repo":{"repoUrl":"https://github.com/example/repo","commitSha":"abc123def456","branch":"main"},"timestampUtc":"2024-01-01T00:00:00Z","durationMs":12345,"passed":true,"findingsCount":2,"findingsBySeverity":{"HIGH":2},"languages":["go"]}' \
+                > /tmp/mock-evidence-pages.json
+              dagger -m "./$MODULE" call build \
+                --evidence /tmp/mock-evidence-pages.json \
+                export --path /tmp/pages-out
+              python3 -c "
+          html = open('/tmp/pages-out/index.html').read()
+          assert '<!DOCTYPE html>' in html, 'missing DOCTYPE'
+          assert 'abc123de' in html, 'commit sha not rendered'
+          assert 'example/repo' in html, 'repo not rendered'
+          assert '__EVIDENCE_JSON__' not in html, 'placeholder not replaced'
+          print('pages index.html OK')
+          "
+              ;;
+
+            src/cross-cutting/intent)
+              dagger -m "./$MODULE" call check \
+                --src ./testdata/go-app \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                --fail-on error \
+                export --path /tmp/intent-evidence.json
+              # Same call, opted out. The gate is opt-in from the orchestrators,
+              # so the state a consumer will most often be in has to be proven
+              # too — and proven to be distinguishable from the clean pass above,
+              # which produces the identical zero findings.
+              dagger -m "./$MODULE" call check \
+                --src ./testdata/go-app \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                --fail-on error --not-required \
+                export --path /tmp/intent-not-required.json
+              python3 -c "
+          import json
+          d = json.load(open('/tmp/intent-evidence.json'))
+          assert d['moduleName'] == 'intent', f'wrong moduleName: {d[\"moduleName\"]}'
+          # Presence AND value. Presence first so a schema regression that drops
+          # the field says 'missing' rather than reading as a failed gate; value
+          # second because 'passed' in d is satisfied by passed=false, and a gate
+          # that failed must never print OK. ci.yml has three 'passed' sites of
+          # deliberately different strength -- this one, the presence-only
+          # contract check in 'Validate evidence JSON' below, and the composite
+          # verdict in 'Validate combined evidence' in composite-smoke.
+          assert 'passed' in d, 'missing passed field'
+          assert d['passed'] == True, f'intent gate failed unexpectedly: {d.get(\"genericReport\")}'
+          assert d['genericReport']['required'] == True, 'a direct call must gate'
+          n = json.load(open('/tmp/intent-not-required.json'))
+          assert n['genericReport']['required'] == False, 'opted-out gate claims it was required'
+          assert any('NOT REQUIRED' in w for w in n.get('warnings') or []), \
+              'opted-out gate left no warning — it is indistinguishable from a clean pass'
+          assert n['findingsCount'] == 0 and n['passed'] == True, 'opting out must not fail the gate'
+          print('intent evidence OK: required =', d['genericReport']['required'], '/ opted-out =', n['genericReport']['required'])
+          "
+              ;;
+
+            src/cross-cutting/report)
+              # Produce evidence then extract its SARIF report. src/security is
+              # the producer, not this cell's module and not in its dependency
+              # closure, so its SDK is generated inside the call unless the
+              # wrapper runs first.
+              bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/security
+              dagger -m ./src/security call scan-source \
+                --src ./testdata/go-app \
+                --fail-on NONE \
+                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
+                export --path /tmp/evidence-src-report.json
+              dagger -m "./$MODULE" call report \
+                --evidence /tmp/evidence-src-report.json \
+                export --path /tmp/extracted.sarif
+              python3 -c "
+          import json
+          d = json.load(open('/tmp/extracted.sarif'))
+          assert 'runs' in d, 'missing runs field — not a valid SARIF document'
+          print('extracted SARIF OK')
+          "
+              ;;
+            *) ;;
+          esac
+
+      - name: Validate evidence JSON
+        run: |
+          shopt -s nullglob
+          evidence_files=(/tmp/evidence*.json)
+
+          # Only quality, security, and build produce evidence files directly.
+          case "$MODULE" in
+            src/quality|src/security|src/risk|src/build)
+              if [ ${#evidence_files[@]} -eq 0 ]; then
+                echo "ERROR: $MODULE produced no evidence files"
+                exit 1
+              fi
+              ;;
+          esac
+
+          for f in "${evidence_files[@]}"; do
+            python3 -c "
+          import json, sys
+          d = json.load(open('$f'))
+          if 'combined' in d:
+              d = d['combined']
+          # Presence ONLY, on purpose: this loop runs over every /tmp/evidence*.json
+          # any module happened to write, so it cannot know which verdict is
+          # correct for a given file -- several cases above deliberately assert
+          # passed=false (a DAST scan that could not reach its target, a coverage
+          # ratchet regression). It is a schema contract, not a gate. Each case in
+          # the step above owns its own verdict assertion; do not add a value check
+          # here, and do not read a green tick from this loop as a passed gate.
+          required = ['schemaVersion', 'moduleName', 'passed', 'findingsCount']
+          missing = [k for k in required if k not in d]
+          assert not missing, f'missing required keys {missing} in $f'
+          print('$f OK')
+          "
+          done
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 4: Full composite smoke test — runs precommit composite against
+  # go-app, node-app, and dotnet-app fixtures and validates combined evidence.
+  # ──────────────────────────────────────────────────────────────────────────
+  composite-smoke:
+    name: Composite smoke test
+    runs-on: ubuntu-latest
+    # Parallel with module-test, not after it. This job consumes nothing
+    # module-test produces — no artifact is passed between them, and this job
+    # does its own checkout, its own `dagger develop` and its own engine — so
+    # `needs: module-test` bought no ordering guarantee, it only made the two
+    # stages run end to end. Serialised, a PR paid module-test's slowest cell
+    # (~7.5 min) before the first composite container started; in parallel the
+    # run ends when the slowest single job does.
+    #
+    # The gate is not weakened by this. The aggregate `ci` job below still
+    # `needs:` every composite smoke and fails on `skipped` and `cancelled`,
+    # so a composite regression still blocks the merge exactly as before. What
+    # changes is only that a PR whose module cell is red now also burns the
+    # composite jobs' compute instead of skipping them — the cost of finding
+    # out about both failures in one run rather than two.
+    needs: [classify-change, lint-repo]
+    if: needs.classify-change.outputs.docs_only != 'true'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: dagger develop (precommit composite)
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/composites/precommit
+
+      - name: Run precommit composite against go-app
+        run: |
+          dagger -m ./src/composites/precommit call run \
+            --src ./testdata/go-app \
+            --fail-on NONE \
+            --commit-sha "${GITHUB_SHA}" \
+            --branch "${GITHUB_REF_NAME}" \
+            --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            export --path ./smoke-evidence-go
+
+      - name: Run precommit composite against node-app
+        run: |
+          dagger -m ./src/composites/precommit call run \
+            --src ./testdata/node-app \
+            --include node \
+            --fail-on NONE \
+            --commit-sha "${GITHUB_SHA}" \
+            --branch "${GITHUB_REF_NAME}" \
+            --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            export --path ./smoke-evidence-node
+
+      - name: Run precommit composite against dotnet-app
+        run: |
+          dagger -m ./src/composites/precommit call run \
+            --src ./testdata/dotnet-app \
+            --include dotnet \
+            --fail-on NONE \
+            --commit-sha "${GITHUB_SHA}" \
+            --branch "${GITHUB_REF_NAME}" \
+            --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            export --path ./smoke-evidence-dotnet
+
+      # Asserts the combined verdict's VALUE, not just its presence. This step
+      # stopped at `'passed' in d`, which is satisfied by passed=false, so a
+      # composite that ran, gated itself and reported failure printed OK and
+      # turned the job green -- the founding doctrine failing inside the check
+      # that enforces it. It hid a real one: on every measured run of main
+      # (2026-08-05, -12, -14) the dotnet leg reported passed=false with
+      # `trivy: report contains no scan results, so no target was examined`.
+      #
+      # passed=true is the right strength *because* the smokes run --fail-on
+      # NONE: under NONE `gatedPassed` gates severityOK alone, so the only
+      # thing left that can set passed=false is a leg that could not do its
+      # work. This asserts "every leg executed", never "the fixtures are
+      # clean" -- go-app carries 1 HIGH and node-app 14 incl. a CRITICAL, and
+      # both must keep passing. errors[] is asserted separately because
+      # buildCombined derives it independently of Passed, so a leg that
+      # recorded a non-run but forgot to fail its own gate lands here.
+      # languages[] is the "passed because nothing ran" guard -- membership,
+      # not equality. findingsCount is deliberately NOT asserted: it would
+      # couple the job to scanner database drift and close no hole.
+      #
+      # Failures are collected rather than aborting on the first, so one log
+      # names every red fixture; `|| failed=` also drops the dependence on the
+      # shell's -e, since a bare loop returns only its LAST iteration's status
+      # (a red go-app then a green dotnet-app would have exited 0 -- the same
+      # masking bug, one level in). Rationale: .capsules/CAPS-012.
+      - name: Validate combined evidence
+        run: |
+          # Read the version from the tree that just produced this evidence
+          # rather than writing it here as a literal. The literal that used to
+          # sit in the assertion below was one more copy of a fact that stood at
+          # 1.0.0 across four additive field changes, and it would fail this job
+          # on the next legitimate bump -- which teaches people to edit the
+          # assertion instead of reading it. Rationale: .capsules/CAPS-048.
+          expected_schema_version=$(sed -n 's/^const SchemaVersion = "\(.*\)"$/\1/p' \
+            src/internal/evidence/schema.go)
+          if [ -z "$expected_schema_version" ]; then
+            echo "could not read SchemaVersion from src/internal/evidence/schema.go" >&2
+            exit 1
+          fi
+          failed=
+          for dir in smoke-evidence-go smoke-evidence-node smoke-evidence-dotnet; do
+            lang="${dir#smoke-evidence-}"
+            python3 -c "
+          import json, sys
+          d = json.load(open('./$dir/combined-evidence.json'))
+          lang = '$lang'
+          errs = d.get('errors') or []
+          sev = d.get('findingsBySeverity') or {}
+          langs = d.get('languages') or []
+          detail = ('$dir: errors=' + repr(errs) + ' findingsBySeverity=' + repr(sev)
+                    + ' findingsCount=' + repr(d.get('findingsCount')) + ' languages=' + repr(langs))
+          assert d.get('schemaVersion') == '$expected_schema_version', 'wrong schemaVersion'
+          assert 'passed' in d, 'missing passed field'
+          assert d['passed'] == True, 'composite gate FAILED -- ' + detail
+          assert not errs, 'composite passed its gate but recorded a run error -- ' + detail
+          assert lang in langs, 'composite did not detect ' + repr(lang) + ' -- nothing may have run -- ' + detail
+          print('$dir/combined-evidence.json OK: passed=True, languages=' + repr(langs)
+                + ', findingsBySeverity=' + repr(sev))
+          " || failed="$failed $dir"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::combined evidence assertions failed for:$failed (see the AssertionError above for the cause per fixture)"
+            exit 1
+          fi
+
+      - name: Upload smoke evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: smoke-evidence-${{ github.sha }}
+          path: |
+            smoke-evidence-go/
+            smoke-evidence-node/
+            smoke-evidence-dotnet/
+          retention-days: 30
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 5: Commit composite smoke test — runs the unified, artifact-agnostic
+  # commit composite (ADR-005) against all three artifact shapes via
+  # scripts/smoke/commit-shapes.sh: container (go-app → OCI image scan),
+  # archive (node-app → built-output secrets scan), and none (python-app →
+  # source-only). Each shape asserts the six source-gate sections plus the
+  # correct artifact evidence. Smokes run --fail-on NONE so fixture debt never
+  # fails the smoke. No image is ever published — each consumer repo owns deploy.
+  # ──────────────────────────────────────────────────────────────────────────
+  composite-smoke-commit:
+    name: Composite smoke test (commit)
+    runs-on: ubuntu-latest
+    # Parallel with module-test; see composite-smoke for why this is not
+    # `needs: module-test`.
+    needs: [classify-change, lint-repo]
+    if: needs.classify-change.outputs.docs_only != 'true'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # This job keeps one Dagger engine alive across application mode and all
+      # three artifact shapes. On the default hosted image that workload has
+      # twice forced BuildKit to discard a live module-codegen snapshot before
+      # the final shape (`snapshot ... does not exist`). Reclaim only host SDKs
+      # this job never executes, and do it before the engine exists; pruning a
+      # live Dagger engine would corrupt the snapshots we are protecting.
+      - name: Prepare storage for Dagger
+        run: |
+          set -euo pipefail
+          before=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')
+          echo "Runner disk before cleanup:"
+          df -h /
+          for path in \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/share/swift; do
+            if [ -e "$path" ]; then
+              echo "Removing unused host toolchain: $path"
+              sudo rm -rf -- "$path"
+            fi
+          done
+          docker image prune --all --force
+          after=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')
+          echo "Runner disk after cleanup:"
+          df -h /
+          echo "Reclaimed $(( (after - before) / 1024 / 1024 / 1024 )) GiB for Dagger"
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: dagger develop (commit composite)
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/composites/commit
+
+      # Exercise the shared Node/.NET preparation and retained artifact contract
+      # first, so a handoff regression is reported before the broad shape smokes.
+      - name: Smoke application evidence isolation (workspace and plugin)
+        run: bash scripts/smoke/commit-apps.sh
+
+      # Container shape (go-app → OCI image): six source-gate sections + image
+      # scan evidence + a non-empty merged SBOM (guards the two-CycloneDX merge).
+      - name: Smoke commit composite — container shape (go-app)
+        run: bash scripts/smoke/commit-shapes.sh container
+
+      # Archive shape (node-app → built output): six source-gate sections + the
+      # built-output secrets scan (Gitleaks flags the planted dist/leaked.env).
+      - name: Smoke commit composite — archive shape (node-app)
+        run: bash scripts/smoke/commit-shapes.sh archive
+
+      # None shape (python-app → no artifact): six source-gate sections only,
+      # plus the invalid-artifact guardrail.
+      - name: Smoke commit composite — none shape (python-app)
+        run: bash scripts/smoke/commit-shapes.sh none
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 5b: the running-app DAST composite, against testdata/vuln-app.
+  #
+  # Its own job rather than three more steps in composite-smoke-commit: the
+  # container arm runs a ZAP active scan, which is minutes of traffic and has
+  # nothing to do with the commit stage's fixtures. DAST is wired into no other
+  # pipeline for the same reason it is a separate job here.
+  # ──────────────────────────────────────────────────────────────────────────
+  composite-smoke-dast:
+    name: Composite smoke test (dast)
+    runs-on: ubuntu-latest
+    # Parallel with module-test; see composite-smoke for why this is not
+    # `needs: module-test`.
+    needs: [classify-change, lint-repo]
+    if: needs.classify-change.outputs.docs_only != 'true'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: dagger develop (dast composite)
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/composites/dast
+
+      # Guardrails first: they start no container, so a broken shape selector
+      # fails in seconds instead of after a full active scan.
+      - name: Smoke dast composite — shape guardrails
+        run: bash scripts/smoke/dast-shapes.sh guardrails
+
+      # W1 (--app service): the fixture runs in Docker on the runner and reaches
+      # the engine through a host tunnel. api mode, driven from a document the
+      # target serves, plus the disclosures a consumer-started app owes.
+      - name: Smoke dast composite — service shape (W1, api mode)
+        run: bash scripts/smoke/dast-shapes.sh service
+
+      # W2 (--app container): cicd builds the fixture image and scans it in full
+      # mode. The planted reflected-XSS HIGH is the assertion that separates a
+      # full scan from a baseline one.
+      - name: Smoke dast composite — container shape (W2, full mode)
+        run: bash scripts/smoke/dast-shapes.sh container
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Non-run matrix: inject a real non-run through quality, risk and intent and
+  # require each to fail or be refused at `--fail-on NONE`, beside a positive
+  # control per module. Every module's nonrun_matrix_test.go proves its fold;
+  # this proves the entry function feeds the fold what the container produced,
+  # which is the gap a pytest exit 5 passed through as passed:true. Its own job
+  # because it spans three modules that no single smoke job develops.
+  # ──────────────────────────────────────────────────────────────────────────
+  smoke-non-run-matrix:
+    name: Non-run matrix (end to end)
+    runs-on: ubuntu-latest
+    needs: [classify-change, lint-repo]
+    if: needs.classify-change.outputs.docs_only != 'true'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: dagger develop (quality, risk, intent)
+        run: |
+          set -euo pipefail
+          for module in src/quality src/risk src/cross-cutting/intent; do
+            bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" "$module"
+          done
+
+      - name: Inject non-runs and require each to fail at --fail-on NONE
+        env:
+          SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          REPO: ${{ github.server_url }}/${{ github.repository }}
+        run: bash scripts/smoke/non-run-matrix.sh
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 6: Refuse a commit subject git-cliff cannot release.
+  #
+  # A subject cliff cannot parse releases nothing, and says so in the one way
+  # nothing downstream can distinguish from success: `--bumped-version` prints
+  # the version already tagged, CD concludes "nothing to bump" and exits 0. That
+  # is byte-identical to a deliberate `chore:` sweep. release-drift.yml cannot
+  # cover it either — it asks the same cliff the same question and gets the same
+  # silence, then compares two versions that agree. So the only place the answer
+  # still exists is the subject line, before the merge.
+  #
+  # Its own job rather than a step in lint-repo, for one reason: this is the only
+  # check here that needs history. lint-repo runs on the default shallow
+  # checkout and several of its steps are documented as depending on a clean one,
+  # so widening it to fetch-depth: 0 to accommodate this would change what those
+  # steps see. A separate job also means the answer arrives without waiting on
+  # golangci-lint, and it lands in the `ci` aggregate below either way.
+  # ──────────────────────────────────────────────────────────────────────────
+  commit-subjects:
+    name: Check commit subjects
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 is load-bearing, not caution. On the default depth-1
+      # checkout the base commit is absent, so base..HEAD either resolves to a
+      # truncated range or fails — and a truncated range is exactly the shape
+      # that hides a bad subject while reporting success. The script refuses a
+      # shallow clone outright (exit 2) rather than examining a slice of the
+      # range and calling it the whole, so getting this wrong fails loudly.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Two ranges, because the two events know different things. On a pull
+      # request the reviewable set is exactly base..HEAD, and GitHub hands over
+      # the base sha, so every commit that would land is judged before it lands.
+      # On a push there is no base, so the range is newest-tag..HEAD — the same
+      # window CD is about to release from, which makes this the last check
+      # before the release verdict is taken.
+      #
+      # BASE_SHA goes through env rather than being interpolated into the
+      # command: a ${{ }} expansion is textual splicing into the shell line, and
+      # a check that can be broken by its own input is not a check.
+      - name: Refuse an unreleasable commit subject
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            python3 scripts/check-commit-subjects.py --base "$BASE_SHA"
+          else
+            python3 scripts/check-commit-subjects.py --since-tag
+          fi
+
+  # Publish the `ci` context that applicable branch rules can require. A rule
+  # naming a context that no job publishes blocks merging rather than proving
+  # validation. Destination branch protections must be verified separately.
+  #
+  # Keep that context's coverage exact. The aggregate explicitly accepts only
+  # one of two complete suites:
+  # the full product suite, or the documentation-surface suite selected from a
+  # PR's complete path list. A skipped product job therefore cannot masquerade
+  # as a successful code change.
+  #
+  # `if: always()` is load-bearing. Without it a failed dependency skips this
+  # job, GitHub reports the required `ci` context as pending forever, and the PR
+  # is stuck in a state that looks like "still running" rather than "failed" —
+  # the same absence-reads-as-nothing failure this workflow's history is full of.
+  # So it always runs, and fails unless the selected suite actually succeeded.
+  # `skipped` and `cancelled` count as failures except for product jobs skipped
+  # by the documentation-only classifier.
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - classify-change
+      - docs-validation
+      - lint-repo
+      - lint-modules
+      - verify-contracts
+      - module-test
+      - composite-smoke
+      - composite-smoke-commit
+      - composite-smoke-dast
+      - smoke-non-run-matrix
+      - commit-subjects
+
+    steps:
+      - name: Require every CI job to have succeeded
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          DOCS_ONLY: ${{ needs.classify-change.outputs.docs_only }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS"
+          python3 - <<'PY'
+          import json, os, sys
+          results = json.loads(os.environ["RESULTS"])
+          docs_only = os.environ.get("DOCS_ONLY") == "true"
+          full_suite = {
+              "lint-repo", "lint-modules", "verify-contracts", "module-test",
+              "composite-smoke", "composite-smoke-commit", "composite-smoke-dast",
+              "smoke-non-run-matrix",
+          }
+          expected = {"classify-change": "success", "commit-subjects": "success"}
+          if docs_only:
+              expected["docs-validation"] = "success"
+              expected.update({job: "skipped" for job in full_suite})
+          else:
+              expected["docs-validation"] = "skipped"
+              expected.update({job: "success" for job in full_suite})
+          bad = {
+              job: meta["result"]
+              for job, meta in results.items()
+              if expected.get(job) != meta["result"]
+          }
+          for job, meta in sorted(results.items()):
+              print(f"{meta['result']:>9}  {job}")
+          if bad:
+              names = ", ".join(f"{j} ({r})" for j, r in sorted(bad.items()))
+              print(f"::error::CI did not pass: {names}")
+              sys.exit(1)
+          print("documentation suite passed" if docs_only else "full CI suite passed")
+          PY

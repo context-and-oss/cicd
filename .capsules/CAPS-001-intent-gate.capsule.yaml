@@ -1,0 +1,66 @@
+kind: change-capsule
+schema: 1
+id: CAPS-001
+status: sealed
+intent: >
+  Introduce a format-agnostic intent gate to the pre-commit pipeline so
+  that every change must carry a proof of deliberate thought — a capsule,
+  spec, bug.md, or any structured artifact — rather than landing silently
+  as a vibe-coded commit.
+impact:
+  visibility: internal
+  benefit: >
+    Enforces deliberateness as a pipeline gate rather than a social norm,
+    closing the gap identified in an early issue without prescribing a single
+    spec format.
+  compatibility: additive
+  risk:
+    - The presence check will trip the dogfood pipeline until the repo
+      itself has a capsule, which is intentional — the gate enforces on
+      itself on day one.
+    - Teams that have no intent artifacts in their repos will see the
+      gate fail with a clear error message on first adoption.
+decisions:
+  - id: d01
+    choice: format-agnostic gate via prose extraction
+    options:
+      - capsule-only validator (rejected)
+      - prior linter wrapper (rejected)
+      - format-agnostic intent gate (chosen)
+    because: >
+      Locking the gate to a single format forces teams to adopt that
+      format before they get any value from the gate. Instead of
+      prescribing format, we extract prose from any artifact and apply
+      semantic rules — causal language, no placeholder text, no vague qualifiers — so
+      teams can use capsules, markdown specs, bug.md files, or anything
+      else and migrate at their own pace.
+    confidence: high
+  - id: d02
+    choice: three-tier rule model (presence, semantic heuristics, LLM opt-in)
+    options:
+      - presence-only gate (rejected — too gameable)
+      - LLM-only gate (rejected — non-deterministic, adds latency)
+      - tiered model (chosen)
+    because: >
+      A presence-only gate is trivially bypassed with an empty file.
+      An LLM-only gate is non-deterministic and slow. The tiered model
+      gives strong signal from deterministic semantic rules (causal
+      language is nearly impossible to accidentally include) while keeping
+      LLM scoring as an opt-in tier-3 for teams that want deeper quality
+      enforcement.
+    confidence: high
+  - id: d03
+    choice: adapt the path-token coupling idea from a prior linter prototype
+    options:
+      - custom coupling rule
+      - adapt the prior prototype's path-token cross-reference idea (chosen)
+    because: >
+      A prior linter prototype addressed "is this artifact about this change?"
+      by mining path-shaped tokens from prose and cross-referencing
+      them against the git diff. Adapting this idea format-agnostically
+      means a recycled rationale from a previous PR fails the gate even
+      if all other rules pass.
+    confidence: high
+tags:
+  - intent-gate
+  - pre-commit

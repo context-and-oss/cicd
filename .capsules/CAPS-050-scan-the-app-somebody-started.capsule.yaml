@@ -1,0 +1,254 @@
+kind: change-capsule
+schema: 1
+id: CAPS-050
+status: sealed
+intent: >
+  cicd had a DAST entry point already, and it was the founding doctrine's own
+  counterexample. src/security/web.go ended its ZAP invocation in `|| true`,
+  threw the exit code away, and reported whatever JSON was on disk. A scan that
+  never reached its target produced a report of zero alerts, and that report was
+  byte-identical to a scan of a genuinely clean application. The one caller was
+  a CI cell pointed at scanme.nmap.org, so the false pass had never been
+  observed against anything anybody shipped.
+
+  The need behind this change is narrower than "fix DAST" and is what shaped
+  every decision below. A GitHub workflow spins the application up in dev mode
+  with mock data, and a tool attacks it while it runs. Some repositories can
+  hand cicd a Dockerfile and nothing else. The consumer repository cannot: its backend
+  starts a database emulator through Testcontainers, so it needs the host Docker
+  socket, which cicd will not mount into the process it is attacking.
+
+  So the question was never which scanner. It was who starts the application,
+  because the answer changes what the evidence may honestly claim. If cicd built
+  the image from this commit and started it, the run can say the code it scanned
+  is the code this commit produced. If somebody else started it, cicd is
+  scanning an address and knows nothing about what is behind it. Those two
+  produce otherwise identical envelopes, which is the same collapse the `|| true`
+  produced, one level up.
+impact:
+  visibility: external
+  benefit: >
+    Both mechanisms ship, selected by --app on one entry point (ADR-005). W1 is
+    `url` and `service` — the consumer starts the application, on a routable
+    host or on the CI runner, and every run carries
+    `dast: PROVENANCE NOT ATTESTED`. W2 is `container` — cicd builds from
+    src/composites/dast's --src and --dockerfile, starts it inside the engine,
+    and can attest what it scanned. the consumer uses `service` through a host
+    tunnel; a single-container repository uses `container`.
+
+    src/security/web.go now captures ZAP's exit status and classifies it, and
+    probeReadiness requests the target in the pinned alpine image before any
+    scan starts, recording the verdict in the envelope either way. A probe that
+    never got a served response is an errors[] entry and passed=false at every
+    threshold including NONE, because it is a non-run rather than a finding.
+    The probe deliberately does not run in ZAP's own image, for the reason
+    vuln_source.go's probe already gives.
+
+    The new logic is untagged so the unit suite can drive it. src/security has
+    zapreport.go (the severity map with no default arm), webmode.go
+    (baseline / api / full and the API document), webrules.go (the -c config,
+    parsed by cicd and not merely handed to ZAP), webtarget.go (the address
+    cicd composes) and webdisclose.go (the dast/1.0 payload and the eight
+    disclosure lines), each with a _test.go beside it. src/composites/dast holds
+    main.go and shape.go, whose validateApp refuses every combination that would
+    reach ScanWeb as a scan of something other than what was asked for.
+
+    .github/workflows/dast.yml is the reusable workflow and
+    templates/github-actions/dast.yml the caller stub with the cadence already
+    wired — baseline on mainline and nightly, full weekly and on demand.
+    testdata/vuln-app is a deliberately vulnerable fixture with a planted
+    finding, and scripts/smoke/dast-shapes.sh drives the guardrails, the service
+    shape and the container shape against it from scripts/smoke-all.sh and
+    .github/workflows/ci.yml. docs/reference/dast.md and
+    docs/how-to-guides/scan-a-running-app.md are the reference and the recipe.
+  compatibility: compatible
+  risk:
+    - >
+      ZAP has no Critical tier. Its risk codes run 3 High to 0 Informational, so
+      --fail-on CRITICAL can never fail over findings. That value is legal
+      everywhere else in cicd and refusing it here would be a surprise, so it
+      warns instead — `dast: THRESHOLD UNREACHABLE`. A consumer who sets it and
+      does not read warnings has a gate that cannot fail and looks exactly like
+      a gate that passed. The warning is the whole mitigation.
+    - >
+      start-cmd runs on the runner unwitnessed. A reusable workflow runs its own
+      job, so a caller cannot inject steps before the scan, and the only way W1
+      works through one is for cicd to run the consumer's command. build-cmd and
+      test-cmd already set that precedent, and the exposure is the same one
+      PROVENANCE NOT ATTESTED already states — but it is cicd executing an
+      arbitrary command from the caller's inputs, and that is worth saying out
+      loud rather than leaving as an implication of the disclosure.
+    - >
+      urlsWithAlerts is a floor and not a crawl count. ZAP's JSON report does
+      not enumerate the URLs it visited and found nothing on, so nothing in the
+      envelope states what fraction of an application was actually reached. The
+      field is named for what it counts and endpointsFromSpec exists only in api
+      mode; a reader who wants coverage rather than a floor does not get one
+      here.
+    - >
+      The container shape starts one container and nothing beside it. An
+      application that needs a database answers its readiness probe and then
+      fails every request, which produces a scan that ran, reached its target
+      and found little. `service` is the remedy and the guide says so, but
+      nothing detects the situation — a thin scan of a crippled app is not
+      distinguishable in the envelope from a thin scan of a small one.
+    - >
+      templates/azure-devops/dast.yml ships, and getting there widened the
+      harness rather than the template. scripts/ado_templates.py classified
+      every template as commit-or-precommit and asserted REQUIRED_COMPOSITE_FLAGS
+      on both, which include --src — a flag an --app url scan has none of. So
+      the classifier now has three kinds with per-kind composites and per-kind
+      required flags, and --app is body-scoped because its partner flag differs
+      per shape. What the ADO template does not do is gate: like the commit
+      template it carries the THIS PIPELINE DOES NOT GATE banner and a
+      commented-out verdict step, so an ADO consumer who copies it and reads no
+      further has a pipeline that attacks its application and goes green
+      whatever it finds.
+    - >
+      A weekly full scan and a nightly baseline upload SARIF under separate
+      Code Scanning categories (`cicd-dast-<mode>`) because a shared category
+      would let the baseline auto-close the full scan's HIGH alerts, which it
+      structurally cannot find. The cost is that a fixed finding stays open
+      until the same mode runs again — a stale alert rather than a vanished one,
+      which is the direction to be wrong in.
+decisions:
+  - id: d01
+    choice: ship both mechanisms rather than pick the one with provenance
+    options:
+      - container only, and the consumer waits for a compose profile (rejected)
+      - url and service only, and nobody gets provenance (rejected)
+      - both, with the difference stated in every envelope (chosen)
+    because: >
+      Container-only is the honest shape and covers the repositories that
+      already fit it, but it tells the repository that motivated the work to
+      restructure its test infrastructure before it may be scanned at all, and a
+      capability nobody can adopt buys nothing. W1-only throws away the one
+      thing a CI scan has that a scheduled external one does not — the image
+      it attacked was built from the commit under test, in the same run. The
+      objection to shipping both is that a consumer picks the weaker shape and
+      cannot tell — which is answered by making the difference a line in the
+      artifact rather than a paragraph in a guide.
+    confidence: high
+  - id: d02
+    choice: refuse the host Docker socket permanently
+    options:
+      - mount /var/run/docker.sock for compose-inside-Dagger (rejected)
+      - refuse it and cover the case with a runner-side host tunnel (chosen)
+    because: >
+      The socket is root on the runner, handed to the process under attack, in a
+      pipeline whose entire purpose is sending that process hostile input. It is
+      expressible in Dagger and it would have made `container` cover
+      the consumer. Declining it is a decision with a reason rather than an
+      unimplemented item, and `service` covers the same shapes at the cost of
+      provenance the socket would not have supplied either.
+    confidence: high
+  - id: d03
+    choice: make readiness a recorded fact rather than a precondition
+    options:
+      - trust Dagger's TCP port readiness (rejected)
+      - probe over HTTP and fail the run before scanning (rejected)
+      - probe over HTTP, record the verdict, treat a failure as a non-run (chosen)
+    because: >
+      A TCP accept is not the question. An ASP.NET container accepts on 8080
+      well before its pipeline is built, so the scan would start against an
+      application that answers nothing. Failing the run before scanning throws
+      away the report, and the report of a partially-ready application still
+      names real findings. Recording the probe keeps both — the findings are
+      there, and gatedPassed(ran=false) fails the run at every threshold so
+      nobody reads them as a clean scan. It is the distinction src/security's
+      gating.go already draws between a tool that found nothing and a tool that
+      could not look.
+    confidence: high
+  - id: d04
+    choice: mode is a string and authenticated is named positively
+    options:
+      - a --full bool plus an --api bool (rejected)
+      - --mode baseline|api|full and --authenticated (chosen)
+    because: >
+      Two bools encode four states for three modes, and the fourth is a caller
+      asking for a full API scan and getting whichever arm the code checks
+      first. Underneath that is a Dagger mechanic the intent gate already paid
+      for: the generated Go client drops any optional argument holding its zero
+      value, so an optional bool can only ever be transmitted as true. A
+      --not-baseline would be unsettable and a positively-named --required would
+      be unclearable. authenticated is only ever set to true, which is the
+      direction that works, and its false case is covered by a warning rather
+      than by a flag.
+    confidence: high
+  - id: d05
+    choice: refuse an empty mode and a zero port in the composite
+    options:
+      - let ScanWeb's defaults apply (rejected)
+      - refuse them in validateApp, where they are still visible (chosen)
+    because: >
+      The same zero-value drop is a silent downgrade on the way in. A workflow
+      variable that came out empty makes --mode "" vanish before ScanWeb sees
+      it, and the run performs the weakest scan of the three while reporting
+      nothing unusual; --port 0 vanishes and the scan addresses 8080, a port the
+      caller never named. Neither reaches a place where it can be rejected,
+      because by then it is indistinguishable from an argument nobody passed.
+      shape.go is the last layer that can still tell the two apart.
+    confidence: high
+  - id: d06
+    choice: keep the cadence in the caller and take mode as an input
+    options:
+      - put the crons in the reusable workflow (rejected)
+      - resolve the event to a mode in the template (chosen)
+    because: >
+      A reusable workflow's `on:` is workflow_call and nothing else, so crons
+      inside it would be cicd's own schedule and would fire against cicd. Even
+      as a shared default it would couple the reusable to one template's cron
+      strings. The template resolves github.event_name and
+      github.event.schedule to a single mode, and the safety net for a cron
+      edited out of step is that a baseline run always says
+      `dast: BASELINE ONLY` — a full scan that quietly became a second nightly
+      baseline is visible in the artifact, not only in the YAML.
+    confidence: high
+  - id: d07
+    choice: two separately named timeouts for the two waits
+    options:
+      - one timeout covering both waits (rejected)
+      - start-timeout-seconds and ready-timeout-seconds (chosen)
+    because: >
+      "My application never started" and "the scanner could not reach it" have
+      different remedies and are otherwise identical in the evidence — one is a
+      broken start-cmd, the other a wrong port or health-path. One knob would
+      have made the message name whichever layer happened to hit the ceiling
+      first. The runner-side wait is aligned byte-for-byte with probeReadiness,
+      2xx or 3xx only and TLS ignored, because a stricter wait reddens an
+      application the scanner would have scanned fine and a looser one hands the
+      reader a Dagger-side timeout naming the wrong layer.
+    confidence: high
+  - id: d08
+    choice: own the payload and nest ZAP's report inside it
+    options:
+      - keep genericFormat zap-json and read fields out of ZAP's document (rejected)
+      - dast/1.0, with zapReport carrying ZAP's own JSON verbatim (chosen)
+    because: >
+      The facts a reader needs — which shape ran, which address was scanned,
+      whether the target answered, what the profile claimed — are cicd's and do
+      not exist anywhere in ZAP's document. Putting them beside ZAP's fields
+      would mean a schema that changes when ZAP's does. Nesting keeps
+      src/cross-cutting/report honest as well: it returns genericReport
+      verbatim, so the native document is one level in rather than gone, and
+      docs/reference/dast.md says where.
+    confidence: high
+  - id: d09
+    choice: print the disclosure warnings on the pass path too
+    options:
+      - print warnings only when the gate trips (rejected)
+      - print them on both paths (chosen)
+    because: >
+      PROVENANCE NOT ATTESTED, NOT AUTHENTICATED and BASELINE ONLY all describe
+      green runs, and each one narrows what green means. Showing them only on
+      failure would hide every line precisely on the runs whose scope is being
+      overread. The habituation cost is real and is bounded here by the lines
+      being conditional — an unset profile emits nothing, and BASELINE ONLY's
+      absence on a full run is the informative half.
+    confidence: medium
+tags:
+  - dast
+  - security
+  - provenance
+  - non-run-must-not-read-as-clean
+  - workflow

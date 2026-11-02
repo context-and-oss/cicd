@@ -1,0 +1,670 @@
+# ============================================================
+# Reusable workflow — Running-app DAST (its own cadence, not a merge gate)
+#
+# Invoked by consumer repos via:
+#   jobs:
+#     dast:
+#       uses: context-and-oss/cicd/.github/workflows/dast.yml@v5.1.2
+#       with:
+#         app: container      # url | service | container
+#         port: '8080'
+#         mode: baseline      # baseline | api | full
+#       secrets:
+#         TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+#
+# Attacks a RUNNING application with OWASP ZAP and wraps the result in the
+# standard evidence bundle. Two mechanisms, one entry (ADR-005):
+#
+#   W1 "you start it, we scan it"  → app: url | service
+#      url     — an environment you already run and the Dagger engine can
+#                reach. Works with any shape at all: a compose stack, a
+#                multi-process dev server, something already deployed.
+#      service — you start it ON THIS RUNNER via `start-cmd`, and cicd reaches
+#                it through a host tunnel. This is the shape for a repository
+#                whose dev mode is `docker compose up` or `dotnet run`.
+#      Neither can attest provenance: cicd built none of what it scanned, and
+#      the evidence says so on every run (`dast: PROVENANCE NOT ATTESTED`).
+#
+#   W2 "we start it, we scan it"   → app: container
+#      cicd builds the image from your Dockerfile, starts it inside the engine
+#      and scans that. Single container only — no database, no sidecar, and
+#      never the host Docker socket. The only shape whose evidence may say the
+#      scanned code is this commit's code.
+#
+# THIS IS NOT A MERGE GATE. An active scan is minutes-to-hours of traffic
+# against a live application. Run it on mainline, nightly, weekly and on
+# demand — see templates/github-actions/dast.yml for the cadence wiring, which
+# lives in the CALLER because the cron strings are the caller's.
+#
+# The cicd modules are fetched from the public repository; no secret is
+# needed to run this workflow. TEAMS_WEBHOOK is optional.
+# ============================================================
+
+name: DAST (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      # ─── shape ───────────────────────────────────────────────────────────
+      app:
+        description: 'Which source the scan runs against: url (an address the Dagger engine can reach), service (an app this workflow starts on the runner via start-cmd), or container (cicd builds your Dockerfile and starts it). Always explicit — never auto-detected (ADR-001).'
+        required: false
+        type: string
+        default: 'url'
+      target:
+        description: 'app=url only: full HTTP/S URL of the running target, e.g. https://staging.example.com. Must be an environment you are authorised to attack. A localhost URL does NOT work here — a Dagger container has network egress but no route to the runner''s loopback, which is what app=service exists for.'
+        required: false
+        type: string
+        default: ''
+      start-cmd:
+        description: 'app=service only, and REQUIRED there: the command that starts your application on the runner, run via `bash -c` from the repository root (e.g. "docker compose -f docker-compose.dev.yml up -d"). It must return once the app is starting; this workflow does the waiting. Refused for the other two shapes, because a process cicd never scans is a process nobody asked for. Unlike build-cmd and test-cmd in the commit stage this runs on the runner and NOT witnessed in a cicd toolchain container — which is the same fact the PROVENANCE NOT ATTESTED disclosure already states about this shape.'
+        required: false
+        type: string
+        default: ''
+      stop-cmd:
+        description: 'app=service only: the command that tears your application down again, run with `if: always()` so a tripped gate still stops it (e.g. "docker compose -f docker-compose.dev.yml down -v"). Optional — the runner is disposable — but a stop-cmd that dumps state is often where the useful diagnostics are.'
+        required: false
+        type: string
+        default: ''
+      dockerfile:
+        description: 'app=container only: path to the Dockerfile, relative to the repository root. Empty keeps the module default, Dockerfile at the root.'
+        required: false
+        type: string
+        default: ''
+      platform:
+        description: 'app=container only: OCI platform the image is built for (e.g. "linux/arm64"). Empty keeps the module default, linux/amd64.'
+        required: false
+        type: string
+        default: ''
+
+      # ─── address (service and container; url carries its own) ────────────
+      port:
+        description: 'The port the application answers on. Required for app=service — it is both the port of the host tunnel and the port in the URL cicd composes, and getting it wrong shows up as a readiness probe that never answered rather than as a wrong port. Empty keeps the module default, 8080.'
+        required: false
+        type: string
+        default: ''
+      scheme:
+        description: 'http or https. Empty keeps the module default, http.'
+        required: false
+        type: string
+        default: ''
+      base-path:
+        description: 'Path the application is served under, e.g. "/api". Empty keeps the module default, "/".'
+        required: false
+        type: string
+        default: ''
+      health-path:
+        description: 'Path the readiness probe requests, e.g. "/health". Empty defaults to the base path. This workflow''s own wait for start-cmd requests the same path, so the two probes agree about what "up" means.'
+        required: false
+        type: string
+        default: ''
+      ready-timeout-seconds:
+        description: 'How long CICD waits for the target to answer before recording a non-run. Empty keeps the module default, 120. Not to be confused with start-timeout-seconds, which is how long THIS WORKFLOW waits for start-cmd''s application before it ever calls cicd.'
+        required: false
+        type: string
+        default: ''
+      start-timeout-seconds:
+        description: 'app=service only: how long this workflow waits on the runner for start-cmd''s application to answer, before failing the job. Its job is to separate "your app never started" from "the scanner could not reach it" — two failures with very different remedies that are otherwise identical in the evidence.'
+        required: false
+        type: number
+        default: 180
+
+      # ─── scan ────────────────────────────────────────────────────────────
+      mode:
+        description: 'baseline (passive spider, minutes) | api (driven by an API document) | full (active attack, can run for hours). The caller picks this per trigger — baseline on mainline and nightly, full weekly and on demand. A baseline run says `dast: BASELINE ONLY` in the evidence, so a full scan that silently degraded to a baseline one is visible in the comment.'
+        required: false
+        type: string
+        default: 'baseline'
+      api-spec-path:
+        description: 'mode=api: the path the RUNNING APPLICATION serves its API document on, e.g. "/swagger/v1/swagger.json". cicd fetches it from the target. Mutually exclusive with api-spec-file.'
+        required: false
+        type: string
+        default: ''
+      api-spec-file:
+        description: 'mode=api: path to an API document committed in this repository, relative to the repository root. Use this when the document is not served. Mutually exclusive with api-spec-path.'
+        required: false
+        type: string
+        default: ''
+      api-format:
+        description: 'Format of the API document: openapi | soap | graphql. Empty keeps the module default, openapi.'
+        required: false
+        type: string
+        default: ''
+      rule-config:
+        description: 'Path to a ZAP rule configuration file (-c) committed in this repository. Every rule it names is reported in the evidence, including any that raised no alert — a suppression you can read is the only kind worth having.'
+        required: false
+        type: string
+        default: ''
+      max-duration-minutes:
+        description: 'Cap the whole scan at this many minutes (ZAP -T). Empty means no cap, which is the module default and is a real hazard for mode=full: an uncapped active scan against a slow target runs for hours. Set it on your weekly full scan.'
+        required: false
+        type: string
+        default: ''
+      profile:
+        description: 'The configuration the application ran under, e.g. "Staging" or "mock-data". Recorded verbatim in the evidence and never interpreted — cicd cannot check the claim, and the disclosure exists so a reader knows which surface these findings describe.'
+        required: false
+        type: string
+        default: ''
+      authenticated:
+        description: 'Set true only when the scan exercised a real login. Left false, the evidence states the findings describe the anonymous surface only — which is almost always the truth for a dev-mode app, and stating it is the point.'
+        required: false
+        type: boolean
+        default: false
+      fail-on:
+        description: 'Minimum severity that fails the pipeline (CRITICAL|HIGH|MEDIUM|LOW|NONE). ZAP''s maximum risk is High, so CRITICAL can never fail over findings — the evidence warns when it is used rather than reporting a green run that could not have been anything else. NONE does not suppress a non-run: a target that was never reached fails at every threshold.'
+        required: false
+        type: string
+        default: 'HIGH'
+
+      # ─── run ─────────────────────────────────────────────────────────────
+      job-timeout-minutes:
+        description: 'Hard ceiling on the whole job. A full scan against a slow target can outlive the six-hour runner default and be killed with no evidence at all; this fails it earlier and visibly. Raise it for a large weekly full scan, and prefer max-duration-minutes, which ends the scan while cicd can still write a report.'
+        required: false
+        type: number
+        default: 90
+    secrets:
+      TEAMS_WEBHOOK:
+        description: 'Teams incoming webhook URL'
+        required: false
+    # The consumption seam for callers (ADR-006): download the artifact these
+    # name instead of reconstructing cicd's internals. The gate step writes its
+    # outputs BEFORE either of its exit paths, so a tripped or crashed gate
+    # still reports passed=false rather than an empty string.
+    outputs:
+      evidence-artifact:
+        description: 'Name of the uploaded evidence artifact (combined-evidence.json, findings.sarif, sbom.cdx.json, comment.md). The mode is in the name so a baseline and a full run in the same workflow run do not collide. 90-day retention. Note that sbom.cdx.json is present but EMPTY — a DAST run produces no component inventory.'
+        value: dast-evidence-${{ inputs.mode }}-${{ github.sha }}
+      passed:
+        description: 'Combined verdict from the evidence: "true" only when the scan ran and found nothing at or above fail-on. "false" also covers a scan that could not run — including a readiness probe that never got a served response, which fails at every threshold, NONE included.'
+        value: ${{ jobs.dast.outputs.passed }}
+      findings-count:
+        description: 'Total alerts ZAP raised.'
+        value: ${{ jobs.dast.outputs.findings-count }}
+      findings-by-severity:
+        description: 'Compact JSON object of per-severity finding counts, e.g. {"HIGH":1,"MEDIUM":4}. ZAP has no CRITICAL tier — its maximum risk is High.'
+        value: ${{ jobs.dast.outputs.findings-by-severity }}
+      gates:
+        description: 'Compact JSON array of per-gate status — one entry per source envelope: {moduleName, stage, tool, passed, findingsCount, errorsCount, warningsCount}.'
+        value: ${{ jobs.dast.outputs.gates }}
+
+env:
+  DAGGER_VERSION: "0.20.8"
+
+# Least-privilege default.
+permissions:
+  contents: read
+
+jobs:
+  dast:
+    name: DAST (${{ inputs.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job-timeout-minutes }}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+      findings-count: ${{ steps.gate.outputs.findings-count }}
+      findings-by-severity: ${{ steps.gate.outputs.findings-by-severity }}
+      gates: ${{ steps.gate.outputs.gates }}
+
+    steps:
+      # ─── Shape preflight ──────────────────────────────────────────────────
+      # The composite's validateApp already refuses a selector that disagrees
+      # with its inputs — and it is the authority on everything it can see.
+      # What it CANNOT see is this workflow's own two knobs: start-cmd and
+      # stop-cmd never reach it. A start-cmd under app=container starts a
+      # process on the runner that nothing ever scans, and the run stays green
+      # while attacking a different application entirely. And app=service with
+      # no start-cmd, or no port, produces a tunnel to a port nothing is
+      # listening on — which surfaces as "the readiness probe never answered",
+      # a message that sends the reader looking at their application instead of
+      # at the two inputs they left empty. Both are refused here, by name.
+      - name: Verify the shape and its inputs agree
+        env:
+          APP: ${{ inputs.app }}
+          TARGET: ${{ inputs.target }}
+          PORT: ${{ inputs.port }}
+          START_CMD: ${{ inputs.start-cmd }}
+          STOP_CMD: ${{ inputs.stop-cmd }}
+        run: |
+          set -uo pipefail
+          bad=0
+          case "$APP" in
+            url|service|container) ;;
+            *)
+              echo "::error::invalid app '$APP' — expected one of: url, service, container."
+              exit 1
+              ;;
+          esac
+          if [ "$APP" = "service" ]; then
+            if [ -z "$START_CMD" ]; then
+              echo "::error::app=service needs start-cmd: nothing on this runner starts your application, so the scan would tunnel to a port nothing is listening on. Use app=url for an environment that is already running somewhere else."
+              bad=1
+            fi
+            if [ -z "$PORT" ]; then
+              echo "::error::app=service needs port: it is both the port of the host tunnel and the port in the URL cicd composes. Left empty it defaults to 8080, and an application on any other port fails as an unreachable target rather than as a missing input."
+              bad=1
+            fi
+          else
+            if [ -n "$START_CMD" ]; then
+              echo "::error::start-cmd is only valid with app=service (got app=$APP). Under app=$APP cicd scans something else entirely, so this command would start a process nothing ever looks at while the run reports on a different application."
+              bad=1
+            fi
+            if [ -n "$STOP_CMD" ]; then
+              echo "::error::stop-cmd is only valid with app=service (got app=$APP)."
+              bad=1
+            fi
+          fi
+          if [ "$APP" = "url" ] && [ -z "$TARGET" ]; then
+            echo "::error::app=url needs target: the full HTTP/S URL of the running application."
+            bad=1
+          fi
+          if [ "$APP" != "url" ] && [ -n "$TARGET" ]; then
+            echo "::error::target is only valid with app=url (got app=$APP). cicd composes the address itself for the other two shapes, from scheme, port and base-path."
+            bad=1
+          fi
+          [ "$bad" -eq 0 ] || exit 1
+          echo "shape: app=$APP"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Dagger CLI
+        # Inline copy of .github/actions/install-dagger: a reusable workflow
+        # runs in the caller's checkout and cannot `uses:` a local action.
+        # scripts/tests/test_install_dagger.py keeps this body identical.
+        env:
+          VERSION: ${{ env.DAGGER_VERSION }}
+        run: |
+          set -euo pipefail
+          asset="dagger_v${VERSION}_linux_amd64.tar.gz"
+          base="https://dl.dagger.io/dagger/releases/${VERSION}"
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "${tmp}/${asset}" "${base}/${asset}"
+          curl -fsSL --retry 3 -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+          # Keep only the line naming this asset, so a checksums.txt that lists
+          # every platform cannot match on a different file, and a checksums.txt
+          # that omits ours fails here rather than verifying nothing.
+          grep -E "^[0-9a-f]{64}  ${asset}\$" "${tmp}/checksums.txt" > "${tmp}/expected.sum"
+          (cd "$tmp" && sha256sum -c expected.sum)
+          tar -xzf "${tmp}/${asset}" -C "$tmp" dagger
+          install -m 0755 "${tmp}/dagger" "${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger"
+          rm -rf "$tmp"
+          # Prove the binary that landed is the one that will run, and fail the
+          # step if it is not — an install that silently produced nothing would
+          # otherwise surface later as a confusing "dagger: command not found".
+          installed="$("${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger" version)"
+          echo "$installed"
+          case "$installed" in
+            *"v${VERSION} "*) ;;
+            *) echo "installed dagger is not v${VERSION}: ${installed}" >&2; exit 1 ;;
+          esac
+          # Provision the Dagger engine from ghcr.io/dagger/engine (Dagger's
+          # official mirror, on GitHub's network) instead of registry.dagger.io,
+          # whose path from GitHub runners intermittently times out during engine
+          # provisioning (dagger/dagger #7548/#7593). Identical image + digest.
+          # Pre-pull with backoff to warm the cache and fail loud if ghcr is
+          # unreachable; _EXPERIMENTAL_DAGGER_RUNNER_HOST makes the CLI provision
+          # from the ghcr image directly in the dagger steps that follow.
+          engine="ghcr.io/dagger/engine:v${VERSION}"
+          ok=
+          for delay in 0 5 10 15 20 30 45 60; do
+            [ "$delay" = 0 ] || sleep "$delay"
+            if docker pull "$engine"; then ok=1; break; fi
+            echo "engine image pull failed; retrying"
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::Failed to pull $engine after 8 attempts"
+            exit 1
+          fi
+          echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-image://$engine" >> "$GITHUB_ENV"
+
+      # ─── W1/service: start the consumer's application on this runner ──────
+      # Two distinct failures live here and they have different remedies, so
+      # they are separated rather than both surfacing as an unreachable target:
+      # start-cmd exiting non-zero (your command is wrong) and the application
+      # never answering (your command ran and the app did not come up). Both
+      # are loud, and the captured log is printed by the step below on either
+      # path — a start that failed with its output swallowed is the same
+      # unexplainable non-run this repository exists to refuse.
+      #
+      # The wait accepts 2xx and 3xx and nothing else, because that is exactly
+      # what probeReadiness accepts inside the engine (src/security/web.go). A
+      # probe stricter than cicd's would redden a scannable application; a
+      # looser one would let a dead one through to a confusing Dagger-side
+      # timeout that names the wrong layer. -k for the same reason the engine
+      # probe passes --no-check-certificate: a dev-mode app behind a
+      # self-signed certificate is the normal case here, ZAP scans it
+      # regardless, and refusing to probe what the scanner will happily scan
+      # turns a TLS detail into an unexplained non-run.
+      - name: Start the application
+        id: start-app
+        if: inputs.app == 'service'
+        env:
+          START_CMD: ${{ inputs.start-cmd }}
+          PORT: ${{ inputs.port }}
+          SCHEME: ${{ inputs.scheme }}
+          BASE_PATH: ${{ inputs.base-path }}
+          HEALTH_PATH: ${{ inputs.health-path }}
+          START_TIMEOUT: ${{ inputs.start-timeout-seconds }}
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/app-start.log"
+          echo "log=$log" >> "$GITHUB_OUTPUT"
+          echo "::group::start-cmd"
+          # Status captured on its own line, not from inside `if ! cmd`: the
+          # `!` inverts $? before the branch body can read it, so the exit code
+          # reported there is always 0 — a diagnostic that is wrong precisely
+          # when it is being read.
+          bash -c "$START_CMD" > "$log" 2>&1
+          code=$?
+          echo "::endgroup::"
+          if [ "$code" -ne 0 ]; then
+            echo "::error::start-cmd exited $code — the application was never started. This is your command failing, not the scanner failing to reach anything."
+            exit "$code"
+          fi
+          # Same address cicd will compose, minus the internal alias: scheme,
+          # the port, and health-path falling back to base-path falling back
+          # to "/". Keep this fallback chain in step with security.webTarget.
+          path="${HEALTH_PATH:-${BASE_PATH:-/}}"
+          case "$path" in /*) ;; *) path="/$path" ;; esac
+          url="${SCHEME:-http}://localhost:${PORT}${path}"
+          echo "waiting up to ${START_TIMEOUT}s for $url"
+          started=$(date +%s)
+          status=0
+          while :; do
+            status=$(curl -sS -k -o /dev/null -w '%{http_code}' --max-time 10 "$url") || status=000
+            case "$status" in 2??|3??) break ;; esac
+            now=$(date +%s)
+            if [ $((now - started)) -ge "$START_TIMEOUT" ]; then
+              echo "::error::$url never answered 2xx/3xx within ${START_TIMEOUT}s (last status: $status). start-cmd ran successfully, so the application started and did not become ready — check the log printed below, and check that 'port' and 'health-path' name what your app actually serves."
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "$url answered $status after $(( $(date +%s) - started ))s"
+
+      - name: Run DAST composite
+        id: scan
+        env:
+          TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+          APP: ${{ inputs.app }}
+          TARGET: ${{ inputs.target }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          PLATFORM: ${{ inputs.platform }}
+          PORT: ${{ inputs.port }}
+          SCHEME: ${{ inputs.scheme }}
+          BASE_PATH: ${{ inputs.base-path }}
+          HEALTH_PATH: ${{ inputs.health-path }}
+          READY_TIMEOUT: ${{ inputs.ready-timeout-seconds }}
+          MODE: ${{ inputs.mode }}
+          API_SPEC_PATH: ${{ inputs.api-spec-path }}
+          API_SPEC_FILE: ${{ inputs.api-spec-file }}
+          API_FORMAT: ${{ inputs.api-format }}
+          RULE_CONFIG: ${{ inputs.rule-config }}
+          MAX_DURATION: ${{ inputs.max-duration-minutes }}
+          PROFILE: ${{ inputs.profile }}
+          AUTHENTICATED: ${{ inputs.authenticated }}
+          FAIL_ON: ${{ inputs.fail-on }}
+        run: |
+          set -uo pipefail
+          # Optional flags are appended only when set. An empty flag is not a
+          # no-op here: Dagger's generated client drops any optional argument
+          # holding its zero value, so `--mode ""` and `--port 0` never reach
+          # ScanWeb — they arrive as its defaults instead, buying the weakest
+          # scan or a scan of a port nobody named, with nothing in the evidence
+          # saying so. The composite refuses both itself; not sending them at
+          # all is how an unset workflow input stays "the module default"
+          # rather than becoming a value somebody meant.
+          extra=()
+          case "$APP" in
+            url)
+              extra+=(--app url --target "$TARGET")
+              ;;
+            service)
+              # The host tunnel. The Dagger CLI maps a tcp:// argument for a
+              # Service parameter onto the runner's loopback, and ScanWeb binds
+              # it under a fixed internal alias — so the URL ZAP is handed never
+              # contains a host string a consumer typed.
+              extra+=(--app service --service "tcp://localhost:${PORT}")
+              ;;
+            container)
+              extra+=(--app container --src .)
+              if [ -n "$DOCKERFILE" ]; then extra+=(--dockerfile "$DOCKERFILE"); fi
+              if [ -n "$PLATFORM" ]; then extra+=(--platform "$PLATFORM"); fi
+              ;;
+          esac
+          if [ -n "$PORT" ]; then extra+=(--port "$PORT"); fi
+          if [ -n "$SCHEME" ]; then extra+=(--scheme "$SCHEME"); fi
+          if [ -n "$BASE_PATH" ]; then extra+=(--base-path "$BASE_PATH"); fi
+          if [ -n "$HEALTH_PATH" ]; then extra+=(--health-path "$HEALTH_PATH"); fi
+          if [ -n "$READY_TIMEOUT" ]; then extra+=(--ready-timeout-seconds "$READY_TIMEOUT"); fi
+          if [ -n "$API_SPEC_PATH" ]; then extra+=(--api-spec-path "$API_SPEC_PATH"); fi
+          if [ -n "$API_SPEC_FILE" ]; then extra+=(--api-spec "$API_SPEC_FILE"); fi
+          if [ -n "$API_FORMAT" ]; then extra+=(--api-format "$API_FORMAT"); fi
+          if [ -n "$RULE_CONFIG" ]; then extra+=(--rule-config "$RULE_CONFIG"); fi
+          if [ -n "$MAX_DURATION" ]; then extra+=(--max-duration-minutes "$MAX_DURATION"); fi
+          if [ -n "$PROFILE" ]; then extra+=(--profile "$PROFILE"); fi
+          # Only ever sent as true. `--authenticated=false` is the default and
+          # the evidence's NOT AUTHENTICATED disclosure is what a reader needs
+          # in that case; sending it would be a claim nobody made.
+          if [ "$AUTHENTICATED" = "true" ]; then extra+=(--authenticated=true); fi
+          # --progress=plain so module warnings (BASELINE ONLY, PROVENANCE NOT
+          # ATTESTED, NOT AUTHENTICATED, the CRITICAL-threshold warning) reach
+          # the job log — default non-TTY progress hides stderr.
+          # Consume the service-shaped File immediately. Returning any later
+          # value from the same Dagger call can retain the runner tunnel even
+          # after the function reports DONE, leaving the CLI waiting forever.
+          # The host file is the intentional lifecycle boundary.
+          evidence="$RUNNER_TEMP/dast-evidence.json"
+          dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.2 call scan \
+            --mode "$MODE" \
+            --fail-on "$FAIL_ON" \
+            --commit-sha "${GITHUB_SHA}" \
+            --branch "${GITHUB_REF_NAME}" \
+            --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            "${extra[@]}" \
+            export --path "$evidence"
+
+          # Packaging runs in a fresh Dagger session with an ordinary host
+          # File input and no Service anywhere in its graph. That call can wrap,
+          # notify, and export the audit Directory normally.
+          delivery=()
+          if [ -n "${TEAMS_WEBHOOK:-}" ]; then delivery+=(--teams-webhook env:TEAMS_WEBHOOK); fi
+          dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.2 call package \
+            --evidence "$evidence" \
+            --commit-sha "${GITHUB_SHA}" \
+            --branch "${GITHUB_REF_NAME}" \
+            --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "${delivery[@]}" \
+            export --path ./dast-evidence
+
+      # Printed on every path, pass included. A start log is the only place a
+      # warning from the application under test appears, and reading it only
+      # after a failure means never reading the run where it first appeared.
+      - name: Application start log
+        if: always() && inputs.app == 'service' && steps.start-app.outputs.log != ''
+        env:
+          LOG: ${{ steps.start-app.outputs.log }}
+        run: |
+          set -uo pipefail
+          echo "::group::start-cmd output"
+          if [ -s "$LOG" ]; then cat "$LOG"; else echo "(start-cmd wrote nothing)"; fi
+          echo "::endgroup::"
+
+      - name: Stop the application
+        if: always() && inputs.app == 'service' && inputs.stop-cmd != ''
+        env:
+          STOP_CMD: ${{ inputs.stop-cmd }}
+        run: |
+          set -uo pipefail
+          # A teardown that fails must not turn a real verdict into a red run
+          # about a disposable runner — but it must not be silent either, or a
+          # stop-cmd that has been broken for months looks exactly like one
+          # that works.
+          if ! bash -c "$STOP_CMD"; then
+            echo "::warning::stop-cmd exited non-zero. The runner is disposable so this does not change the DAST verdict, but the command is not doing what it claims."
+          fi
+
+      - name: Probe Code Scanning availability
+        id: code-scanning
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # DAST findings identify HTTP endpoints, not source files. ZAP keeps
+          # those findings in combined-evidence.json, comment.md and the native
+          # report under parts/. Unless another producer contributed a real
+          # SARIF run, there is nothing honest to upload to Code Scanning:
+          # GitHub rejects both runs:null and runs:[], and inventing a repository
+          # location for a runtime URL would create a misleading code alert.
+          if [ ! -s ./dast-evidence/findings.sarif ]; then
+            echo "::error::DAST packaging did not produce findings.sarif"
+            exit 1
+          fi
+          if ! jq -e 'type == "object" and has("runs") and (.runs | type == "array")' \
+            ./dast-evidence/findings.sarif >/dev/null; then
+            echo "::error::DAST packaging produced an invalid SARIF document: runs must be an array"
+            exit 1
+          fi
+          if [ "$(jq '.runs | length' ./dast-evidence/findings.sarif)" -eq 0 ]; then
+            echo "::notice::No source-located SARIF runs were produced. Skipping Code Scanning upload; DAST findings remain in the job summary and evidence artifact."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A SARIF upload GitHub refuses must not read as a repo with nothing
+          # to report — but a repo without Advanced Security legitimately cannot
+          # receive one. Ask which case this is: 403 is "Advanced Security not
+          # enabled" (skip, with a notice), 200/404 mean the API is there
+          # (upload, and a rejection fails the job). Anything else is a third
+          # answer, not a pass.
+          code=$(curl -sS -o "$RUNNER_TEMP/code-scanning-probe.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/code-scanning/analyses?per_page=1")
+          case "$code" in
+            200|404) echo "enabled=true" >> "$GITHUB_OUTPUT" ;;
+            403)
+              echo "::notice::Code Scanning is not available on this repository (GitHub Advanced Security not enabled) — skipping SARIF upload. Findings remain in the job summary and evidence artifact."
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Code Scanning availability probe returned HTTP $code"
+              cat "$RUNNER_TEMP/code-scanning-probe.json"
+              exit 1
+              ;;
+          esac
+
+      # The category carries the mode. Two analyses sharing a (tool, category)
+      # identity are refused, and a baseline and a full scan of the same commit
+      # are two different questions with two different answer sets — filed
+      # under one category, the weekly full scan's HIGH alerts would be closed
+      # by the next nightly baseline that structurally cannot find them.
+      - name: Upload SARIF to Code Scanning
+        if: always() && steps.code-scanning.outputs.enabled == 'true' && hashFiles('dast-evidence/findings.sarif') != ''
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          sarif_file: ./dast-evidence/findings.sarif
+          category: cicd-dast-${{ inputs.mode }}
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -f ./dast-evidence/comment.md ]; then
+            cat ./dast-evidence/comment.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### DAST — no evidence produced"
+              echo ""
+              echo "The composite failed before writing a report. See the \`Run DAST composite\` step."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always() && hashFiles('dast-evidence/**') != ''
+        with:
+          name: dast-evidence-${{ inputs.mode }}-${{ github.sha }}
+          path: ./dast-evidence/
+          retention-days: 90
+
+      # The composite is a producer: it writes combined-evidence.json with
+      # .passed reflecting fail-on, and exits 0 on a tripped gate so SARIF and
+      # the artifact are already published when CI turns red here. NONE does
+      # NOT suppress a scan that could not run, so passed=false with zero
+      # findings is reachable on every threshold and errors[] is the only thing
+      # that explains it — which is why the gate prints errors[] as well.
+      - name: Gate on evidence
+        id: gate
+        if: always()
+        run: |
+          set -euo pipefail
+          # Pessimistic defaults first: both exit-1 paths below leave outputs
+          # already written, so a caller never reads an empty string where a
+          # verdict belongs. Later writes of the same name win. Explicit
+          # `name=` echoes rather than a helper function, because
+          # check_workflow_output_chain verifies each declared output by
+          # finding its literal `name=` write in this body, and a helper call
+          # would hide the name it cannot typo-check.
+          {
+            echo "passed=false"
+            echo "findings-count="
+            echo "findings-by-severity="
+            echo "gates="
+          } >> "$GITHUB_OUTPUT"
+          if [ ! -f ./dast-evidence/combined-evidence.json ]; then
+            echo "::error::combined-evidence.json missing — the composite failed before producing evidence. Nothing was scanned; this is not a clean run."
+            exit 1
+          fi
+          # Plain assignment on purpose: under set -e a jq that cannot parse
+          # the file exits here, before any real value is written, so the
+          # pessimistic defaults above are what the caller reads.
+          passed=$(jq -r '.passed' ./dast-evidence/combined-evidence.json)
+          {
+            echo "passed=$passed"
+            echo "findings-count=$(jq -r '.findingsCount // 0' ./dast-evidence/combined-evidence.json)"
+            echo "findings-by-severity=$(jq -c '.findingsBySeverity // {}' ./dast-evidence/combined-evidence.json)"
+            echo "gates=$(jq -c '.sources // []' ./dast-evidence/combined-evidence.json)"
+          } >> "$GITHUB_OUTPUT"
+          # Warnings are annotated on the PASS path too, and that is the point
+          # of them: PROVENANCE NOT ATTESTED, NOT AUTHENTICATED and BASELINE
+          # ONLY all describe a green run, and each one narrows what the green
+          # tick means. A reader who only sees them when something fails has
+          # been told the opposite of what they need.
+          warncount=$(jq '(.warnings // []) | length' ./dast-evidence/combined-evidence.json)
+          if [ "$warncount" -gt 0 ]; then
+            echo "::group::Scope and disclosure ($warncount)"
+            jq -r '(.warnings // [])[]' ./dast-evidence/combined-evidence.json \
+              | while IFS= read -r line; do echo "::warning::$line"; done
+            echo "::endgroup::"
+          fi
+          if [ "$passed" != "true" ]; then
+            total=$(jq '(.findings // []) | length' ./dast-evidence/combined-evidence.json)
+            if [ "$total" -gt 0 ]; then
+              echo "::group::Findings ($total)"
+              jq -r '(.findings // [])[:25][] | "[" + (.severity // "?") + "] " + (.tool // "") + (if (.rule // "") != "" then "/" + .rule else "" end) + ": " + (.message // "") + (if (.artifactPath // "") != "" then " (" + .artifactPath + ")" else "" end)' \
+                ./dast-evidence/combined-evidence.json \
+                | while IFS= read -r line; do echo "::error::$line"; done
+              if [ "$total" -gt 25 ]; then
+                echo "::error::… +$((total - 25)) more — see the evidence artifact (combined-evidence.json)"
+              fi
+              echo "::endgroup::"
+            fi
+            errcount=$(jq '(.errors // []) | length' ./dast-evidence/combined-evidence.json)
+            if [ "$errcount" -gt 0 ]; then
+              # A scan that could not run leaves no finding — only an errors[]
+              # entry. Print them or a non-run gate trip is unexplainable.
+              echo "::group::Errors ($errcount)"
+              jq -r '(.errors // [])[]' ./dast-evidence/combined-evidence.json \
+                | while IFS= read -r line; do echo "::error::$line"; done
+              echo "::endgroup::"
+            fi
+            echo "::error::DAST gate tripped — see the annotations above or the job summary"
+            exit 1
+          fi
+          echo "DAST gate: passed"

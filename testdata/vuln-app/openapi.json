@@ -1,0 +1,77 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "vuln-app",
+    "version": "0.1.0",
+    "description": "cicd DAST fixture. Every defect described here is planted."
+  },
+  "servers": [{ "url": "http://localhost:8080" }],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "Readiness probe target",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/items": {
+      "get": {
+        "operationId": "listItems",
+        "summary": "List items",
+        "responses": {
+          "200": {
+            "description": "the collection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "integer" },
+                          "name": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/greet": {
+      "get": {
+        "operationId": "greet",
+        "summary": "Reflects its parameter into HTML without escaping (planted XSS)",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "an HTML greeting", "content": { "text/html": { "schema": { "type": "string" } } } }
+        }
+      }
+    }
+  }
+}

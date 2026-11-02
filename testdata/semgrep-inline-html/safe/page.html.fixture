@@ -1,0 +1,17 @@
+<!doctype html>
+<div id="input">Evidence</div><div id="output"></div>
+<script>
+const evidence = JSON.parse(document.getElementById('input').textContent);
+document.getElementById('output').textContent = evidence.message;
+document.getElementById('output').innerHTML = '<p>Static markup</p>';
+document.getElementById('output').innerHTML = `<p>${Number(evidence.count)}</p>`;
+</script>
+<script type="module">
+import DOMPurify from 'dompurify';
+const message = document.getElementById('input').textContent;
+document.getElementById('output').innerHTML = DOMPurify.sanitize(message);
+</script>
+<script type="application/json">{"example":"document.body.innerHTML = document.body.textContent"}</script>
+<script type="importmap">{"imports":{}}</script>
+<textarea><script>document.body.innerHTML = document.body.textContent;</script></textarea>
+<template><script>document.body.textContent = 'Safe template text';</script></template>

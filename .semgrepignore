@@ -1,0 +1,44 @@
+# What this repository's own dogfood SAST scan leaves out. Consumers are not
+# affected: semgrep reads this file from the scanned root, and every
+# module-test and smoke cell scans a fixture directory as its root.
+#
+# A .semgrepignore *replaces* semgrep's built-in ignore list instead of adding
+# to it, so the defaults below are restated. Without them a new file here
+# would silently widen the scan -- measured against semgrep 1.162.0, with no
+# ignore file it skips every *_test.go and the .git directory, and with an
+# ignore file that does not name them it scans both. Every ancestor commit's
+# objects under .git are not this tree's code.
+
+# Version control metadata, a directory in a clone and a file in a worktree
+# (implicit in semgrep's defaults, lost with them)
+.git
+
+# Semgrep's built-in defaults: common large paths
+node_modules/
+build/
+dist/
+vendor/
+.env/
+.venv/
+.tox/
+*.min.js
+.npm/
+.yarn/
+
+# Semgrep's built-in defaults: common test paths
+test/
+tests/
+*_test.go
+
+# Semgrep's built-in defaults: rule and log folders
+.semgrep
+.semgrep_logs/
+
+# Fixture apps, for the same reason trivy.yaml skips them: they carry insecure
+# code on purpose (cookies without flags and raw HTML in the DAST target, a
+# curl-pipe-shell workflow for the GitHub Actions rule, an unhardened pnpm
+# workspace) so the integration tests have something to find. They are test
+# data, not this repository's code, and each fixture is still scanned when a
+# test points cicd at it. Anchored to the root: the testdata/ directories under
+# src/ hold recorded tool output for unit tests and stay in scope.
+/testdata/

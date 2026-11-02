@@ -1,0 +1,1 @@
+{"name":"@fixture/app-a","version":"1.0.0","type":"module","dependencies":{"@fixture/shared":"workspace:*","lodash":"4.17.4"}}

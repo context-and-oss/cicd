@@ -1,0 +1,971 @@
+# ============================================================
+# Reusable workflow — Commit pipeline (heavy authoritative gate, ADR-005)
+#
+# Invoked by consumer repos via:
+#   jobs:
+#     commit:
+#       uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.2
+#       with:
+#         artifact: container   # container | archive | none
+#       secrets:
+#         TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+#         NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
+#         NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+#
+# Scans CODE and ARTIFACT for any repo shape through one entry:
+#   - the source gate (quality, SAST, secrets, dependency-vuln, risk) runs for
+#     EVERY shape. The change-intent gate is not part of it: this stage runs on
+#     the push that already merged, so failing it would redden main over a
+#     document nobody can still amend here. Require intent in the pre-commit
+#     pipeline, where the author can act on it;
+#   - the artifact tail is selected by `artifact`:
+#       container → build the OCI image, SBOM it, scan it;
+#       archive   → run `build-cmd` in a toolchain container, scan the output
+#                   (requires build-cmd + output-path);
+#       none      → no build; the SBOM comes from the source lockfiles.
+#
+# The artifact is built and scanned but never published — each consumer repo
+# owns its own deployment. Optional coverage-path harvests a test-cmd report.
+# The coverage ratchet (ADR-003) is opt-in here via coverage-gate: only then is
+# the previous successful default-branch run's evidence fetched as a baseline.
+# It never replaces consumer-owned coverage thresholds.
+# ============================================================
+
+name: Commit (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: 'Runner label for the commit stage job, for example an organisation larger runner. The default is the standard GitHub-hosted runner. The runner must use a GitHub-owned Ubuntu image, because the storage step removes toolchains at the paths that image installs them to.'
+        type: string
+        default: ubuntu-latest
+      parallelism:
+        description: 'Independent check groups, and declared test legs, in flight: integer 1–4. Default 1 preserves sequential execution. Peak containers reach 2p-1 (p test legs beside p-1 other groups). Does not change compiler/test-runner concurrency or runner capacity.'
+        type: number
+        default: 1
+      prepare-cmd:
+        description: 'Optional install/restore and compile command executed once. Requires toolchain-image, prepare-language and BYO tests. Lint, selected tests and packaging branch from its state.'
+        type: string
+        default: ''
+      prepare-language:
+        description: 'node or dotnet when prepare-cmd is set.'
+        type: string
+        default: ''
+      prepare-test-label:
+        description: 'Test leg sharing prepared state. Required with test-legs; omit for test-cmd.'
+        type: string
+        default: ''
+      node-project-limit:
+        description: 'Maximum independent Node projects to lint/test (positive integer, default 4). Exceeding the budget fails; projects are never silently omitted. Separate from parallelism.'
+        type: number
+        default: 4
+      artifact:
+        description: 'Artifact shape: container (Dockerfile → image), archive (build command → output dir), or none (no build; SBOM from source lockfiles). Always explicit — never auto-detected (ADR-001).'
+        required: false
+        type: string
+        default: 'container'
+      fail-on:
+        description: 'Severity level that fails the build (CRITICAL|HIGH|MEDIUM|LOW|NONE)'
+        required: false
+        type: string
+        default: 'HIGH'
+      sast-rulesets:
+        description: 'Semgrep rulesets for SAST, comma-separated, NO spaces. Defaults to the heavy commit-stage pack (p/security-audit,p/owasp-top-ten,p/secrets). May point at a checked-in semgrep config (e.g. "./security.yml"). Set to empty to keep the composite default (p/security-audit); "auto" is refused by the security module. A .semgrepignore at the repo root is honored automatically.'
+        required: false
+        type: string
+        default: 'p/security-audit,p/owasp-top-ten,p/secrets'
+      include:
+        description: 'Languages to scan, comma-separated (e.g. "go,node"). Empty auto-detects by marker file. Unlike precommit.yml this workflow adds no pre-flight guard on the names, because quality.Check refuses an unrecognised one itself and names the accepted set. A language present in the repo but excluded is named in the audit as a "NOT SCANNED" warning, so narrowing the gate is a disclosed exemption, not a clean run.'
+        required: false
+        type: string
+        default: ''
+      license-gate:
+        description: 'Dependency licence policy mode: "gate" fails the pipeline when a dependency carries a licence outside the allowlist, "warn" reports the finding without enforcing. Defaults to "warn" so a consumer sees their real licence exposure in the evidence before the gate can block them on it. There is deliberately no "off" — a licence check that can be switched off silently is a licence check nobody can rely on, and warn already costs nothing.'
+        required: false
+        type: string
+        default: 'warn'
+      license-allow:
+        description: 'Licence categories AND individual licence names that are permitted, comma-separated (e.g. "permissive,notice,unencumbered" or "permissive,notice,BlueOak-1.0.0,example-sdk=SEE LICENSE IN LICENSE"). Empty uses cicd default policy: permissive, notice, unencumbered. Accepted categories: forbidden, restricted, reciprocal, notice, permissive, unencumbered. "unknown" is deliberately NOT accepted: allowing it accepts every licence Trivy could not classify at once, which is an off switch wearing a policy''s clothes — accept those one at a time by name instead. A NAME matches the whole declared licence string, normalised for case and whitespace; the operands of an "A AND B" expression are not matched individually, because cicd keeps no licence table to classify them with. A name shaped like an SPDX expression is allowed wherever it appears; anything else ("SEE LICENSE IN LICENSE", "UNLICENSED" is shaped like an id and so is global) must be scoped to one package as "<package>=<declared string>". Every named allowance is counted in the evidence and one that matched nothing is reported as a warning, so a stale entry cannot pass for a clean tree. Entries are split on commas here, so a declared string containing a comma can only be passed by calling the module directly with repeated --license-allow. An unrecognised entry is a hard error from the module, not a silent drop, so a typo cannot quietly widen the policy.'
+        required: false
+        type: string
+        default: ''
+      license-exclude:
+        description: 'Glob patterns whose licence declarations are reported but not judged against the policy, comma-separated (e.g. "docs/**,**/fixtures/**"). For a subtree whose licences are genuinely not this repository''s problem — a vendored sample, a fixture tree, an internal doc site that pulls its own npm tree. It narrows SCOPE, never FINDINGS: a pattern matches a file path, and there is deliberately no way to exclude a licence by name or category — that is the door --ignored-licenses keeps shut and this is not a second one. Nothing is excluded silently: the count and the patterns themselves are written into the evidence, and a pattern that matched nothing is reported as a warning so a typo cannot pass for a clean tree. Patterns are relative to the scanned root; absolute paths and ".." are hard errors.'
+        required: false
+        type: string
+        default: ''
+      vuln-accept:
+        description: >-
+          Vulnerability findings to accept, ONE PER LINE, each written as
+          "<id>=<reason>" — e.g. "CVE-2026-81871=the otel log exporter only
+          reaches the Dagger engine's own telemetry endpoint on the runner".
+          Newline-separated and deliberately NOT comma-separated like
+          license-allow: a reason is free prose and prose contains commas, so
+          splitting on them would truncate the reason at its first clause and
+          the truncated half is the part a reviewer reads. An accepted
+          identifier leaves the severity counts, findings[] and the gate, and
+          is disclosed in warnings[] together with the reason given, so it
+          reaches the PR comment and the combined evidence; the row itself
+          stays in the CycloneDX report. This is the reviewable alternative to
+          a .trivyignore entry, which drops the row before the report is
+          written and therefore removes the vulnerability from the evidence
+          entirely. A reason is mandatory, a pattern ("CVE-2026-*") is refused
+          because it would also cover the finding nobody has read yet, and an
+          acceptance that matches nothing is reported as a warning so a stale
+          entry cannot pass for a clean tree.
+        required: false
+        type: string
+        default: ''
+      npm-feed-url:
+        description: 'Internal npm registry URL (optional)'
+        required: false
+        type: string
+        default: ''
+      npm-feed-routing:
+        description: 'How npm-feed-url is applied. "registry" (default) makes it the registry for every package, which needs a feed that proxies the public registry. "npmrc" binds only the token to the feed host and lets the project .npmrc route its scopes there (`@scope:registry=<feed>`), for a feed with no public upstream.'
+        required: false
+        type: string
+        default: ''
+      nuget-feed-url:
+        description: 'Internal NuGet feed URL (optional)'
+        required: false
+        type: string
+        default: ''
+      test-cmd:
+        description: 'Consumer-owned test command for witnessed BYO test execution, run via `sh -c` in the toolchain container (e.g. "npm ci && npm test"). Empty disables.'
+        required: false
+        type: string
+        default: ''
+      coverage-path:
+        description: 'Coverage report written by test-cmd, relative to its working directory or absolute inside its container (for example coverage/coverage-summary.json). Empty preserves unmeasured coverage. Cannot be combined with test-legs; use per-leg coveragePath instead. Measurement alone does not enforce a baseline ratchet; see coverage-gate.'
+        required: false
+        type: string
+        default: ''
+      coverage-gate:
+        description: 'Opt-in coverage ratchet (ADR-003). Empty (default) fetches no baseline, so the ratchet is skipped as before. "warn" or "gate" fetches the newest commit evidence from a successful default-branch run of the same caller workflow and compares measured coverage per language against it: "gate" fails on a drop beyond coverage-tolerance, "warn" only warns. No baseline found is a warned skip (fail-open bootstrap). Only used with test-cmd or test-legs that produce coverage.'
+        required: false
+        type: string
+        default: ''
+      coverage-tolerance:
+        description: 'Allowed per-language coverage drop in percentage points before the ratchet trips (ADR-003). Only used when coverage-gate is set.'
+        required: false
+        type: string
+        default: '1.0'
+      test-legs:
+        description: 'Witnessed test legs as a JSON array — one object per leg with the keys label, language (go|node|python|dotnet), cmd, and optionally coveragePath, toolchainImage and services. The polyglot form of test-cmd: a repository with both a package.json and a .csproj gets one command, container and coverage report per language instead of one for the whole tree. Mutually exclusive with test-cmd (setting both fails the run rather than picking one). A language detected in the tree that no leg witnesses is named in the evidence and in the PR comment. coveragePath accepts a filename pattern as well as a literal path (*, ? or [ makes it one), because Microsoft.Testing.Platform names each test application''s report after a guid and a leg on that runner cannot name what it just wrote; the search descends from the pattern''s directory, byte-identical duplicates are dropped, and the evidence states how many documents were merged. A leg may also declare `services`: dependency containers (alias, image, port, optional env, optional readyCmd/readyTimeout) bound to the leg''s network so an integration suite can reach a throwaway database. Per alias the leg gets CICD_SERVICE_<ALIAS>_HOST and CICD_SERVICE_<ALIAS>_PORT. A declared service that did not become usable is an errors[] entry and a non-run, so it fails at every threshold including NONE; no Docker socket is ever mounted.'
+        required: false
+        type: string
+        default: ''
+      toolchain-image:
+        description: 'Toolchain container image override for the BYO test command and the archive build — the only digest-pinnable level (ADR-004). Empty auto-detects (.nvmrc / global.json) and falls back to pinned defaults. It still selects the archive build image alongside test-legs, but not a leg image: each leg resolves its own, and the evidence records that this one did not apply to any leg.'
+        required: false
+        type: string
+        default: ''
+      dockerfile:
+        description: 'Container shape only: path to the Dockerfile, relative to the repository root (e.g. "docker/api.Dockerfile"). Empty keeps the composite default, Dockerfile at the root. Ignored by the archive and none shapes, which build no image.'
+        required: false
+        type: string
+        default: ''
+      platform:
+        description: 'Container shape only: OCI platform the image is built for (e.g. "linux/arm64"). Empty keeps the composite default, linux/amd64. Ignored by the archive and none shapes, which build no image.'
+        required: false
+        type: string
+        default: ''
+      build-cmd:
+        description: 'Archive shape only: build command, run via `sh -c` in the toolchain container. Always explicit, never auto-detected. Required when artifact=archive.'
+        required: false
+        type: string
+        default: ''
+      output-path:
+        description: 'Archive shape only: path of the build output directory, relative to the source root (e.g. "dist"). Required when artifact=archive.'
+        required: false
+        type: string
+        default: ''
+      deploy-pages:
+        description: 'Publish a GitHub Pages evidence dashboard after the pipeline runs. Requires GitHub Pages enabled (Settings → Pages → Source: GitHub Actions).'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      TEAMS_WEBHOOK:
+        description: 'Teams incoming webhook URL'
+        required: false
+      NPM_FEED_TOKEN:
+        description: 'Token for internal npm feed'
+        required: false
+      NUGET_FEED_TOKEN:
+        description: 'Token for internal NuGet feed'
+        required: false
+    # The consumption seam for callers (ADR-006): download the artifact these
+    # name instead of reconstructing cicd's internals. Everything except
+    # evidence-artifact flows step → job → here, and the gate step writes its
+    # outputs BEFORE either of its exit paths, so a tripped or crashed gate
+    # still reports passed=false rather than an empty string.
+    outputs:
+      build-artifact:
+        description: 'Uploaded deployable bundle name; empty unless a candidate was built and the gate passed. Contains transport bytes, artifact-manifest.json and bound evidence.'
+        value: ${{ jobs.commit.outputs.build-artifact }}
+      build-artifact-id:
+        description: 'Immutable workflow artifact ID. Select this exact producing run/artifact when deploying.'
+        value: ${{ jobs.commit.outputs.build-artifact-id }}
+      evidence-artifact:
+        description: 'Name of the uploaded evidence artifact (combined-evidence.json, findings.sarif, sbom.cdx.json, comment.md). 90-day retention — publish elsewhere for anything longer-lived.'
+        value: commit-evidence-${{ github.sha }}
+      passed:
+        description: 'Combined verdict from the evidence: "true" only when every gate passed. "false" also covers a gate that could not run.'
+        value: ${{ jobs.commit.outputs.passed }}
+      findings-count:
+        description: 'Total findings across all gates.'
+        value: ${{ jobs.commit.outputs.findings-count }}
+      findings-by-severity:
+        description: 'Compact JSON object of per-severity finding counts, e.g. {"HIGH":2,"LOW":5}.'
+        value: ${{ jobs.commit.outputs.findings-by-severity }}
+      coverage-ratchet:
+        description: 'Coverage ratchet verdict: "pass", "fail", "skipped:<reason>", or empty when no ratchet ran.'
+        value: ${{ jobs.commit.outputs.coverage-ratchet }}
+      gates:
+        description: 'Compact JSON array of per-gate status — one entry per source envelope: {moduleName, stage, tool, passed, findingsCount, errorsCount, warningsCount}.'
+        value: ${{ jobs.commit.outputs.gates }}
+
+env:
+  DAGGER_VERSION: "0.20.8"
+
+# Least-privilege default. Jobs that need to write (SARIF upload, PR comments,
+# Pages deploy, release push) widen scope with their own job-level permissions.
+permissions:
+  contents: read
+jobs:
+  commit:
+    name: Commit stage
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    outputs:
+      build-artifact: ${{ steps.build-artifact.outputs.artifact-id != '' && format('commit-build-{0}-{1}-{2}', github.sha, github.run_id, github.run_attempt) || '' }}
+      build-artifact-id: ${{ steps.build-artifact.outputs.artifact-id }}
+      passed: ${{ steps.execute.outcome == 'success' && steps.gate.outputs.passed == 'true' && (inputs.artifact == 'none' || steps.build-artifact.outcome == 'success') && 'true' || 'false' }}
+      findings-count: ${{ steps.gate.outputs.findings-count }}
+      findings-by-severity: ${{ steps.gate.outputs.findings-by-severity }}
+      coverage-ratchet: ${{ steps.gate.outputs.coverage-ratchet }}
+      gates: ${{ steps.gate.outputs.gates }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history so the diff step can resolve before..after and HEAD~1.
+          # A shallow clone would leave the range unresolvable → empty diff →
+          # the risk gate falls back to a full-repo audit (safe).
+          fetch-depth: 0
+          # Later module fetches must not inherit caller-repository credentials.
+          # The diff below uses the full local history without fetching.
+          persist-credentials: false
+
+      # ─── Diff scope (before..after) ──────────────────────────────────────
+      # Scopes the intent gate to the files THIS push touches (the commit
+      # composite runs the risk infra scan over the whole tree, InfraScope
+      # "tree"). scripts/commit-diff.sh is the tested single-source-of-truth
+      # for the ADR-005 Option-B range (before..after → HEAD~1..HEAD → empty;
+      # NEVER origin/main...HEAD, which is empty on main after a merge). It
+      # lives in the cicd repo, so a consumer checkout won't have it — fall
+      # back to an identical inline mirror.
+      #
+      # No range (a root commit) or an empty diff passes no --diff, and the log
+      # says the gate audits the whole tree. A range that resolved but could
+      # not be diffed fails the step: an empty file in its place would read as
+      # a push that changed nothing.
+      # specs/a-diff-the-workflow-could-not-compute-is-not-an-empty-diff.md
+      - name: Compute change diff (scopes the intent gate)
+        id: change-diff
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/change.diff"
+          rm -f -- "$out"
+          after="${AFTER:-HEAD}"
+          if [ -f scripts/commit-diff.sh ]; then
+            range=$(bash scripts/commit-diff.sh "$BEFORE" "$after" || true)
+          else
+            # Inline mirror of scripts/commit-diff.sh (Option-B fallback).
+            range=""
+            case "$BEFORE" in
+              ""|*[!0]*)
+                if [ -n "$BEFORE" ] && git rev-parse --verify --quiet "${BEFORE}^{commit}" >/dev/null 2>&1; then
+                  range="${BEFORE}..${after}"
+                elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null 2>&1; then
+                  range="HEAD~1..HEAD"
+                fi
+                ;;
+              *)
+                # all-zeros sentinel (first / force push)
+                if git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null 2>&1; then
+                  range="HEAD~1..HEAD"
+                fi
+                ;;
+            esac
+          fi
+          if [ -z "$range" ]; then
+            echo "Commit diff scope: no base commit resolves, so no diff file is passed and the intent gate audits the whole tree"
+            exit 0
+          fi
+          shown=$(printf '%s' "$range" | tr -c 'A-Za-z0-9._/~^-' '_')
+          if ! git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "$range" -- > "$out"; then
+            rm -f -- "$out"
+            echo "::error title=Change scope unavailable::Could not diff $shown. Without the push's change set the intent gate would audit the whole tree. Check out with fetch-depth: 0."
+            exit 1
+          fi
+          if [ ! -s "$out" ]; then
+            rm -f -- "$out"
+            echo "Commit diff scope: range=$shown, empty diff, so no diff file is passed and the intent gate audits the whole tree"
+            exit 0
+          fi
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+          echo "Commit diff scope: range=$shown, $(grep -c '^+++ ' "$out") changed-file headers"
+
+      # The Dagger engine and its tool images use the runner's root filesystem.
+      # ubuntu-latest also carries several multi-GB SDKs which this job never
+      # executes on the host: every quality/scanner tool runs inside Dagger.
+      # A consumer monorepo demonstrated that leaving those SDKs in place can exhaust the disk
+      # so completely that the Actions worker cannot write its own diagnostic
+      # log. Reclaim only those known, disposable host toolchains, before the
+      # engine exists; pruning Docker while Dagger is live would corrupt the run.
+      - name: Prepare storage for Dagger
+        run: |
+          set -euo pipefail
+          before=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')
+          echo "Runner disk before cleanup:"
+          df -h /
+          for path in \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/share/swift; do
+            if [ -e "$path" ]; then
+              echo "Removing unused host toolchain: $path"
+              sudo rm -rf -- "$path"
+            fi
+          done
+          docker image prune --all --force
+          after=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')
+          echo "Runner disk after cleanup:"
+          df -h /
+          echo "Reclaimed $(( (after - before) / 1024 / 1024 / 1024 )) GiB for Dagger"
+
+      - name: Install Dagger CLI
+        # Inline copy of .github/actions/install-dagger: a reusable workflow
+        # runs in the caller's checkout and cannot `uses:` a local action.
+        # scripts/tests/test_install_dagger.py keeps this body identical.
+        env:
+          VERSION: ${{ env.DAGGER_VERSION }}
+        run: |
+          set -euo pipefail
+          asset="dagger_v${VERSION}_linux_amd64.tar.gz"
+          base="https://dl.dagger.io/dagger/releases/${VERSION}"
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "${tmp}/${asset}" "${base}/${asset}"
+          curl -fsSL --retry 3 -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+          # Keep only the line naming this asset, so a checksums.txt that lists
+          # every platform cannot match on a different file, and a checksums.txt
+          # that omits ours fails here rather than verifying nothing.
+          grep -E "^[0-9a-f]{64}  ${asset}\$" "${tmp}/checksums.txt" > "${tmp}/expected.sum"
+          (cd "$tmp" && sha256sum -c expected.sum)
+          tar -xzf "${tmp}/${asset}" -C "$tmp" dagger
+          install -m 0755 "${tmp}/dagger" "${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger"
+          rm -rf "$tmp"
+          # Prove the binary that landed is the one that will run, and fail the
+          # step if it is not — an install that silently produced nothing would
+          # otherwise surface later as a confusing "dagger: command not found".
+          installed="$("${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger" version)"
+          echo "$installed"
+          case "$installed" in
+            *"v${VERSION} "*) ;;
+            *) echo "installed dagger is not v${VERSION}: ${installed}" >&2; exit 1 ;;
+          esac
+          # Provision the Dagger engine from ghcr.io/dagger/engine (Dagger's
+          # official mirror, on GitHub's network) instead of registry.dagger.io,
+          # whose path from GitHub runners intermittently times out during engine
+          # provisioning (dagger/dagger #7548/#7593). Identical image + digest.
+          # Pre-pull with backoff to warm the cache and fail loud if ghcr is
+          # unreachable; _EXPERIMENTAL_DAGGER_RUNNER_HOST makes the CLI provision
+          # from the ghcr image directly in the dagger steps that follow.
+          engine="ghcr.io/dagger/engine:v${VERSION}"
+          ok=
+          for delay in 0 5 10 15 20 30 45 60; do
+            [ "$delay" = 0 ] || sleep "$delay"
+            if docker pull "$engine"; then ok=1; break; fi
+            echo "engine image pull failed; retrying"
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::Failed to pull $engine after 8 attempts"
+            exit 1
+          fi
+          echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-image://$engine" >> "$GITHUB_ENV"
+
+      # ─── Coverage ratchet baseline (ADR-003, opt-in) ───────────────
+      # Mirrors precommit.yml: the baseline is the previous successful
+      # default-branch run's evidence of the SAME caller workflow, never a file
+      # in the consumer repo. Must never fail the job: no baseline is the
+      # documented fail-open bootstrap, and the next default-branch run seeds
+      # it. Uses the job's existing `actions: read`.
+      - name: Fetch coverage ratchet baseline
+        id: baseline
+        if: inputs.coverage-gate != '' && (inputs.test-cmd != '' || inputs.test-legs != '')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # Outside the workspace so the baseline never leaks into --src .
+          dest="$RUNNER_TEMP/coverage-baseline"
+          mkdir -p "$dest"
+          # The top-level caller's workflow file, also through nested reusable
+          # workflows: owner/repo/.github/workflows/<file>.yml@<ref>.
+          wf_file="${GITHUB_WORKFLOW_REF%%@*}"
+          wf_file="${wf_file##*/}"
+          default_branch=$(gh api "repos/$REPO" --jq '.default_branch' 2>/dev/null) || default_branch=""
+          baseline=""
+          if [ -n "$default_branch" ]; then
+            run_ids=$(gh api "repos/$REPO/actions/workflows/$wf_file/runs?branch=$default_branch&status=success&per_page=10" \
+              --jq '.workflow_runs[].id' 2>/dev/null) || run_ids=""
+            for run_id in $run_ids; do
+              name=$(gh api "repos/$REPO/actions/runs/$run_id/artifacts" \
+                --jq '[.artifacts[] | select((.name | startswith("commit-evidence-")) and (.expired | not))] | sort_by(.created_at) | last | .name // empty' 2>/dev/null) || name=""
+              [ -n "$name" ] || continue
+              if gh run download "$run_id" -R "$REPO" --name "$name" --dir "$dest" 2>/dev/null \
+                && [ -f "$dest/combined-evidence.json" ]; then
+                baseline="$dest/combined-evidence.json"
+                echo "Coverage ratchet baseline: $name (run $run_id on $default_branch)"
+                break
+              fi
+            done
+          fi
+          if [ -z "$baseline" ]; then
+            echo "Coverage ratchet baseline: none found — BOOTSTRAP MODE (fail-open per ADR-003). The next successful default-branch run seeds it."
+          fi
+          echo "file=$baseline" >> "$GITHUB_OUTPUT"
+
+      - name: Run commit composite
+        id: execute
+        env:
+          RATCHET_MODE: ${{ inputs.coverage-gate }}
+          RATCHET_TOLERANCE: ${{ inputs.coverage-tolerance }}
+          RATCHET_BASELINE: ${{ steps.baseline.outputs.file }}
+          TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+          NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
+          NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+          ARTIFACT: ${{ inputs.artifact }}
+          SAST_RULESETS: ${{ inputs.sast-rulesets }}
+          LICENSE_GATE: ${{ inputs.license-gate }}
+          LICENSE_ALLOW: ${{ inputs.license-allow }}
+          LICENSE_EXCLUDE: ${{ inputs.license-exclude }}
+          VULN_ACCEPT: ${{ inputs.vuln-accept }}
+          INCLUDE: ${{ inputs.include }}
+          TEST_CMD: ${{ inputs.test-cmd }}
+          COVERAGE_PATH: ${{ inputs.coverage-path }}
+          TEST_LEGS: ${{ inputs.test-legs }}
+          TOOLCHAIN_IMAGE: ${{ inputs.toolchain-image }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          PLATFORM: ${{ inputs.platform }}
+          NODE_PROJECT_LIMIT: ${{ inputs.node-project-limit }}
+          PARALLELISM: ${{ inputs.parallelism }}
+          PREPARE_CMD: ${{ inputs.prepare-cmd }}
+          PREPARE_LANGUAGE: ${{ inputs.prepare-language }}
+          PREPARE_TEST_LABEL: ${{ inputs.prepare-test-label }}
+          BUILD_CMD: ${{ inputs.build-cmd }}
+          OUTPUT_PATH: ${{ inputs.output-path }}
+          FAIL_ON: ${{ inputs.fail-on }}
+          NPM_FEED_URL: ${{ inputs.npm-feed-url }}
+          NPM_FEED_ROUTING: ${{ inputs.npm-feed-routing }}
+          NUGET_FEED_URL: ${{ inputs.nuget-feed-url }}
+          CHANGE_DIFF_FILE: ${{ steps.change-diff.outputs.file }}
+        run: |
+          # Optional flags are appended only when set — empty flags pollute the
+          # call, and `--sast-rulesets ""` would override the composite default
+          # with no rules (semgrep silently reports zero findings — a false pass).
+          extra=(--parallelism "$PARALLELISM" --node-project-limit "$NODE_PROJECT_LIMIT")
+          [[ -z "$PREPARE_CMD" ]] || extra+=(--prepare-cmd "$PREPARE_CMD")
+          [[ -z "$PREPARE_LANGUAGE" ]] || extra+=(--prepare-language "$PREPARE_LANGUAGE")
+          [[ -z "$PREPARE_TEST_LABEL" ]] || extra+=(--prepare-test-label "$PREPARE_TEST_LABEL")
+          [[ -z "$NPM_FEED_ROUTING" ]] || extra+=(--npm-feed-routing "$NPM_FEED_ROUTING")
+          if [ -n "$SAST_RULESETS" ]; then
+            extra+=(--sast-rulesets "$SAST_RULESETS")
+          fi
+          if [ -n "$INCLUDE" ]; then
+            IFS=',' read -ra _langs <<< "$INCLUDE"
+            for _l in "${_langs[@]}"; do
+              _l="$(echo "$_l" | xargs)"  # trim whitespace
+              [ -n "$_l" ] && extra+=(--include "$_l")
+            done
+          fi
+          if [ -n "$TEST_CMD" ]; then
+            extra+=(--test-cmd "$TEST_CMD")
+          fi
+          if [ -n "$COVERAGE_PATH" ]; then
+            extra+=(--coverage-path "$COVERAGE_PATH")
+          fi
+          # The polyglot form. Both set at once is refused by the module rather
+          # than resolved here: running half of what was asked and reporting on
+          # it is the failure this pipeline exists to prevent.
+          if [ -n "$TEST_LEGS" ]; then
+            extra+=(--test-legs "$TEST_LEGS")
+          fi
+          # Opt-in ratchet. An unknown mode is refused rather than defaulted:
+          # silently gating or silently not gating are both wrong answers.
+          case "$RATCHET_MODE" in
+            "") ;;
+            warn|gate)
+              if [ -n "$TEST_CMD" ] || [ -n "$TEST_LEGS" ]; then
+                extra+=(--coverage-gate "$RATCHET_MODE" --tolerance "$RATCHET_TOLERANCE")
+                # No baseline = bootstrap mode; the module skips the ratchet.
+                if [ -n "$RATCHET_BASELINE" ] && [ -f "$RATCHET_BASELINE" ]; then
+                  extra+=(--baseline "$RATCHET_BASELINE")
+                fi
+              fi
+              ;;
+            *)
+              echo "::error::coverage-gate must be empty, \"warn\" or \"gate\"; got an unsupported value"
+              exit 1
+              ;;
+          esac
+          if [ -n "$TOOLCHAIN_IMAGE" ]; then
+            extra+=(--toolchain-image "$TOOLCHAIN_IMAGE")
+          fi
+          # Container-shape build overrides. Both carry a module default
+          # ("Dockerfile" at the source root, linux/amd64), so the flag is
+          # appended only when the consumer actually chose a value: passing
+          # `--dockerfile ""` would land back on that same default by accident
+          # rather than by contract, because Dagger's generated client drops an
+          # optional argument holding its zero value. Harmlessly ignored for the
+          # archive/none shapes, which build no image.
+          if [ -n "$DOCKERFILE" ]; then
+            extra+=(--dockerfile "$DOCKERFILE")
+          fi
+          if [ -n "$PLATFORM" ]; then
+            extra+=(--platform "$PLATFORM")
+          fi
+          # Archive-shape build inputs. The composite errors if artifact=archive
+          # and either is empty; harmlessly ignored for the container/none shapes.
+          if [ -n "$BUILD_CMD" ]; then
+            extra+=(--build-cmd "$BUILD_CMD")
+          fi
+          if [ -n "$OUTPUT_PATH" ]; then
+            extra+=(--output-path "$OUTPUT_PATH")
+          fi
+          # Licence policy. Unconditional, unlike the coverage flags: the licence
+          # leg reads the dependency manifests, so it has something to say on
+          # every repo whether or not the consumer brought a test command.
+          #
+          # Surrounding whitespace is trimmed with parameter expansion rather
+          # than `xargs`, which also interprets quotes and backslashes: a
+          # licence name may legally contain an apostrophe, and xargs answers an
+          # unmatched quote by failing the whole step rather than by trimming.
+          _trim() {
+            local _s="$1"
+            _s="${_s#"${_s%%[![:space:]]*}"}"
+            _s="${_s%"${_s##*[![:space:]]}"}"
+            printf '%s' "$_s"
+          }
+          if [ -n "$LICENSE_GATE" ]; then
+            extra+=(--license-gate "$LICENSE_GATE")
+          fi
+          if [ -n "$LICENSE_ALLOW" ]; then
+            # One flag per entry, like --include: relying on the CLI to split a
+            # comma-separated value would make the policy depend on argument
+            # parsing we do not own. The module rejects an entry that is neither
+            # a category nor an acceptably shaped licence name, so a typo fails
+            # the run instead of narrowing the allowlist. Case is NOT folded
+            # here: an entry may be an SPDX identifier, where case is part of
+            # the name, and the module folds it for matching itself.
+            _lc=0
+            IFS=',' read -ra _cats <<< "$LICENSE_ALLOW"
+            for _c in "${_cats[@]}"; do
+              _c="$(_trim "$_c")"  # trim only; case is the module's business
+              [ -n "$_c" ] || continue
+              extra+=(--license-allow "$_c")
+              _lc=$((_lc + 1))
+            done
+            # A non-empty input that yields no flag would fall back to the
+            # default allowlist — a different policy than the one the consumer
+            # asked for, chosen silently. Say so instead.
+            if [ "$_lc" -eq 0 ]; then
+              echo "::error::license-allow was set but names no category or licence; remove the input to use the default policy."
+              exit 1
+            fi
+          fi
+          if [ -n "$LICENSE_EXCLUDE" ]; then
+            # One flag per pattern, same reasoning as --license-allow. A pattern
+            # can contain no comma, so splitting here is lossless; the module
+            # rejects an absolute pattern or one containing "..", so a mistake
+            # fails the run rather than excluding nothing.
+            _lx=0
+            IFS=',' read -ra _pats <<< "$LICENSE_EXCLUDE"
+            for _p in "${_pats[@]}"; do
+              _p="$(_trim "$_p")"  # trim; case is significant in a path
+              [ -n "$_p" ] || continue
+              extra+=(--license-exclude "$_p")
+              _lx=$((_lx + 1))
+            done
+            # A non-empty input that yields no flag would scan the whole tree —
+            # not what was asked for, and indistinguishable afterwards from an
+            # exclusion that matched nothing.
+            if [ "$_lx" -eq 0 ]; then
+              echo "::error::license-exclude was set but names no pattern; remove the input to scan the whole tree."
+              exit 1
+            fi
+          fi
+          if [ -n "$VULN_ACCEPT" ]; then
+            # ONE flag carrying every acceptance, newline-separated, split in Go
+            # (src/security/vulnallow.go). The splitting cannot happen here, and
+            # the first version of this block did exactly that and failed: Dagger
+            # exposes a []string parameter as a pflag StringSlice, which CSV-parses
+            # every value it is handed. One --vuln-accept per line therefore
+            # arrived as one acceptance per COMMA — a reason cut at its first
+            # comma still reads as though a decision was recorded — and a value
+            # holding a newline was truncated at it with no error at all. A
+            # String parameter round-trips commas and newlines byte for byte.
+            #
+            # No count check here either: a value that holds no acceptance is
+            # refused by the module, which names the value and says what the
+            # form is, rather than this file guessing at it.
+            extra+=(--vuln-accept "$VULN_ACCEPT")
+          fi
+          # Keep enough space for the Actions worker to write its own logs and
+          # for the later evidence-upload steps to run. Without this guard a
+          # consumer can fill the filesystem inside Dagger and GitHub loses the
+          # very trace needed to diagnose the non-run.
+          run_with_disk_guard() {
+            local reserve_kib=$((4 * 1024 * 1024))
+            local exhausted="$RUNNER_TEMP/cicd-disk-reserve-exhausted"
+            local usage="$RUNNER_TEMP/cicd-disk-usage.log"
+            rm -f "$exhausted" "$usage"
+
+            "$@" &
+            local command_pid=$!
+            (
+              local sample=0
+              while kill -0 "$command_pid" 2>/dev/null; do
+                local available_kib
+                available_kib=$(df --output=avail -k / | tail -n 1 | tr -d ' ')
+                if [ $((sample % 6)) -eq 0 ]; then
+                  printf '%s available_kib=%s\n' "$(date -u +%FT%TZ)" "$available_kib" | tee -a "$usage"
+                fi
+                if [ "$available_kib" -lt "$reserve_kib" ]; then
+                  printf '%s reserve_exhausted available_kib=%s reserve_kib=%s\n' \
+                    "$(date -u +%FT%TZ)" "$available_kib" "$reserve_kib" | tee -a "$usage"
+                  touch "$exhausted"
+                  kill -TERM "$command_pid" 2>/dev/null || true
+                  break
+                fi
+                sample=$((sample + 1))
+                sleep 5
+              done
+            ) &
+            local monitor_pid=$!
+
+            set +e
+            wait "$command_pid"
+            local status=$?
+            set -e
+            kill "$monitor_pid" 2>/dev/null || true
+            wait "$monitor_pid" 2>/dev/null || true
+
+            echo "Runner disk after Dagger:"
+            df -h /
+            if [ -f "$exhausted" ]; then
+              echo "::error::Dagger reached the 4 GiB runner-disk reserve and was stopped before the Actions worker lost its logs."
+              docker system df || true
+              return 1
+            fi
+            return "$status"
+          }
+
+          # --progress=plain so module warnings (partial DT config, SBOM upload
+          # skipped) reach the job log — default non-TTY progress hides stderr.
+          # Only pass a webhook that exists. A secret this repository never
+          # defines still arrives at the composite as a non-nil, empty Secret
+          # under `secrets: inherit`, and cicd used to POST a card to "" on
+          # every run of every repository that had not set Teams up — reporting
+          # success and writing `unsupported protocol scheme ""` into a log
+          # nobody reads. dast.yml has always carried this guard; commit and
+          # precommit drifted without it. See src/notify/teamsdelivery.go.
+          if [ -n "${TEAMS_WEBHOOK:-}" ]; then extra+=(--teams-webhook env:TEAMS_WEBHOOK); fi
+          # Only pass a diff that holds a change set. The change-diff step sets
+          # the file only then, and fails a pull request it could not scope;
+          # an empty --diff used to stand in for both "nothing to scope" and
+          # "could not compute", and the gates cannot tell those apart.
+          if [ -n "${CHANGE_DIFF_FILE:-}" ]; then extra+=(--diff "$CHANGE_DIFF_FILE"); fi
+
+          # Never merge a fresh export with an earlier candidate or verdict.
+          rm -rf -- ./audit-evidence
+          run_with_disk_guard dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.2 call run \
+            --src . \
+            --artifact "$ARTIFACT" \
+            --fail-on "$FAIL_ON" \
+            --commit-sha "${GITHUB_SHA}" \
+            --branch "${GITHUB_REF_NAME}" \
+            --repo-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --npm-feed-url "$NPM_FEED_URL" \
+            --npm-token env:NPM_FEED_TOKEN \
+            --nuget-feed-url "$NUGET_FEED_URL" \
+            --nuget-token env:NUGET_FEED_TOKEN \
+            "${extra[@]}" \
+            export --path ./audit-evidence
+
+      - name: Upload runner disk timeline
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: commit-runner-disk-${{ github.sha }}
+          path: ${{ runner.temp }}/cicd-disk-usage.log
+          retention-days: 14
+
+      - name: Probe Code Scanning availability
+        id: code-scanning
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A SARIF upload GitHub refuses must not read as a repo with nothing
+          # to report — but a repo without Advanced Security legitimately cannot
+          # receive one. The old continue-on-error silenced both cases, so a
+          # real rejection (e.g. two runs sharing a (tool, category) identity,
+          # refused since 2025-07-22) silently cost the consumer their Code
+          # Scanning coverage. Ask which case this is: 403 is "Advanced
+          # Security not enabled" (skip, with a notice), 200/404 mean the API
+          # is there (upload, and a rejection fails the job). Anything else is
+          # a third answer, not a pass.
+          code=$(curl -sS -o "$RUNNER_TEMP/code-scanning-probe.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/code-scanning/analyses?per_page=1")
+          case "$code" in
+            200|404) echo "enabled=true" >> "$GITHUB_OUTPUT" ;;
+            403)
+              echo "::notice::Code Scanning is not available on this repository (GitHub Advanced Security not enabled) — skipping SARIF upload. Findings remain in the job summary and evidence artifact."
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Code Scanning availability probe returned HTTP $code"
+              cat "$RUNNER_TEMP/code-scanning-probe.json"
+              exit 1
+              ;;
+          esac
+
+      - name: Upload SARIF to Code Scanning
+        if: always() && steps.code-scanning.outputs.enabled == 'true'
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          sarif_file: ./audit-evidence/findings.sarif
+          category: cicd-commit
+
+      - name: Publish job summary
+        if: always()
+        run: cat ./audit-evidence/comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: commit-evidence-${{ github.sha }}
+          path: |
+            ./audit-evidence/
+            !./audit-evidence/artifacts/**
+          retention-days: 90
+
+      # The commit composite is a producer: it always emits combined-evidence.json
+      # with .passed reflecting the fail-on threshold (NONE suppresses findings,
+      # HIGH fails on HIGH+ findings, etc.). NONE does NOT suppress a step that
+      # could not run, so passed=false with zero findings is reachable on every
+      # threshold and errors[] is the only thing that explains it — which is why
+      # the gate below prints errors[] as well as findings. The composite itself
+      # does not exit non-zero on a gate trip — that turns CI red here, AFTER
+      # SARIF / artifact are already published so consumers still get the
+      # diagnostics.
+      - name: Gate on evidence
+        id: gate
+        if: always()
+        run: |
+          set -euo pipefail
+          # Pessimistic defaults first: both exit-1 paths below leave outputs
+          # already written, so a caller never reads an empty string where a
+          # verdict belongs. Later writes of the same name win — GITHUB_OUTPUT
+          # keeps the last value per key. Explicit `name=` echoes rather than a
+          # helper function, because check_workflow_output_chain verifies each
+          # declared output by finding its literal `name=` write in this body,
+          # and a helper call would hide the name it cannot typo-check.
+          {
+            echo "passed=false"
+            echo "findings-count="
+            echo "findings-by-severity="
+            echo "coverage-ratchet="
+            echo "gates="
+          } >> "$GITHUB_OUTPUT"
+          if [ ! -f ./audit-evidence/combined-evidence.json ]; then
+            echo "::error::combined-evidence.json missing — composite step failed before producing evidence"
+            exit 1
+          fi
+          # Plain assignment on purpose: under set -e a jq that cannot parse
+          # the file exits here, before any real value is written, so the
+          # pessimistic defaults above are what the caller reads.
+          passed=$(jq -r '.passed' ./audit-evidence/combined-evidence.json)
+          {
+            echo "passed=$passed"
+            echo "findings-count=$(jq -r '.findingsCount // 0' ./audit-evidence/combined-evidence.json)"
+            echo "findings-by-severity=$(jq -c '.findingsBySeverity // {}' ./audit-evidence/combined-evidence.json)"
+            echo "coverage-ratchet=$(jq -r '.coverageRatchet // ""' ./audit-evidence/combined-evidence.json)"
+            echo "gates=$(jq -c '.sources // []' ./audit-evidence/combined-evidence.json)"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$passed" != "true" ]; then
+            total=$(jq '(.findings // []) | length' ./audit-evidence/combined-evidence.json)
+            if [ "$total" -gt 0 ]; then
+              echo "::group::Findings ($total)"
+              jq -r '(.findings // [])[:25][] | "[" + (.severity // "?") + "] " + (.tool // "") + (if (.rule // "") != "" then "/" + .rule else "" end) + ": " + (.message // "") + (if (.artifactPath // "") != "" then " (" + .artifactPath + ")" else "" end)' \
+                ./audit-evidence/combined-evidence.json \
+                | while IFS= read -r line; do echo "::error::$line"; done
+              if [ "$total" -gt 25 ]; then
+                echo "::error::… +$((total - 25)) more — see the evidence artifact (combined-evidence.json)"
+              fi
+              echo "::endgroup::"
+            fi
+            errcount=$(jq '(.errors // []) | length' ./audit-evidence/combined-evidence.json)
+            if [ "$errcount" -gt 0 ]; then
+              # A step that could not run leaves no finding — only an errors[]
+              # entry. Print them or a non-run gate trip is unexplainable.
+              echo "::group::Errors ($errcount)"
+              jq -r '(.errors // [])[]' ./audit-evidence/combined-evidence.json \
+                | while IFS= read -r line; do echo "::error::$line"; done
+              echo "::endgroup::"
+            fi
+            echo "::error::commit gate tripped — see the annotations above or the job summary for findings"
+            exit 1
+          fi
+          echo "commit gate: passed"
+
+      - name: Upload deployable candidate
+        id: build-artifact
+        if: success() && steps.gate.outputs.passed == 'true' && inputs.artifact != 'none'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: commit-build-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ./audit-evidence/artifacts/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Optional: publish a GitHub Pages evidence dashboard.
+  # Requires the calling repo to have GitHub Pages enabled (Settings → Pages →
+  # Source: GitHub Actions) and the deploy-pages input set to true.
+  # Fails gracefully if Pages is not configured.
+  # ──────────────────────────────────────────────────────────────────────────
+
+  pages:
+    name: Publish evidence page
+    runs-on: ubuntu-latest
+    needs: commit
+    if: inputs.deploy-pages == true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Check GitHub Pages is enabled
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages")
+          if [ "$status" != "200" ]; then
+            echo "::notice::GitHub Pages not enabled on this repository — skipping evidence deploy. Enable it at Settings → Pages → Source: GitHub Actions."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Dagger CLI
+        if: steps.preflight.outputs.skip != 'true'
+        # Inline copy of .github/actions/install-dagger: a reusable workflow
+        # runs in the caller's checkout and cannot `uses:` a local action.
+        # scripts/tests/test_install_dagger.py keeps this body identical.
+        env:
+          VERSION: ${{ env.DAGGER_VERSION }}
+        run: |
+          set -euo pipefail
+          asset="dagger_v${VERSION}_linux_amd64.tar.gz"
+          base="https://dl.dagger.io/dagger/releases/${VERSION}"
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "${tmp}/${asset}" "${base}/${asset}"
+          curl -fsSL --retry 3 -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+          # Keep only the line naming this asset, so a checksums.txt that lists
+          # every platform cannot match on a different file, and a checksums.txt
+          # that omits ours fails here rather than verifying nothing.
+          grep -E "^[0-9a-f]{64}  ${asset}\$" "${tmp}/checksums.txt" > "${tmp}/expected.sum"
+          (cd "$tmp" && sha256sum -c expected.sum)
+          tar -xzf "${tmp}/${asset}" -C "$tmp" dagger
+          install -m 0755 "${tmp}/dagger" "${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger"
+          rm -rf "$tmp"
+          # Prove the binary that landed is the one that will run, and fail the
+          # step if it is not — an install that silently produced nothing would
+          # otherwise surface later as a confusing "dagger: command not found".
+          installed="$("${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger" version)"
+          echo "$installed"
+          case "$installed" in
+            *"v${VERSION} "*) ;;
+            *) echo "installed dagger is not v${VERSION}: ${installed}" >&2; exit 1 ;;
+          esac
+          # Provision the Dagger engine from ghcr.io/dagger/engine (Dagger's
+          # official mirror, on GitHub's network) instead of registry.dagger.io,
+          # whose path from GitHub runners intermittently times out during engine
+          # provisioning (dagger/dagger #7548/#7593). Identical image + digest.
+          # Pre-pull with backoff to warm the cache and fail loud if ghcr is
+          # unreachable; _EXPERIMENTAL_DAGGER_RUNNER_HOST makes the CLI provision
+          # from the ghcr image directly in the dagger steps that follow.
+          engine="ghcr.io/dagger/engine:v${VERSION}"
+          ok=
+          for delay in 0 5 10 15 20 30 45 60; do
+            [ "$delay" = 0 ] || sleep "$delay"
+            if docker pull "$engine"; then ok=1; break; fi
+            echo "engine image pull failed; retrying"
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::Failed to pull $engine after 8 attempts"
+            exit 1
+          fi
+          echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-image://$engine" >> "$GITHUB_ENV"
+
+      - name: Download commit evidence
+        if: steps.preflight.outputs.skip != 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: commit-evidence-${{ github.sha }}
+          path: ./audit-evidence
+
+      - name: Generate evidence page
+        if: steps.preflight.outputs.skip != 'true'
+        run: |
+          dagger -m github.com/context-and-oss/cicd/src/cross-cutting/pages@v5.1.2 call build \
+            --evidence ./audit-evidence/combined-evidence.json \
+            export --path ./pages-dist
+
+      - name: Upload Pages artifact
+        if: steps.preflight.outputs.skip != 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: ./pages-dist
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        if: steps.preflight.outputs.skip != 'true'
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

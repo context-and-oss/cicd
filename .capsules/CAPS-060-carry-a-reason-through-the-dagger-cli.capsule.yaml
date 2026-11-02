@@ -1,0 +1,106 @@
+kind: change-capsule
+schema: 1
+id: CAPS-060
+status: sealed
+intent: >
+  CAPS-059 built --vuln-accept "<id>=<reason>" and shipped it as a []string
+  parameter. The dogfood run it was built for then failed on its own reason:
+  two flags carrying two prose reasons arrived as seven acceptances, cut at
+  every comma, and the run died on "names no reason". Dagger exposes a
+  []string parameter as a pflag StringSlice, which CSV-parses every value it is
+  handed — and truncates a value containing a newline at the newline with no
+  error at all.
+
+  This changes vulnAccept to a single String across security, stage-2,
+  stage-4 and both composites. The whole multi-line value is passed as one
+  flag and splitVulnAcceptances cuts it on newlines in Go, where the rule is
+  written down and tested. The per-line loops in the two reusable workflows
+  and the four Azure DevOps templates are deleted; so are their count checks,
+  because a value that holds no acceptance is now refused by the module, which
+  quotes the value and states the form.
+
+  The measurement is in the spec: a probe module exposing both parameter
+  shapes, driven by the real CLI at v0.20.8. One []string flag with a
+  two-comma reason arrives as three elements; repeating the flag splits each
+  occurrence again; and a newline silently loses everything after it. A String
+  round-trips commas and newlines byte for byte.
+impact:
+  visibility: consumer
+  benefit: >
+    A reason can be a sentence again. An acceptance written the way the
+    documentation shows reaches the module intact, and the dogfood gate runs
+    at --fail-on MEDIUM over its two disclosed otel acceptances instead of
+    dying on a fragment of its own prose.
+  compatibility: breaking
+  risk:
+    - >
+      Breaking for anyone who already passes vulnAccept as a list — repeated
+      --vuln-accept flags now set the parameter rather than appending to it,
+      and a direct module call typed against the old signature will not
+      compile. The flag shipped in v4.0.0 and was unusable in that release for
+      any reason containing a comma, so the population is whoever adopted it
+      in the days between; the breakage is a Dagger type error, not a silent
+      reinterpretation.
+    - >
+      A reason cannot wrap. The newline is the separator, so a reason
+      continued on the next line becomes a second acceptance and is refused
+      for naming no identifier. A continuation rule was rejected rather than
+      overlooked (see d02) and the consumer documentation states the limit
+      beside the example that respects it.
+    - >
+      cicd now relies on one splitter instead of six surfaces doing the same
+      thing. That is the point, and it also means a defect in
+      splitVulnAcceptances reaches every caller at once. It is untagged Go
+      with tests covering blank lines, indentation, a whitespace-only value
+      and a comma-bearing reason.
+decisions:
+  - id: d01
+    choice: make vulnAccept one String and split on newlines in Go
+    options:
+      - keep []string and CSV-quote each element so the parser preserves it
+        (rejected)
+      - keep []string and forbid commas in a reason (rejected)
+      - one String parameter, split in the module (chosen)
+    because: >
+      Quoting works — a pflag StringSlice element written "CVE-1=alpha, beta"
+      does survive — which is its worst property: the broken shape passes a
+      test and fails on the first consumer who does not know the trick, and it
+      does nothing about the silent newline truncation. Forbidding commas
+      guts the mechanism, whose entire value is a sentence a human wrote. A
+      String parameter is the only shape measured to carry the value intact,
+      and it moves the separator rule into one tested function instead of six
+      shell loops.
+    confidence: high
+  - id: d02
+    choice: refuse a wrapped reason rather than support continuation lines
+    options:
+      - treat a line that does not parse as a continuation of the reason above
+        (rejected)
+      - one acceptance per line, a reason is one line (chosen)
+    because: >
+      A continuation rule swallows an unparseable line into the reason above
+      it, which silences "--vuln-accept ... names no reason" — the loudest
+      refusal this mechanism has — exactly on the malformed input the refusal
+      exists for. The price is a long single line, which a YAML literal block
+      writes comfortably, and the consumer documentation says so beside an
+      example that does not wrap.
+    confidence: high
+  - id: d03
+    choice: refuse a value that is set and holds no acceptance, in the module
+    options:
+      - keep the count check in each workflow and template (rejected)
+      - treat a whitespace-only value as an unset flag (rejected)
+      - one refusal in newVulnAccepter, quoting the value (chosen)
+    because: >
+      Six copies of a check is six places for it to drift, and the shell
+      version could only say "names no acceptance" without quoting what it
+      read. Treating it as unset is the founding failure: the caller wrote
+      something, every acceptance in it went missing, and reporting that as
+      "none asked for" is the one reading indistinguishable from the truth.
+      An unset flag stays an ordinary empty accepter — every finding gates.
+    confidence: high
+tags:
+  - security
+  - evidence
+  - dagger
+  - developer-experience

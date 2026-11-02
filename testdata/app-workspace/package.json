@@ -1,0 +1,7 @@
+{
+  "name": "app-workspace-fixture",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "devDependencies": { "eslint": "9.39.5" }
+}

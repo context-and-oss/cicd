@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The project half of the platform-runner opt-in. global.json's
+         "test": {"runner": …} selects the CLI; this makes the test application a
+         self-hosted executable rather than a VSTest adapter host. Both are
+         required, and neither is inferable from the other — which is why cicd
+         reads the CLI selector from global.json and never from a project
+         property (see specs/detect-the-dotnet-test-runner.md).
+
+         Note what this file deliberately does NOT contain: the literal runner
+         name, no adapter, and no VSTest test-SDK reference either. cicd
+         must discover this as a test project from the MSTest meta-package below
+         and from nothing else. It previously matched on the runner name
+         appearing in this very comment, which proved nothing about detection. -->
+    <EnableMSTestRunner>true</EnableMSTestRunner>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- MSTest 4 supplies the trx report and code-coverage extensions
+         transitively, which is what makes cicd's trx and cobertura coverage
+         flags an acceptable command line. A bare xunit v3 project supplies
+         neither and the run dies with exit 5 —
+         measured, and reported as a non-run rather than a clean pass. -->
+    <PackageReference Include="MSTest" Version="4.0.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../dotnet-mtp-app.csproj" />
+  </ItemGroup>
+</Project>

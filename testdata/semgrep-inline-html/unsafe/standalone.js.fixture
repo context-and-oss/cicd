@@ -1,0 +1,2 @@
+const message = document.getElementById('input').innerText;
+document.getElementById('output').insertAdjacentHTML('beforeend', message);

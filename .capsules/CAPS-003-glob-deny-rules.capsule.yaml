@@ -1,0 +1,44 @@
+kind: change-capsule
+schema: 1
+id: CAPS-003
+status: sealed
+intent: >
+  Remove nine Glob(...) deny rules from .claude/settings.json because
+  Claude Code never consults them. File access is checked against
+  Read(path) and Edit(path) rules only; a Glob(path) rule is accepted,
+  warned about at startup, and then ignored. Each of the nine duplicated
+  a Read(...) rule already present in the same deny list, so deleting
+  them removes noise rather than coverage.
+impact:
+  visibility: internal
+  benefit: >
+    Clears nine startup warnings that fired for every developer who opened
+    this repository, since the settings file is checked in rather than
+    kept local. Warnings nobody can act on train a reader to skip startup
+    output, which is the same place a real permission misconfiguration
+    would announce itself.
+  compatibility: unchanged
+  risk:
+    - No loss of permission coverage, because each deleted rule had an
+      identical Read(...) twin in the same list. The risk is a future
+      reader assuming Glob rules work — anyone excluding a path from Glob
+      or Grep must express it as Read(...), instead of reintroducing a
+      Glob(...) entry that does nothing.
+decisions:
+  - id: d01
+    choice: delete the Glob rules rather than rewrite them as Read rules
+    options:
+      - rewrite each Glob(...) as Read(...) (rejected)
+      - keep them and suppress the warning (rejected)
+      - delete them (chosen)
+    because: >
+      Every Glob(...) pattern already existed verbatim as a Read(...)
+      rule three lines above it, so rewriting each one would have
+      produced duplicate entries rather than new coverage. The startup
+      warning is emitted by Claude Code itself and cannot be switched off
+      from a settings file, so leaving the rules in place would keep the
+      noise for as long as the file exists.
+    confidence: high
+tags:
+  - claude-code
+  - permissions

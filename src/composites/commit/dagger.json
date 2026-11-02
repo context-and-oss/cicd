@@ -1,0 +1,38 @@
+{
+  "name": "commit",
+  "engineVersion": "v0.20.8",
+  "sdk": {
+    "source": "go"
+  },
+  "dependencies": [
+    {
+      "name": "quality",
+      "source": "../../quality"
+    },
+    {
+      "name": "risk",
+      "source": "../../risk"
+    },
+    {
+      "name": "stage-2",
+      "source": "../../stage-2"
+    },
+    {
+      "name": "build",
+      "source": "../../build"
+    },
+    {
+      "name": "security",
+      "source": "../../security"
+    },
+    {
+      "name": "evidence",
+      "source": "../../cross-cutting/evidence"
+    },
+    {
+      "name": "notify",
+      "source": "../../notify"
+    }
+  ],
+  "disableDefaultFunctionCaching": true
+}

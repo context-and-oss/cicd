@@ -1,0 +1,195 @@
+kind: change-capsule
+schema: 1
+id: CAPS-009
+status: sealed
+intent: >
+  Reconcile the dependency ecosystems a scanned tree declares against the
+  ones Trivy actually resolved a dependency graph from, and report a
+  declared-but-unresolved ecosystem as a non-run for that ecosystem. Trivy
+  reads .NET dependencies only from packages.lock.json, packages.config or a
+  deps.json, and NuGet writes none of those unless a project opts in, so a
+  repository of twenty csproj files scans as zero vulnerabilities with an
+  SBOM holding no .NET components at all. That is byte-identical to a
+  genuinely clean .NET repository. It is this module's founding doctrine
+  failing inside its own scanner, arriving through a missing input rather
+  than a missing flag or a crashed binary, and nothing goes wrong on the way
+  through - Trivy exits 0 and writes a valid report.
+impact:
+  visibility: consumer
+  benefit: >
+    A consumer whose C# supply chain was never examined now learns so in
+    errors[], with the marker files that were found, the filenames that
+    would count as a resolvable input, and the command that produces one.
+    Before this, the same repository received a green dependency verdict and
+    a structurally valid SBOM that simply omitted the ecosystem. The hole
+    hides best in the repositories most worth scanning - on a pure .NET tree
+    parseTrivyNative already errors, so it takes a mixed repo, where another
+    ecosystem resolves and makes every consumer-facing signal agree.
+  compatibility: >
+    Behaviour change for consumers, not a signature change. No parameter is
+    added and no contract moves. A repository that declares an ecosystem
+    with no committed lockfile changes from passed=true to passed=false at
+    every threshold including fail-on NONE, because only severityOK is
+    gated. That is the intended trade-off and the same one quality.Check
+    already makes for a JS repo with no ESLint config.
+  risk:
+    - >
+      The inverse false alarm is the real danger and is treated as such. A
+      genuinely dependency-free project exists, and a check that fails it
+      gets switched off within a week - at which point the original hole is
+      back with a config flag in front of it. So the accusation is built on
+      the resolvable input being absent, which is directly observable, and
+      never on the report being empty, which is the one signal that cannot
+      tell the two states apart. Trivy having resolved packages can only
+      clear an ecosystem, never accuse one.
+    - >
+      Presence is checked tree-wide rather than per project, so one lockfile
+      among twenty projects clears .NET entirely. Pairing each project with
+      a lockfile in its own directory needs a model of solution layout,
+      Directory.Packages.props and multi-targeting that cicd does not have,
+      and would false-alarm on valid repositories. A unit test pins the
+      coarse behaviour so changing it has to be deliberate.
+    - >
+      Presence is not proof Trivy parsed the file. A malformed or
+      unsupported-schema lockfile clears the check while resolving nothing.
+    - >
+      A consumer trivy.yaml skip-dirs narrows Trivy but not the probe, so
+      markers in a skipped directory can raise an alarm about dependencies
+      Trivy was told to ignore. The aligned way to narrow scope is
+      ScanSource's exclude parameter, which acts before both. This
+      repository would have been the first false alarm - its own trivy.yaml
+      skips testdata, whose dotnet-app fixture had csproj files and no
+      lockfile - which is why that fixture now commits real lock files.
+    - >
+      The ecosystem to Trivy Type map is version-coupled, the same
+      maintenance shape trivyPinnedFlags already carries. A new lockfile
+      format missing from the inputs list produces a loud false alarm; a
+      renamed Type only weakens the exculpating check, which cannot accuse
+      on its own.
+decisions:
+  - id: d01
+    choice: fix the class, not only the .NET instance that exposed it
+    options:
+      - special-case .NET only (rejected)
+      - a table covering every ecosystem with the same structural gap (chosen)
+      - defer until a second ecosystem is reported (rejected)
+    because: >
+      The hazard is structural, not .NET-specific - any ecosystem whose
+      dependency declaration is not itself a file Trivy can resolve has it.
+      Node has it whenever a lockfile is gitignored, and Python has it for
+      every pyproject-plus-lock tool, since poetry, uv, pdm and pipenv all
+      declare in one file and lock in another. Go is the one exception and
+      is structurally immune, because go.mod is both the marker and the file
+      Trivy's gomod analyser reads; it is listed in the table anyway, with a
+      test, so the immunity is a stated property rather than an omission
+      somebody later reads as an oversight. A table costs barely more than
+      the .NET special case would have, and the narrow fix would have left
+      two known holes open behind a fix that reads as complete - which is
+      the same shape of false reassurance as the defect itself.
+    confidence: high
+  - id: d02
+    choice: accuse on the absent resolvable input, exculpate on Trivy's output
+    options:
+      - report when Trivy contributed zero components for a detected language (rejected)
+      - report when no resolvable input file exists in the tree (chosen)
+      - synthesise the missing lockfile by running a restore (rejected)
+    because: >
+      Inferring from the empty output cannot distinguish a project cicd
+      could not read from a project with nothing to read, which is the exact
+      confusion the change exists to remove - it would trade a false pass
+      for a false alarm rather than fix anything. Presence of the lockfile
+      is directly observable. Trivy's own output is kept as a third,
+      exculpating-only condition, so a vendored node_modules tree that
+      Trivy's node-pkg analyser resolves with no lockfile on disk still
+      passes. Synthesising the lockfile was rejected on a different ground:
+      a restore executes the consumer's dependency resolution inside cicd's
+      pipeline, needs registry credentials, pulls a 900 MB SDK, and reports
+      a graph nobody reviewed - a scan of a tree that does not exist in the
+      repository.
+    confidence: high
+  - id: d03
+    choice: probe with find in a pinned alpine, classified in Go
+    options:
+      - reuse src/internal/detect (rejected)
+      - Dagger Directory.Glob (rejected)
+      - find in the trivy image (rejected)
+      - find in a pinned alpine, exit status and stderr captured (chosen)
+    because: >
+      src/internal/detect takes an fs.FS, which a dagger.Directory is not,
+      and it belongs to another lane. Directory.Glob's recursive-pattern
+      semantics on the pinned engine were not something to guess at inside
+      a gate. Running the probe in the trivy image was rejected because the
+      probe's entire job is to check Trivy's silence against an independent
+      reading of the tree, and a probe sharing the suspect's container
+      shares its failure modes. The shell body captures find's exit status,
+      stdout and stderr to files and classifies them in Go, rather than the
+      2>/dev/null and trailing true that quality's marker probe uses: a
+      probe that could not walk the tree leaves which ecosystems are here
+      unknown, and unknown must fail the gate. Importing this module's
+      founding false pass through the checker's own error handling would be
+      the joke writing itself. There is also no maxdepth, because a depth
+      limit shallower than Trivy's own walk would manufacture the alarm by
+      missing a lockfile Trivy did read.
+    confidence: high
+  - id: d04
+    choice: return the populated result alongside the reconciliation error
+    options:
+      - return an empty result with the error (rejected)
+      - add a separate warnings-only field (rejected)
+      - return the populated result plus a non-nil error (chosen)
+    because: >
+      This is the shape runGitleaks already uses for a failed history leg.
+      The vulnerabilities Trivy did find in the ecosystems it could read are
+      real and actionable, and discarding them to report that a different
+      ecosystem was unreadable trades a located finding for a message. A
+      warnings-only field was rejected outright: a warning does not fail a
+      gate, so it would leave the false pass exactly where it was, just
+      with a paper trail. Because main.go and archive.go already fold a leg
+      error into errors[] while carrying the result independently, both
+      ScanSource and ScanArchive get this without a change to either.
+    confidence: high
+  - id: d05
+    choice: no opt-out parameter
+    options:
+      - add an allow-unresolved-ecosystems flag (rejected)
+      - no flag (chosen)
+    because: >
+      An opt-in gate that is off produces exactly what a gate that passed
+      produces, so a flag here would need the whole "a gate that is
+      switched off must say so" apparatus - a negative parameter name, a
+      not-required marker in the envelope and a warning notify renders - to
+      avoid reintroducing the defect through configuration. The precedent
+      is quality's ESLint-missing case, which fails rather than passing on a
+      lint that never happened. Consumers who need to narrow scope have
+      exclude, which removes the directory before both Trivy and the probe
+      and so keeps the two in agreement.
+    confidence: medium
+  - id: d06
+    choice: give the dotnet fixture real generated lock files
+    options:
+      - hand-write a packages.lock.json (rejected)
+      - add a packages.config (rejected)
+      - generate real lock files with dotnet restore --use-lock-file (chosen)
+    because: >
+      This repository's own trivy.yaml skips testdata while the probe does
+      not, so testdata/dotnet-app - csproj files with no lock file - would
+      have been the change's first false alarm, and dogfood-precommit hard
+      fails on passed != true. A hand-written lock file was rejected on
+      measured grounds: NuGet's consistency check compares direct
+      dependencies only, so a file with matching direct entries and wrong
+      content hashes passes that check and then fails restore with NU1403,
+      breaking src/quality's .NET legs instead. packages.config would be
+      parsed by Trivy but is legacy metadata an SDK-style project ignores,
+      which proves nothing about the path a real consumer is on. The
+      generated files are real, and they finally make the fixture's own
+      "intentionally old version with known CVE" comment true - NuGet
+      itself reports NU1903 on Newtonsoft.Json 9.0.1 while writing them.
+      Restoring the fixture again does not rewrite either file, and no
+      locked-mode restore exists anywhere in the repository, so a future
+      SDK that resolves differently regenerates rather than fails.
+    confidence: high
+tags:
+  - security
+  - trivy
+  - dotnet
+  - false-pass

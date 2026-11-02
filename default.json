@@ -1,0 +1,54 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Shared Renovate preset for context-and-oss/cicd consumers.",
+    "",
+    "Three pin shapes — use whichever matches how your repo calls the pipeline:",
+    "",
+    "  1. GitHub Actions reusable-workflow ref  ← simplest, GitHub CI only",
+    "       uses: context-and-oss/cicd/.github/workflows/precommit.yml@vX.Y.Z",
+    "     Tracked automatically by Renovate's built-in github-actions manager.",
+    "     Use this when you want the full pre-wired pipeline with zero Dagger knowledge.",
+    "",
+    "  2. Dagger -m flag in a pipeline YAML  ← ADO, Jenkins, or manual Dagger invocation",
+    "       dagger -m github.com/context-and-oss/cicd/src/composites/precommit@vX.Y.Z call run",
+    "     Tracked by the yaml-dagger-module custom manager below.",
+    "     Use this when you're not on GitHub Actions or need to pass custom flags.",
+    "",
+    "  3. dagger.json source pin  ← power users composing their own pipeline",
+    "       { \"source\": \"github.com/context-and-oss/cicd/src/quality@vX.Y.Z\" }",
+    "     Tracked by the dagger-json-module custom manager below.",
+    "     Use this when you pick individual modules and wire them yourself.",
+    "",
+    "To enable: add one line to your repo's renovate.json:",
+    "  { \"extends\": [\"config:recommended\", \"github>context-and-oss/cicd\"] }"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Dagger -m module pins in pipeline YAML files (ADO, Jenkins, etc.)",
+      "managerFilePatterns": [
+        "/\\.(yml|yaml)$/"
+      ],
+      "matchStrings": [
+        "dagger[^\\n]*github\\.com/context-and-oss/cicd/[^@\\s]+@(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "context-and-oss/cicd",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "Dagger module source pins in dagger.json (custom pipeline composition)",
+      "managerFilePatterns": [
+        "/(^|/)dagger\\.json$/"
+      ],
+      "matchStrings": [
+        "\"source\":\\s*\"github\\.com/context-and-oss/cicd/[^@]+@(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "depNameTemplate": "context-and-oss/cicd",
+      "versioningTemplate": "semver"
+    }
+  ]
+}

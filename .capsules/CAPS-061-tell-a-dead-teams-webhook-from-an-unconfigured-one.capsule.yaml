@@ -1,0 +1,118 @@
+kind: change-capsule
+schema: 1
+id: CAPS-061
+status: sealed
+intent: >
+  notify.Teams reported success in three distinct situations — card delivered,
+  no webhook configured, card attempted and lost — and distinguished none of
+  them. Two defects, one door. `teamsWebhook != nil` is not "configured": under
+  GitHub Actions `secrets: inherit` a secret the calling repository never
+  defines still arrives as a non-nil, empty Secret, and three reusable
+  workflows plus four Azure DevOps templates passed --teams-webhook
+  unconditionally, so every consumer who had not set Teams up POSTed a card to
+  the empty string on every run and got `unsupported protocol scheme ""` on
+  stderr and exit zero. And a POST that failed for a real reason — a rotated,
+  revoked or re-pointed webhook, the case where a team is actually relying on
+  the channel — went to stderr and nowhere else.
+
+  Teams now returns an evidence envelope instead of an error: CLEAN delivered,
+  SKIPPED not configured, ERROR attempted and lost, with the sentence in
+  warnings[] and passed=true in all three, because a notification is not a
+  gate. The composites aggregate a second time with that envelope appended,
+  which is also what performs the POST — a function returning *dagger.File is
+  lazy. The rules live in an untagged file because the one that was wrong
+  (a blank webhook is not a webhook) was unreachable from any test while it sat
+  inside the //go:build !unit_test entry function.
+
+  All seven drifted surfaces now guard the flag, and check_guarded_flags
+  (scripts/repo_surface.py, check 20) refuses the next one.
+impact:
+  visibility: consumer
+  benefit: >
+    A team whose Teams webhook has been rotated or revoked learns it from the
+    pull request comment on the next run, instead of from the eventual
+    realisation that nobody has seen a card in a month. A team that never
+    configured Teams stops having cards POSTed to the empty string on their
+    behalf, and gets no line about a channel they never asked for.
+  compatibility: breaking
+  risk:
+    - >
+      Breaking for anyone calling notify.Teams directly: it returns
+      (*dagger.File, error) rather than error, so a typed call against the old
+      signature will not compile and a shell call gains an evidence file worth
+      exporting. The contract declares outputSchema evidence-1. The composites
+      are the supported path and are updated.
+    - >
+      The delivery warning travels further than the stderr line it replaces —
+      into combined-evidence.json and the pull request comment. The webhook URL
+      is its credential and a proxy or WAF answering a failed POST quotes the
+      request target, so teamsScrubValues registers the URL, its escaped path,
+      its path and its raw query. The suite asserts on the serialised JSON, and
+      it caught exactly this leak before the change shipped.
+    - >
+      Notifying runs now aggregate evidence twice. One extra in-engine JSON
+      merge, no containers and no network, and skipping it is not an
+      optimisation: the second Wrap is what forces the lazy File and therefore
+      what sends the card.
+decisions:
+  - id: d01
+    choice: merge notify's envelope into combined-evidence.json via a second Wrap
+    options:
+      - write a separate notify-evidence.json beside the bundle, as
+        cross-cutting/dependency-track does (rejected)
+      - keep returning error and log more loudly (rejected)
+      - aggregate a second time with the delivery envelope appended (chosen)
+    because: >
+      warnings[] is the one field cross-cutting/evidence propagates into
+      combined-evidence.json and thence into the pull request comment, and that
+      comment is the channel a human reads when Teams is dead. A record only in
+      a file nobody downloads is the stderr line with extra steps. The cost is
+      one in-engine merge; the second Wrap is needed anyway, because the lazy
+      *dagger.File is not evaluated — and therefore no card is sent — until
+      something reads it.
+    confidence: high
+  - id: d02
+    choice: passed=true in all three states
+    options:
+      - fail the run when a configured webhook could not be reached (rejected)
+      - passed=true always, outcome and warnings[] carry the distinction (chosen)
+    because: >
+      A notification is not a gate: the scan's verdict is what it was before the
+      POST. Reddening a pipeline over a webhook outage teaches a team to stop
+      passing the webhook, which is this same defect arrived at from the other
+      side. Outcome still tells the three apart for anything folding the run.
+    confidence: high
+  - id: d03
+    choice: treat an unexpanded Azure DevOps macro as unconfigured, a malformed URL as broken
+    options:
+      - anything non-blank is attempted (rejected)
+      - validate the URL and treat anything unparseable as unconfigured (rejected)
+      - blank or a whole-string $(NAME) macro is unconfigured, everything else
+        is attempted (chosen)
+    because: >
+      ADO expands an undefined variable to its own literal text, so
+      $(TEAMS_WEBHOOK) is not empty — the --include work recorded the same fault for
+      --include. Reporting it as NOT DELIVERED would tell a team their channel
+      died when they never had one. But validating URLs in general would
+      reclassify a broken configuration as an absent one, which is the exact
+      confusion this change exists to remove, so the macro rule is anchored at
+      both ends and nothing else is inferred.
+    confidence: high
+  - id: d04
+    choice: keep the workflow guard as well, and gate it
+    options:
+      - drop the guards now that the module classifies correctly (rejected)
+      - guard every surface and add check_guarded_flags (chosen)
+    because: >
+      Without the guard the module is honest and noisy: every consumer who
+      never asked for Teams gets a NOT CONFIGURED line in their pull request
+      comment on every run, and a disclosure on every run is noise. The guard
+      keeps the leg from running at all. dast.yml had the right shape from the
+      start and six other surfaces drifted without it, so the shape is now
+      checked rather than remembered.
+    confidence: high
+tags:
+  - notify
+  - evidence
+  - developer-experience
+  - repo-surface

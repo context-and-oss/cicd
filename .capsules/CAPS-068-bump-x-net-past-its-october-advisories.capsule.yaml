@@ -1,0 +1,80 @@
+kind: change-capsule
+schema: 1
+id: CAPS-068
+status: sealed
+intent: >
+  Five advisories were published against golang.org/x/net v0.58.0 — CVE-2026-78669
+  (HIGH) and CVE-2026-78659, CVE-2026-78660, CVE-2026-78663 and CVE-2026-97032
+  (MEDIUM), all fixed in v0.60.0 — and from 2026-10-14 every dogfood-precommit
+  run on this repository went red at --fail-on MEDIUM, the push to main on
+  2026-10-20 included. Nothing in the tree had changed; the pin had. The four
+  go.mod files that carry x/net as an indirect require — src/stage-2/go.mod,
+  src/cross-cutting/intent/go.mod, src/composites/precommit/go.mod and
+  src/composites/dast/go.mod, with their go.sum beside them — move to v0.61.0.
+  go get carried golang.org/x/sync, golang.org/x/sys and golang.org/x/text
+  along, because the new x/net requires them.
+impact:
+  visibility: internal
+  benefit: >
+    The fifteen Trivy rows (five advisories across three scanned modules, the
+    composite re-reading stage-2's) leave the dogfood gate, and every open pull
+    request stops inheriting a red that none of them caused.
+  compatibility: additive
+  risk:
+    - >
+      The bump is indirect: nothing in this repository imports x/net directly,
+      so the unit suites cannot witness the difference. The evidence is the
+      scanner on the dogfood run of this change.
+    - >
+      `go mod tidy` was NOT run, deliberately. Without the gitignored generated
+      Dagger client present, tidy strips every dagger.io require (measured here:
+      it emptied the require block before the change was reverted and redone
+      with go get alone). CAPS-034 and CAPS-058 record both sides of that.
+    - >
+      The diff carries four bumps go get did not make: gqlparser v2.5.37 to
+      v2.5.63, gqlgen v0.17.95 to v0.17.97, and otel plus otel/metric v1.46.0 to
+      v1.47.0. Those are what `dagger develop` under the pinned engine v0.20.8
+      writes into the require block on every run, in CI as here; main simply
+      predates that engine bump and has been building against them uncommitted
+      since. They are committed so go.mod states what the build uses, and a
+      second develop left all eight files byte-identical. The sixteen
+      `replace go.opentelemetry.io/otel => v1.46.0` lines are untouched and
+      still win, so the otel require line is a statement codegen makes, not a
+      version that runs.
+decisions:
+  - id: d01
+    choice: bump the require line rather than accept the advisories
+    options:
+      - --vuln-accept the five ids with written reasons, as the otel rows are (rejected)
+      - raise the require to a fixed release (chosen)
+    because: >
+      An acceptance is for a fix cicd cannot pin. The otel rows are held by
+      `replace` lines dagger develop rewrites on every run (CAPS-058 d02); x/net
+      sits in the `require` block, which CAPS-058 measured codegen leaves alone,
+      and `dagger develop` was run on all four modules after the bump and
+      changed no go.mod. A pin that survives develop removes the rows; an
+      acceptance only records why they stay.
+    confidence: high
+  - id: d02
+    choice: v0.61.0, the current release, not the v0.60.0 the advisories name as fixed
+    options:
+      - v0.60.0, the minimum that clears the gate (rejected)
+      - v0.61.0, the latest (chosen)
+    because: >
+      Both declare go 1.26.0, which every module here already requires, so the
+      newer one costs nothing and carries one fewer release of whatever is
+      disclosed next against the minimum.
+    confidence: medium
+  - id: d03
+    choice: touch only the four modules that carry the require
+    options:
+      - all sixteen modules for uniformity (rejected)
+      - the four go.mod files that name x/net (chosen)
+    because: >
+      A module whose go.mod does not require x/net reports no row for it, so
+      churning its go.sum changes nothing measurable. CAPS-058 d01, again.
+    confidence: high
+tags:
+  - dependencies
+  - security
+  - dogfood

@@ -1,0 +1,169 @@
+# ============================================================
+# Starter template: Stage 4 — Commit pipeline (caller stub)
+#
+# Copy this file to your repository at .github/workflows/commit.yml.
+# That's it. The actual orchestration lives in the reusable workflow
+# at context-and-oss/cicd/.github/workflows/commit.yml — you call it.
+#
+# One entry, any repo shape (ADR-005): the source gate (quality, SAST,
+# secrets, dependency-vuln, risk) runs for EVERY shape; the
+# `artifact` input selects the artifact tail:
+#   container (default) — you ship a Docker image (needs a Dockerfile)
+#   archive             — you ship a zip/dir (set build-cmd + output-path)
+#   none                — source-only repo (library / infra); no build
+#
+# No secret is required: the cicd modules are fetched from the public
+# repository. See templates/github-actions/precommit.yml for the optional
+# secrets, and for why the job below maps them by name instead of using
+# `secrets: inherit` (a map passes only what it lists).
+#
+# ─── Stay up to date (Renovate) ─────────────────────────────────────
+# Renovate tracks the `uses:` ref below automatically. To enable:
+#   { "extends": ["config:recommended", "github>context-and-oss/cicd"] }
+# ─────────────────────────────────────────────────────────────────────
+# ====================================================================
+
+name: Commit
+
+on:
+  push:
+    branches: [main]
+
+# ─── Concurrency: deliberately none ─────────────────────────────────
+# Do not add a `concurrency:` block. GitHub keeps at most one pending run
+# per group and cancels the one already waiting when another arrives, with
+# or without cancel-in-progress, so any grouping of pushes to main skips
+# the commits in between: those shas never get commit-stage evidence.
+# Every merge to main gets its own run.
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  # Required only if you enable deploy-pages below — a reusable workflow can
+  # never request more token scopes than its caller grants, so these must live
+  # here, not just in the reusable workflow.
+  # pages: write
+  # id-token: write
+
+jobs:
+  commit:
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.2
+    with:
+      # runs-on: ubuntu-latest  # An organisation larger-runner label for more CPU.
+      # node-project-limit: 4  # Raise explicitly for independent Node apps.
+      # parallelism: 1  # Source groups and test legs in flight; integer 1–4.
+      # Shared preparation is opt-in; match image, configuration and framework.
+      # prepare-cmd: dotnet restore && dotnet build -c Release --no-restore
+      # prepare-language: dotnet
+      # prepare-test-label: plugin  # Required with test-legs; omit for test-cmd.
+      # toolchain-image: mcr.microsoft.com/dotnet/sdk:10.0
+      # Tests then use --no-build; packaging uses dotnet publish --no-build.
+      # Deploy from outputs.build-artifact-id; see docs/how-to-guides/build-once.md.
+      # Artifact shape: container (default) | archive | none. Always explicit.
+      artifact: container
+      #
+      # ─── container shape ──────────────────────────────────────────────
+      # Both optional; unset keeps the module defaults (./Dockerfile,
+      # linux/amd64). The path is relative to the repository root, so a
+      # Dockerfile that does not sit at the root is reachable without moving
+      # it, and an arm image is reachable without a second pipeline.
+      # dockerfile: docker/api.Dockerfile
+      # platform: linux/arm64
+      #
+      # ─── archive shape ────────────────────────────────────────────────
+      # Set artifact: archive above, then supply your build command and the
+      # directory it writes. Both run witnessed in a cicd toolchain container.
+      # build-cmd: npm ci && npm run build
+      # output-path: dist
+      # Toolchain image override — the only digest-pinnable level (ADR-004).
+      # When omitted, resolved from .nvmrc / global.json, falling back to
+      # pinned defaults (node:22-alpine, dotnet/sdk:8.0, ...).
+      # toolchain-image: node:22-alpine
+      #
+      # ─── source gate (all shapes) ─────────────────────────────────────
+      # fail-on: HIGH
+      # The commit stage defaults to the heavy Semgrep pack
+      # (p/security-audit,p/owasp-top-ten,p/secrets). Override or point at a
+      # checked-in config; set empty to keep the composite default
+      # (p/security-audit); "auto" is refused by the security module.
+      # sast-rulesets: p/security-audit,p/owasp-top-ten,p/secrets
+      # Restrict scanning to specific languages (comma-separated). Empty
+      # auto-detects by marker file.
+      # include: go,node
+      #
+      # Dependency licence policy. Defaults to warn mode with the
+      # permissive/notice/unencumbered allowlist; there is no way to switch
+      # the leg off, only to widen what it accepts.
+      # license-gate: gate
+      # license-allow accepts CATEGORIES (permissive, notice, unencumbered,
+      # reciprocal, restricted, forbidden) and individual licence NAMES in the
+      # same comma-separated list. A name is matched against the whole
+      # declared string, case- and whitespace-insensitive, so it narrows the
+      # policy by exactly one declaration rather than by a whole category.
+      # license-allow: permissive,notice,unencumbered,BlueOak-1.0.0
+      # "unknown" is NOT an allowable category: it is Trivy saying it could
+      # not classify the declaration, so allowing it accepts every future
+      # unclassifiable one too. Accept them one at a time instead. A name
+      # shaped like an SPDX expression works anywhere; anything else must
+      # name the package it applies to.
+      # license-allow: permissive,notice,example-sdk=SEE LICENSE IN LICENSE
+      # Every named allowance is counted in the evidence, and one that
+      # matched nothing is a warning — a stale exception cannot read as a
+      # clean tree.
+      # Scope, not findings: these globs are reported but not judged.
+      # license-exclude: docs/**,**/fixtures/**
+      # Witnessed BYO test command (runs your unit tests inside the gate).
+      # test-cmd: npm ci && npm test
+      # Polyglot repo? test-cmd runs ONE command in ONE container. test-legs
+      # witnesses each stack instead, and names any detected language no leg
+      # tests. Mutually exclusive with test-cmd.
+      # test-legs: |
+      #   [{"label":"web","language":"node","cmd":"npm ci && npm test"},
+      #    {"label":"api","language":"dotnet","cmd":"dotnet test"}]
+      # Internal package feeds (secrets NPM_FEED_TOKEN / NUGET_FEED_TOKEN).
+      # npm-feed-url: https://npm.internal.example.com
+      # A feed with no upstream to the public registry: set only the token
+      # and let the project .npmrc route its scopes (@scope:registry=<feed>).
+      # npm-feed-routing: npmrc
+      # nuget-feed-url: https://nuget.internal.example.com
+      #
+      # ─── delivery ─────────────────────────────────────────────────────
+      # Publish a live evidence dashboard to GitHub Pages after every commit.
+      # Also: enable Pages (Settings → Pages → Source: GitHub Actions) and
+      # uncomment pages/id-token in the permissions block above.
+      # deploy-pages: true
+    secrets:
+      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
+      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+
+  # ─── Consume the results (ADR-006) ──────────────────────────────────
+  # The reusable workflow declares outputs so you can gate, notify or
+  # publish the reports without parsing cicd's internals:
+  #   evidence-artifact    name of the uploaded evidence artifact
+  #                        (combined-evidence.json, findings.sarif,
+  #                        sbom.cdx.json, comment.md). 90-day retention —
+  #                        publish at release time, not later.
+  #   passed               "true" only when every gate passed; "false"
+  #                        also covers a gate that could not run
+  #   findings-count       total findings across all gates
+  #   findings-by-severity compact JSON, e.g. {"HIGH":2,"LOW":5}
+  #   coverage-ratchet     pass | fail | skipped:<reason> | empty
+  #   gates                compact JSON array of per-gate status
+  # `if: always()` matters: a tripped gate fails the commit job, and
+  # without it your consumer job is skipped exactly when you most want
+  # the verdict.
+  # publish-reports:
+  #   needs: commit
+  #   if: always()
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: ${{ needs.commit.outputs.evidence-artifact }}
+  #         path: reports
+  #     - run: |
+  #         echo "passed=${{ needs.commit.outputs.passed }}"
+  #         # push reports/ to your CDN here — credentials stay in THIS
+  #         # repo; cicd never publishes (ADR-006).

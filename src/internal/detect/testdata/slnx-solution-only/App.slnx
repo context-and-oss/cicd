@@ -1,0 +1,23 @@
+<!--
+  A real .slnx (the XML solution format of .NET SDK 9.0.200 and later) used by
+  detect_test.go to prove language detection recognises a repo whose only .NET
+  marker is a solution file. Modelled on a consumer monorepo whose solution is
+  App.slnx and which reported the miss.
+
+  It deliberately references a project that is not present: the case that was
+  broken is the solution-only repo, and adding a .csproj here would let the
+  fixture pass through the other marker and stop testing anything.
+
+  Placement is load-bearing. This repository runs its own precommit composite
+  against the repo root (scripts/cicd-prepush, --src .), and both language
+  detection and discoverDotnetTargets search with `find -maxdepth 4`. A .slnx
+  within that depth of the repo root would become the single unambiguous
+  solution for this repo's own dotnet legs, pointing `dotnet format` at a .slnx
+  that the pinned SDK 8.0 image cannot open — and dropping testdata/dotnet-app
+  from the sweep on the way past. At six path segments from the repo root this
+  file is outside that search, and is still at depth 1 when a caller points
+  --src at the directory itself.
+-->
+<Solution>
+  <Project Path="src/App/App.csproj" />
+</Solution>

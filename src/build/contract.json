@@ -1,0 +1,37 @@
+[
+  {
+    "stage": "domain",
+    "step": "build",
+    "function": "Build",
+    "params": [
+      { "name": "src",        "type": "Directory", "required": true },
+      { "name": "commitSha",  "type": "String",    "required": true },
+      { "name": "branch",     "type": "String",    "required": true },
+      { "name": "repoUrl",    "type": "String",    "required": true },
+      { "name": "dockerfile", "type": "String",    "required": false, "default": "Dockerfile" },
+      { "name": "platform",   "type": "String",    "required": false, "default": "linux/amd64" }
+    ],
+    "outputSchema": "container"
+  },
+  {
+    "stage": "domain",
+    "step": "build",
+    "function": "BuildArchive",
+    "params": [
+      { "name": "src",            "type": "Directory", "required": true },
+      { "name": "buildCmd",       "type": "String",    "required": true },
+      { "name": "outputPath",     "type": "String",    "required": true },
+      { "name": "commitSha",      "type": "String",    "required": true },
+      { "name": "branch",         "type": "String",    "required": true },
+      { "name": "repoUrl",        "type": "String",    "required": true },
+      { "name": "toolchainImage", "type": "String",    "required": false },
+      {"name": "prepared", "type": "Container", "required": false},
+      {"name": "npmFeedUrl", "type": "String", "required": false},
+      {"name": "npmFeedRouting", "type": "String", "required": false},
+      {"name": "npmToken", "type": "Secret", "required": false},
+      {"name": "nugetFeedUrl", "type": "String", "required": false},
+      {"name": "nugetToken", "type": "Secret", "required": false}
+    ],
+    "outputSchema": "directory"
+  }
+]

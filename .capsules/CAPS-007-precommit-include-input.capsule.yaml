@@ -1,0 +1,127 @@
+kind: change-capsule
+schema: 1
+id: CAPS-007
+status: sealed
+intent: >
+  Give the pre-commit reusable workflow the include input that commit.yml has
+  carried since v1.13, so the two reusables are one learnable contract. The
+  composite already accepts include at src/composites/precommit/main.go:34 and
+  the commit workflow already forwards it, so only the pre-commit workflow's
+  workflow_call contract was missing the wire. Without it a consumer whose repo
+  contains a language cicd cannot actually run has no green setting at all,
+  because gatedPassed fails a non-run at every threshold including fail-on NONE
+  — and the asymmetry pointed the wrong way, since pre-commit is the reusable
+  wired into branch protection while commit runs after the merge already
+  landed. dotnetSDKRemedy offers "drop dotnet from --include" as advice a
+  pre-commit consumer could not follow.
+impact:
+  visibility: consumer
+  benefit: >
+    A pre-commit consumer can scope the lint and unit-test legs to the
+    languages cicd can run, instead of choosing between a permanently red
+    required check and abandoning the gate. Reaching for it costs a rejected
+    step rather than a silent nothing-scan when the language name is wrong.
+  compatibility: additive
+  risk:
+    - >
+      This is an exemption mechanism, not a coverage improvement. A language
+      present in the repo but absent from include is not scanned, and nothing
+      in the evidence envelope yet says so — detectLanguages short-circuits
+      before autoDetectLanguages runs, so no code even knows a marker file was
+      passed over. That is this repository's "a gate that is switched off must
+      say so" doctrine unmet, filed as an issue and named in the input
+      description, the docs row and both templates rather than left implicit.
+      Until the module fix lands, a green run under a non-empty include is weaker
+      evidence than a green run without one, and only the workflow inputs
+      record the difference.
+    - >
+      The shell validation guards the workflow input only. Every direct
+      dagger call, and commit.yml which has carried the input longer, still
+      reach a detectLanguages whose switch has no default branch, where
+      --include golang resolves to zero languages and quality.Check iterates
+      nothing and returns passed=true. The guard is a patch over one seam, not
+      the fix; a separate issue covers the module.
+    - >
+      The accepted-name list is a second copy of the alias set in
+      src/quality/lint.go and can drift from it. A new alias added to the
+      module and not here is rejected by the workflow — loud, and the safe
+      direction — but it is still a copy, and the honest fix is for the module
+      to refuse an unrecognised name itself so nothing upstream has to know
+      the set.
+    - >
+      No language restriction is exercised end to end by this change. The
+      precommit composite smoke runs auto-detection, so the forwarding is
+      proven by the shell-logic table below and by parity with commit.yml's
+      identical hunk, not by a dagger run with --include set.
+decisions:
+  - id: d01
+    choice: mirror commit.yml's input name, type, default and forwarding hunk verbatim
+    options:
+      - a new spelling such as languages or scan-languages (rejected)
+      - a repeatable list input rather than a comma-separated string (rejected)
+      - the identical include contract (chosen)
+    because: >
+      The whole point of the change is parity — a consumer who has read one
+      reusable should not have to relearn the other. A third spelling of the
+      same knob is worse than the missing knob. workflow_call has no list
+      type anyway, so a comma-separated string is the only shape available,
+      and it is the shape already in service.
+    confidence: high
+  - id: d02
+    choice: reject an unrecognised language name in the step, loudly
+    options:
+      - forward whatever the consumer typed, exactly as commit.yml does (rejected)
+      - reject an unrecognised name before the dagger call (chosen)
+    because: >
+      detectLanguages in src/quality/lint.go has no default branch, so an
+      unrecognised name is silently dropped. A list that drops to nothing
+      leaves quality.Check iterating zero languages, so allRan stays true,
+      allErrs stays empty, and gatedPassed(true, true, threshold) returns
+      passed=true over no lint and no tests. A one-character typo would buy a
+      green quality gate that scanned nothing — the exact false pass
+      gatedPassed exists to prevent, arriving through a config value instead
+      of a crashed tool. Shipping the input without the guard would put that
+      within reach of every pre-commit consumer, so byte-parity with
+      commit.yml's forwarding loop was worth breaking. A non-empty input that
+      names no language at all is refused for the same reason rather than
+      falling back to auto-detection, which would silently run a different
+      pipeline than the one asked for.
+    confidence: high
+  - id: d03
+    choice: say in the input description that an excluded language is not disclosed
+    options:
+      - keep the description byte-identical to commit.yml (rejected)
+      - append the disclosure caveat to the pre-commit description (chosen)
+    because: >
+      The description is the contract a consumer reads in the GitHub UI, and
+      this input is the only way to reduce cicd's coverage that currently
+      leaves no trace in the evidence. A caveat there diverges the two
+      descriptions, which is a real cost, but a silent narrowing shipped
+      behind wording that reads like a neutral filter is the larger one. The
+      knob itself — name, type, default, semantics — stays identical, so the
+      parity that matters is intact. commit.yml should gain the same sentence
+      when the module fix lands, at which point both can drop it.
+    confidence: medium
+  - id: d04
+    choice: document --include in the ADO precommit template, add no pipeline variable
+    options:
+      - add an INCLUDE_LANGUAGES pipeline variable mirroring REQUIRE_INTENT (rejected)
+      - document the flag in the existing optional-flags comment block (chosen)
+    because: >
+      The ADO template is a copy-paste starter the consumer owns and edits —
+      its own header calls it the shape for full control over flags — so the
+      dagger invocation is already reachable and there is no cross-repository
+      contract missing a wire. The gap there is discoverability, which a
+      comment closes. A variable would add a third spelling and a real hazard
+      this repo has already been bitten by: an unset ADO variable arrives as
+      its own literal macro text, which resolves to no known language, so an
+      unset INCLUDE_LANGUAGES would have scanned nothing and reported green
+      unless guarded by the '$('* case the feed URLs need. The comment says
+      not to route it through a variable, and why.
+    confidence: medium
+tags:
+  - precommit
+  - reusable-workflow
+  - include
+  - parity
+  - templates

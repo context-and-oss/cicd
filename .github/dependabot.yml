@@ -1,0 +1,77 @@
+# Keeps the SHA-pinned GitHub Actions current. SHA pinning freezes each action
+# at one commit for supply-chain safety, but a frozen pin goes stale and misses
+# security fixes — so Dependabot raises a weekly PR that rewrites the SHA and
+# the trailing "# vX" comment together.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    # A week between an action release and the PR that pins it, because a
+    # compromised release is usually caught and yanked within days, and a SHA
+    # bump merged on day one ships it into every workflow here, including the
+    # one that holds the release token. The cost is that an action's own
+    # security fix also arrives a week late; a fix that cannot wait is a manual
+    # bump. Cooldown applies to version updates only.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+
+  # Go module security updates are turned off here, in writing, because they
+  # were already off in practice and nothing said so.
+  #
+  # Dependabot security updates are enabled on this repository and every Go
+  # alert it has ever raised — 22 fixed, all by a human commit — arrived with
+  # no pull request beside it. Zero gomod PRs exist in this repository's whole
+  # history. A robot that is switched on and silent is indistinguishable from a
+  # robot with nothing to do, which is the founding failure mode of everything
+  # in src/; leaving it enabled and mute is the same lie one level up from the
+  # pipeline.
+  #
+  # Why it cannot work here. Each directory under src/ is an isolated Dagger
+  # module whose go.mod is half-generated: `dagger develop` writes the SDK and
+  # rewrites the otel `replace` lines on every run. A resolver that has not run
+  # codegen cannot build the module, and a bump it did land would be reverted
+  # by the next codegen — CAPS-058 measured exactly that with otel v0.20.0.
+  #
+  # What still holds the line. Alerts are untouched: this entry suppresses pull
+  # requests, not detection, so the Security tab keeps reporting. And the real
+  # gate is Trivy, which scans these same go.mod files on every precommit and
+  # on this repository's own dogfood run at --fail-on MEDIUM. A Go CVE here
+  # fails a pipeline before anyone reads an alert, and is either fixed at the
+  # source or accepted in the open with --vuln-accept, where the reason lands
+  # in the evidence (src/security/vulnallow.go).
+  #
+  # Removal condition: if the Dagger SDK ever stops owning these versions —
+  # no generated `replace` lines in a module's go.mod — delete this entry and
+  # let Dependabot propose the bumps. Do not soften it into a narrower ignore
+  # list: a partial allowance produces PRs that fail to resolve, which is the
+  # noise this avoids without the detection it preserves.
+  #
+  # `ignore` is the operative line, and it reaches both kinds of update on its
+  # own: Dependabot's options reference marks `ignore` as one of the options
+  # that also change security update pull requests. There is no entry-level
+  # `applies-to` — that key exists only inside `groups.<name>` — and an earlier
+  # version of this entry carried one, which Dependabot's config validator
+  # refuses ("additional properties [\"applies-to\"]"). `open-pull-requests-limit`
+  # is deliberately absent: it does not apply to security updates, so setting
+  # it to 0 here would read as the mechanism while doing nothing.
+  #
+  # No cooldown either, for the same reason: the ignore leaves this entry no
+  # version update to raise, and Dependabot applies cooldown to version updates
+  # only, so a cooldown here would read as protection while governing nothing.
+  # The rule asking for one is suppressed on this entry alone.
+  # nosemgrep: package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown
+  - package-ecosystem: "gomod"
+    directories:
+      - "/src/**"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "*"

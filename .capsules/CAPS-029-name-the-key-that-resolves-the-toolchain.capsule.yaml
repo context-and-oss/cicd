@@ -1,0 +1,106 @@
+kind: change-capsule
+schema: 1
+id: CAPS-029
+status: sealed
+intent: >
+  ADR-004 says the toolchain level reads global.json's sdk.version. The two
+  consumer-facing documents that describe that same precedence chain,
+  use-without-dockerfile.md and the reference index.md, both dropped the key and
+  named only the file. index.md then says the precise thing ten lines below the
+  imprecise one, about a different mechanism entirely, in the same file.
+
+  Naming the file rather than the key does not merely omit a caveat, it asserts
+  the implication a reader would draw and that implication is false. Having a
+  global.json buys nothing. Having sdk.version in it buys the SDK band. The
+  gap between those two sentences is a real repository shape, not a
+  hypothetical one, because a global.json carrying only a
+  Microsoft.Testing.Platform runner opt-in is exactly what this repository
+  documents elsewhere and exactly what its own dotnet-mtp-app fixture commits.
+
+  So a consumer can read the runner guidance, write the documented file, and
+  land on the pinned default SDK, which predates the opt-in, ignores it, and
+  routes the invocation through VSTest. The runner trap is therefore reachable. What was
+  missing was any line anywhere connecting the two facts, and both of the
+  places a consumer would look for it were the places that dropped the key.
+
+  Measured against ResolveToolchain rather than reasoned about. sdk.version
+  10.0.100 and 10.0 both resolve to the 10.0 band, a bare 10 falls through to
+  8.0, a runner-only file falls through to 8.0, and an absent file falls
+  through to 8.0. On the Node side a bare 22 resolves to node 22 while lts/iron
+  and lts/jod resolve to node 20, which is also what no file at all resolves
+  to.
+
+  The shorthand asymmetry is written down because it is the trap a careful
+  reader walks into rather than a careless one. The nvmrc reader tolerates a
+  bare major and its own doc comment advertises that tolerance, so a consumer
+  who generalises from the documented behaviour of one version file writes a
+  bare major in the other and is silently on the default band.
+impact:
+  visibility: external
+  benefit: >
+    The two documents a consumer reads to learn the toolchain chain now name the
+    key that drives it, state that a global.json without that key resolves at the
+    pinned default, name the runner-only opt-in as an instance of that, record
+    the shorthand each of the two version files accepts, and say that a file
+    cicd read and could not use is today indistinguishable from one that is
+    absent. Documentation only. No module, script, workflow or fixture changes,
+    so no gate verdict can move.
+  compatibility: docs
+  risk:
+    - >
+      The prose states behaviour that lives in code, so it can go stale the day
+      the resolver changes. It is pinned by nothing automatic. The mitigation is
+      that every claim in it is a row measured against ResolveToolchain and
+      recorded here, so a later reader can re-run the same probe rather than
+      having to trust the sentence.
+    - >
+      Describing resolver limitations in shipped documentation can go stale
+      when the resolver changes. The caveats name the runner-only default and
+      the silent fall-through explicitly so they can be checked against code.
+      Waiting for resolver diagnostics before documenting those limitations
+      would leave consumers without an explanation in the meantime. The edits touch use-without-dockerfile.md and index.md
+      and nothing else.
+decisions:
+  - id: d01
+    choice: fix the documentation rather than widen the resolver
+    options:
+      - make sdk.version tolerate a bare major (rejected)
+      - infer the SDK band from the runner opt-in (rejected)
+      - name the key and the fall-through in the two consumer documents (chosen)
+    because: >
+      A bare major in sdk.version is not valid input to the SDK itself, so
+      accepting it would make cicd resolve a band from a file dotnet would
+      reject, which is a new disagreement rather than a fix. Inferring a band
+      from the runner key is a guess about which SDK the consumer wanted and
+      belongs to a separate BYO band-selection decision. The documents were
+      wrong on their own terms, independently of either, so correcting them is
+      the change with no blast radius and it is the one the peer review
+      identified as the cheap high-value half.
+    confidence: high
+  - id: d02
+    choice: state the shorthand asymmetry explicitly instead of leaving it implicit
+    options:
+      - state only that sdk.version is required (rejected)
+      - state the required shape of both version files side by side (chosen)
+    because: >
+      The nvmrc reader documents its own tolerance of a partial version, so a
+      consumer generalising from the file that is documented to be lenient is
+      behaving reasonably and is silently wrong. Naming only the required key
+      leaves that reader in exactly the position the change exists to remove,
+      because a bare major is a value they would believe is a version.
+    confidence: high
+  - id: d03
+    choice: name both resolver limitations alongside the precedence rules
+    options:
+      - omit the limitations until resolver diagnostics improve (rejected)
+      - describe the runner-only default and unusable-file fall-through (chosen)
+    because: >
+      A reader needs to know both which key selects the SDK and what happens
+      when the file cannot select one. The runner opt-in does not supply an SDK
+      version, and an unusable version file currently looks like an absent one.
+      Naming both mechanisms makes the caveat verifiable against ResolveToolchain.
+    confidence: medium
+tags:
+  - docs
+  - toolchain
+  - dotnet

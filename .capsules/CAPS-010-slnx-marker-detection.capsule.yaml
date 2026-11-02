@@ -1,0 +1,134 @@
+kind: change-capsule
+schema: 1
+id: CAPS-010
+status: sealed
+intent: >
+  Teach language detection about .slnx, the XML solution format of .NET SDK
+  9.0.200 and later, and remove the structure that let it be missed. The
+  quality module's discoverDotnetTargets already globbed both '*.sln' and
+  '*.slnx', while three other sites knew only '*.sln' - the fs.FS walker in
+  src/internal/detect/detect.go, the marker find plus suffix switch in
+  src/quality/lint.go, and the toolchain-resolver error text in
+  src/quality/byotest.go. A fourth and fifth site the issue did not name were
+  in src/build/archive.go, which carries its own copy of the same probe. So a
+  repo whose only .NET marker is a solution file - a consumer monorepo, whose
+  solution is App.slnx - was not detected as .NET at all, its dotnet legs
+  never ran, and the error it did get enumerated markers that did not include
+  the file it actually had. The real defect is not the missing extension. It
+  is that the find(1) expression and the classifier that reads its output were
+  two independent literals in three modules, six literals in total, none of
+  which was tested against the others, so a marker could be searched for and
+  not understood, or understood and never searched for.
+impact:
+  visibility: consumer
+  benefit: >
+    A .NET repository whose solution is a .slnx is now recognised as .NET by
+    every module that asks the question, and a consumer who cannot resolve a
+    toolchain is told about the file format they are actually holding. The
+    marker set is authored once per module and the shell find is generated
+    from it, so the next marker cannot be half-added.
+  compatibility: fix
+  risk:
+    - >
+      Detection is not execution. A solution-only .slnx repository now
+      reaches the .NET legs, and those legs run on the digest-pinned SDK 8.0
+      image, which cannot open a .slnx at all. Such a repository moves from
+      silently skipping .NET to loudly failing in it, which is the correct
+      direction under this repo's doctrine but is a visible behaviour change.
+      The SDK band is a separate issue and is deliberately untouched here - only
+      the marker text of the resolver error changed, never the resolution.
+    - >
+      The three copies are still three copies. Nothing enforces that
+      src/quality/markers.go, src/build/markers.go and
+      src/internal/detect/detect.go agree; they are held together by a header
+      comment and by one test in each, following the schema.go and
+      toolchain.go precedent. A test in each copy catches drift only after
+      someone edits that copy, which is strictly stronger than the nothing
+      that was there before, and strictly weaker than the generated sync that
+      schema.go gets from make sync-schema.
+    - >
+      The committed .slnx fixture is exercised by Go unit tests only. No
+      module-test cell points a Dagger run at it, because pointing
+      quality.check at it today fails in the .NET leg rather than in
+      detection, so a Dagger-level case has to wait for the SDK band. The
+      generated find predicate is run for real under sh with a real find in
+      TestMarkerFindExprRunsAsShell, which is what makes the escaping and the
+      globs provable without a Dagger session - but the module runs it under
+      alpine's busybox find, a third implementation, so what is proven is
+      POSIX shape rather than that exact binary.
+decisions:
+  - id: d01
+    choice: suffix-match both extensions explicitly
+    options:
+      - strings.Contains(name, ".sln") (rejected)
+      - HasSuffix for ".sln" and ".slnx" separately (chosen)
+    because: >
+      HasSuffix(name, ".sln") is false for "App.slnx", so the miss is real
+      and not an incidental match. The one-character fix in the other
+      direction invents a new defect - "Foo.slnnope" contains ".sln" - so
+      both extensions are named, and the negative cases "Foo.slnnope",
+      "notes.slnx.txt" and "App.sln.bak" are in the tests of all three
+      copies.
+    confidence: high
+  - id: d02
+    choice: generate the find expression from the marker list
+    options:
+      - add '*.slnx' to each of the five literals (rejected)
+      - one markerFileNames list per module, find generated from it (chosen)
+    because: >
+      Adding the extension to five string literals fixes this marker and
+      preserves the mechanism that lost it. With the find generated from the
+      list, and a test asserting every name in the list both appears in the
+      generated predicate and classifies to a language, the search and the
+      classifier cannot disagree about what a marker is.
+    confidence: high
+  - id: d03
+    choice: fix src/build too, though the issue named only quality and detect
+    options:
+      - stay inside the three sites the issue listed (rejected)
+      - fix every site a repo-wide grep found (chosen)
+    because: >
+      src/build/archive.go holds a third copy of the same probe, with the
+      same missing extension and the same marker list in its own resolver
+      error, so build.BuildArchive on a solution-only repo failed to resolve
+      a toolchain and misnamed the reason. Leaving it would have shipped a
+      fix whose headline claim - .slnx is detected - was false for one of the
+      three modules that detect.
+    confidence: high
+  - id: d04
+    choice: keep the .slnx fixture out of the repo root's own marker search
+    options:
+      - testdata/dotnet-slnx-app/App.slnx beside the other fixtures (rejected)
+      - src/internal/detect/testdata/slnx-solution-only/App.slnx (chosen)
+    because: >
+      Measured, not assumed. This repository runs its own precommit composite
+      against the repo root (scripts/cicd-prepush uses --src .), and both
+      detection and discoverDotnetTargets search with find -maxdepth 4. A
+      .slnx at testdata/dotnet-slnx-app/App.slnx sits at depth 3, which would
+      make it the single unambiguous solution for this repo's own dotnet
+      legs - so dotnetFormatTargets would point dotnet format at a .slnx the
+      pinned SDK 8.0 cannot open, and would stop sweeping
+      testdata/dotnet-app's projects on the way past. At six path segments
+      the fixture is outside that search, verified with the same find, and is
+      still found when a caller points --src at the directory itself.
+    confidence: high
+  - id: d05
+    choice: leave dotnetTargetLimitError's "Commit a .sln covering them" alone
+    options:
+      - widen the advice to name .slnx as well (rejected)
+      - leave the wording to the dotnet-band work (chosen)
+    because: >
+      The sentence is advice rather than detection, and it is not wrong -
+      discoverDotnetTargets has accepted both extensions all along, so a
+      consumer who follows it gets a working result either way. It also sits
+      in src/quality/dotnetreport.go, the file the concurrent .NET SDK band
+      work is centred on, and a prose conflict there would cost more than the
+      word buys.
+    confidence: medium
+tags:
+  - detection
+  - dotnet
+  - slnx
+  - markers
+  - quality
+  - build

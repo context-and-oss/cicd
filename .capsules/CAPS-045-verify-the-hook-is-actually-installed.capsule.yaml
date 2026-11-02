@@ -1,0 +1,162 @@
+kind: change-capsule
+schema: 1
+id: CAPS-045
+status: sealed
+intent: >
+  `git config core.hooksPath` was unset in a working clone of this repository
+  and there was no .git/hooks/pre-push, so `git push` ran no local gate at all.
+  Nothing said so, because a skipped gate and a passing gate look identical from
+  the terminal — the push succeeds either way.
+
+  make install-hooks sets the config, but it is a one-time manual step with
+  nothing detecting that it was skipped, and a fresh clone starts ungated. This
+  is the same failure class CAPS-038 closed one level in: an absent check
+  reading as a passing one. CAPS-038 made the gate gate; this is about whether
+  the gate is wired up at all.
+
+  So scripts/check-hooks-installed.py now answers one question — will `git push`
+  from this clone run the pre-push hook — and it asks git rather than reading
+  one config value. make check-hooks asks strictly, make install-hooks asks
+  itself after configuring, and the targets a developer runs while iterating
+  print a single warning line when the answer is no.
+impact:
+  visibility: internal
+  benefit: >
+    The state that produced this finding is now detectable in one command
+    instead of by remembering to check two things by hand, and the developer who
+    never ran install-hooks is told by the targets they do run rather than by
+    the target they also would not run.
+
+    install-hooks no longer reports success on faith. Its final message stops
+    being a claim about what the two preceding commands were meant to do and
+    becomes an answer from git about what it would actually execute.
+
+    The documentation now states the scope of the local gate instead of leaving
+    a reader to infer it. Three places said "opt into" without saying what
+    opting out costs.
+  compatibility: compatible
+  risk:
+    - >
+      This closes the "could not tell" gap, not the "did not install" gap. A
+      developer who never runs make at all is still ungated and still unwarned,
+      and no check inside this repository can reach them. The two ways to try
+      were both rejected in d02 and d03.
+    - >
+      Measured 2026-09-06 and worth stating so the check is not read as bigger
+      than it is: a branch-protection ruleset requires a pull request on
+      refs/heads/main and the required-CI ruleset requires the `ci`
+      check, so an ungated clone cannot put an unreviewed change into main. What
+      the missing hook costs here is finding out on the pull request instead of
+      before the push. A check that implies a security hole where there is a
+      latency problem is a check people learn to ignore.
+    - >
+      The exposure this does not fix is the consumer's. templates/local ships
+      the same one-manual-step design, and a consumer repository without an
+      equivalent required check has made the local hook its only gate. The
+      documentation now says so; the check itself is not shipped as a template,
+      which is recorded as a decision in d04 rather than left as an omission.
+    - >
+      The warning is one line on stderr and never fails a target. That is a
+      deliberate ceiling: it can be ignored indefinitely, and it will be by
+      anyone who has decided not to run the hook. The alternative was worse in
+      both directions — see d02.
+    - >
+      The check reports gated whenever git would run an executable pre-push
+      hook, whatever that hook contains. A clone whose hooks directory holds a
+      pre-push that exits 0 without running the pipeline is reported gated and
+      is not. That is the same limit every wiring check has, and the honest
+      boundary of what can be asked of git.
+    - >
+      Every assertion was confirmed by mutation before being trusted — twelve
+      tests across ten mutations, each test named red by at least one. Among
+      them: replacing `git rev-parse --git-path hooks` with a read of the local
+      config, hardcoding .githooks as the expected directory, trusting the
+      config without looking for the file, removing the CI skip, and aliasing
+      the not-applicable state to gated. The first version of the script had
+      that last defect for real, and running it outside a work tree printed "OK
+      (git would run the pre-push hook)" — a false claim, of exactly the kind
+      the script exists to catch.
+decisions:
+  - id: d01
+    choice: ask git what it would run, not what one config value says
+    options:
+      - compare `git config --get core.hooksPath` to ".githooks" (rejected)
+      - resolve the effective hooks directory with `git rev-parse --git-path hooks` (chosen)
+    because: >
+      The config comparison is wrong in both directions, and one of them is the
+      direction that matters. It calls a clone gated when core.hooksPath points
+      at a directory containing no pre-push, because the config read still
+      answers with the path while every push sails through. It also calls a
+      working clone broken when a developer wired the hook their own way — into
+      .git/hooks directly, or globally, or at an absolute path.
+
+      `git rev-parse --git-path hooks` resolves core.hooksPath however it was
+      set, so the question asked is the one that matters and the answer comes
+      from the same resolution git will use on push. Both wrong directions are
+      pinned by tests, and the hardcoded-directory mutation turns four of them
+      red.
+    confidence: high
+  - id: d02
+    choice: warn on the developer-facing targets, fail only when asked
+    options:
+      - fail lint/test/test-scripts when the hook is missing (rejected)
+      - install the hook as a side effect of those targets (rejected)
+      - print one warning line there, and fail only in check-hooks and install-hooks (chosen)
+    because: >
+      A hard failure blocks work over a local preference, on a fact that has no
+      bearing on whether the tests pass. It would be worked around within a day,
+      and the workaround would be permanent.
+
+      Installing it automatically rewrites a developer's git config as a side
+      effect of running the tests. In a repository that argues for explicitness
+      everywhere else, silently changing local configuration nobody asked to
+      change is the worse trade — and it would arm a multi-minute pipeline on
+      the next push of someone who had not agreed to that.
+
+      A warning can be ignored, which is its stated ceiling in the risks above.
+      It is still the strongest thing available that does not take a decision
+      out of the developer's hands.
+    confidence: medium
+  - id: d03
+    choice: no CI check, and a no-op if one ever calls it
+    options:
+      - add a CI check asserting the hook is installed (rejected)
+      - have CI infer from the pushed commit whether the gate ran (rejected)
+      - skip under CI, with the reason printed (chosen)
+    because: >
+      core.hooksPath is per-clone local configuration. A CI clone does not have
+      the developer's, so no CI check can see the fact in question — one that
+      claimed to would be theatre, and one that failed over it would break every
+      workflow running the local sweep and be deleted within a week.
+
+      Inferring it from the commit is the tempting version and is worse. Any
+      local stamp saying "the gate ran here" is written by the same clone that
+      skipped the gate, so it proves nothing and adds a ceremony that has to be
+      maintained.
+
+      Skipping prints the reason rather than staying quiet, because a check that
+      silently returns success is the shape this whole change is about.
+    confidence: high
+  - id: d04
+    choice: document the consumer exposure, do not ship the check as a template
+    options:
+      - add check-hooks-installed.py to templates/local (rejected for now)
+      - state the exposure in the setup documentation (chosen)
+    because: >
+      A consumer without a required CI check has made the local hook its only
+      gate, which is a larger exposure than this repository's. But a new
+      template file is not a one-line change: it needs an inventory entry, a
+      surface declaration, the pin and bump machinery, and a decision about
+      which of a consumer's own targets should call it. That is its own change,
+      and bundling it here would make neither part reviewable.
+
+      The documentation says the thing a consumer needs to know today, in the
+      section they read while copying the runner. Whoever picks up the template
+      inherits a stated gap rather than an undiscovered one.
+    confidence: medium
+tags:
+  - repo-checks
+  - hooks
+  - precommit
+  - drift
+  - developer-experience

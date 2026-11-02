@@ -1,0 +1,182 @@
+kind: change-capsule
+schema: 1
+id: CAPS-046
+status: sealed
+intent: >
+  The archive shape once had its own reusable workflow and its own composite
+  entry point. Both were deleted — the GitHub Actions pair first, the two Azure DevOps templates after
+  — and commit-archive.yml is present
+  at v1.6.0 and absent from v1.7.0 onward. ADR-005 called this a hard cutover
+  and justified it as safe "because this repo is the sole consumer and
+  re-points its own pins". That is true of the pins inside this tree. It says
+  nothing to somebody outside it whose caller stub still names the deleted
+  file, and the documentation said nothing to them either: measured, the only
+  two active surfaces mentioning commit-archive were ADR-005 and a campaign
+  note, neither consumer-facing and neither answering the question such a
+  reader arrives with.
+
+  The question is whether they are broken. They are not, and the reason is
+  worth writing down rather than leaving each reader to derive: a tag freezes
+  the whole chain. The workflow file exists at the tag, the file at that tag
+  pins the composite at the same tag, and RunArchive is present in that
+  composite's archive.go. Nothing on main reaches a pinned ref. What makes it
+  look otherwise is that checking main is the obvious first move and main is
+  where the file is gone — so an outage is exactly what it reads like, and the
+  reader's next action is an unplanned migration under time pressure instead of
+  a deprecation they schedule.
+
+  Azure DevOps inverts the failure. Those templates are copied into the
+  consumer's own repository, so nothing removed their file; their dagger step
+  invokes run-archive, and RunArchive does not exist at v2.0.1. For them the
+  hazard is not the deletion but the bump: raising the module pin without
+  changing the verb breaks a working pipeline, and it is the one action in this
+  whole area that does.
+impact:
+  visibility: external
+  benefit: >
+    docs/how-to-guides/use-without-dockerfile.md — the page a consumer of the
+    archive shape is already on — now answers the three questions a
+    commit-archive consumer has: whether their pin still works (it does, and
+    why), what the migration costs (one added line; every input keeps its
+    name), and what a bump breaks if done alone (the Azure DevOps verb).
+  compatibility: compatible
+  risk:
+    - >
+      The board item this closes stated the migration cost as consumers
+      silently losing coverage from their evidence. Measured, that is wrong in
+      the direction that matters: commit-archive.yml declared no test-cmd input
+      and passed no test flag to the composite, and RunArchive called only
+      build build-archive and security scan-archive. It produced no coverage,
+      so migrating cannot remove any. The page states the accurate version —
+      coverage at commit is opt-in and test-cmd alone will not get it, because
+      commit.yml exposes no coverage-path input and forwards none, so only a
+      test-legs entry naming its own coveragePath is harvested. Anybody who
+      read the original framing and planned around a regression was planning
+      for the wrong thing.
+    - >
+      Two references are written as prose rather than as the literal syntax a
+      consumer has in their file: the pinned uses: ref and the dagger call
+      line. check-repo-surface.py scans every active surface for
+      `<path>@vX.Y.Z` pins and for `-m <module>@vX.Y.Z call <cmd>`, and it
+      cannot distinguish a documented legacy from a live one — with the literal
+      forms in place it failed this page on two checks, correctly by its own
+      rules. An HTML comment beside the passage says not to restore the
+      literal syntax. That is prose guarding a gate, which is the weaker half
+      of this change: a future editor who reinstates the exact line will find
+      out from a failing check rather than from the comment, and may then reach
+      for historical_exclusions, which is for planning paths and would silence
+      pin coherence on a live how-to guide.
+    - >
+      The two same-page anchors this section adds are unverified by any check.
+      check_local_links strips the fragment before resolving
+      (target.split("#", 1)[0]), so it validates paths and never anchors, and
+      a pure-anchor link has no path left to validate. Both were confirmed
+      against their headings by hand; a later heading rename breaks them
+      silently and the surface check stays green.
+    - >
+      Nothing establishes that a consumer pinned at v1.6.0 or earlier exists.
+      The notice is written because the cost of the question going unanswered
+      falls on somebody outside this repository who cannot see the reasoning,
+      not because a specific consumer was identified. If none exists the
+      section is dead prose on an otherwise current page.
+    - >
+      The claim that every commit-archive.yml input exists in commit.yml under
+      the same name is true as measured against both files, and is held by
+      nothing. A rename in commit.yml leaves the migration table quietly
+      wrong. A prototype check — every `with:` key in a docs caller-stub block
+      whose `uses:` names a cicd reusable workflow must be a declared
+      workflow_call input — was written and run against the tree: seven blocks,
+      all clean, so it would have caught no defect today and was left out of
+      this change rather than bundled into a docs commit.
+    - >
+      The page now carries both the legacy account and the current one. Every
+      statement about v1.6.x is in one section that a reader on the current
+      version can skip, but the page is longer for everyone to serve a
+      shrinking audience, and there is no trigger that says when to delete it.
+decisions:
+  - id: d01
+    choice: put the notice in the archive-shape how-to rather than in a page of its own
+    options:
+      - a new docs/how-to-guides/migrate-from-commit-archive.md (rejected)
+      - an amendment to ADR-005 (rejected)
+      - a section in docs/how-to-guides/use-without-dockerfile.md (chosen)
+    because: >
+      A reader whose commit-archive.yml stopped appearing on main is looking for
+      the archive shape, and use-without-dockerfile.md is where the archive
+      shape is documented — they land there whether or not they know a notice
+      exists. A separate page has to be found first, adds a surface the
+      inventory must declare, and outlives its audience with nothing pointing at
+      it. ADR-005 is the wrong genre twice over: it records a decision already
+      taken, and rewriting a sealed record to carry migration instructions
+      destroys the thing an ADR is for. The section title names the literal
+      filename, so a repository search for commit-archive.yml reaches it.
+    confidence: high
+  - id: d02
+    choice: reword around the surface checks instead of exempting the page
+    options:
+      - add the page to pin_guard.pending_repairs (rejected)
+      - add it to historical_exclusions (rejected)
+      - teach both checks a documented-legacy marker (rejected)
+      - name the legacy pin and verb in prose (chosen)
+    because: >
+      pending_repairs is documented as empty and required to stay empty; it is a
+      parking lot for drift a later brief repairs, not an exemption, and using
+      it would reopen a list whose own comment says it must not reopen.
+      historical_exclusions is path-scoped and reserved for planning material
+      that is historical by construction — applying it to an active how-to
+      guide would stop checking pin coherence and command resolution on a page
+      full of live examples, which is a real hole to buy a cosmetic gain.
+
+      Teaching the checks a marker is the mechanism answer and the one worth
+      revisiting if a second deprecation notice needs the same thing. It was
+      rejected here on ratio: it changes two checks and their tests to serve
+      one passage, and a marker that exempts a line from pin coherence is a way
+      to hide a stale live pin — the exemption is more dangerous than the prose
+      it replaces.
+
+      Rewording cost less than expected and made one claim more accurate.
+      Both scans
+      require the complete pinned form, so naming the file and saying "at a tag
+      of v1.6.0 or earlier" satisfies them, and that phrasing is also more
+      accurate than the single tag it replaced: every tag up to v1.6.0 carries
+      the file, and a consumer pinned at v1.4.0 was not addressed by the
+      version naming one.
+    confidence: medium
+  - id: d03
+    choice: state the migration cost as measured, contradicting the board item
+    options:
+      - repeat the recorded framing that consumers lose coverage (rejected)
+      - omit coverage from the notice (rejected)
+      - state that coverage was never produced and is now opt-in (chosen)
+    because: >
+      Repeating it would put a false regression in front of a consumer deciding
+      whether to migrate, and the direction of the error is the harmful one: it
+      argues against a migration that in fact adds the source gate and takes
+      nothing away. Omitting coverage would leave the reader to discover on
+      their own that test-cmd at commit harvests no report, which is the one
+      genuine gap here and the reason the original framing sounded plausible.
+      The composite does accept coveragePath; commit.yml neither exposes nor
+      forwards it. That distinction is what the page states, because a reader
+      who knows only that the composite supports it will wire test-cmd and get
+      nothing.
+    confidence: high
+  - id: d04
+    choice: leave the documented-input check unwritten rather than bundle it here
+    options:
+      - add a fifteenth repo-surface check in this change (rejected)
+      - write the migration table and hold it with nothing (chosen)
+    because: >
+      The check was prototyped and run before this decision rather than argued
+      about: seven caller-stub blocks across the docs, every `with:` key a
+      declared input, no defect. So it is a drift guard for a table that is
+      correct today, not a fix — and shipping it inside a docs commit hides a
+      new gate on the local sweep behind a prose change, which is how a check
+      arrives that nobody chose. It is recorded as a risk above with the
+      prototype's measured result so the next person starts from the
+      measurement instead of the idea.
+    confidence: medium
+tags:
+  - documentation
+  - deprecation
+  - consumer-contract
+  - artifact-shapes

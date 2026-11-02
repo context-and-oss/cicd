@@ -1,0 +1,163 @@
+kind: change-capsule
+schema: 1
+id: CAPS-021
+status: sealed
+intent: >
+  Every remedy the .NET test leg offered was a change to the consumer's own
+  repository, and for some repositories none of them exists. src/quality/
+  dotnetrunner.go names three — opt into Microsoft.Testing.Platform, reference
+  the missing MTP report and coverage extensions, fix the filter that emptied a
+  project — and each is the right shape when the project could have run in
+  cicd's container. A browser E2E project cannot. It needs installed browsers,
+  and often a live service its fixture spawns, and neither exists in
+  mcr.microsoft.com/dotnet/sdk:10.0, so no edit to that project makes cicd's
+  solution-wide dotnet test pass. cicd cannot supply a runtime environment
+  either — it never publishes the artifact (ADR-001) — so for those trees the
+  only fix is to stop asking cicd to run that project, and no message said so.
+
+  The remedy already shipped. Passing --test-legs or --test-cmd to stage-2 or to
+  either composite sets LintOnly on quality.Check (src/stage-2/main.go), which
+  switches cicd's own per-language test leg off, and quality.Test then witnesses
+  the consumer's command with its coverage harvested and the ratchet applied. It
+  is named in the flag documentation and nowhere a failing run puts it.
+
+  In a hypothetical mixed solution, a browser E2E project is included beside
+  unit tests. Its environment requirements cannot be repaired by changing a
+  test filter: filtering a project to zero tests hits MTP's exit 8 guard rather
+  than providing the missing runtime. A witnessed BYO leg can name the intended
+  test command without suppressing that guard.
+  This change adds dotnetBYOTestRemedy to
+  src/quality/dotnetrunner.go and appends it at two sites — the exit 8 diagnosis
+  in that file, and dotnetTargetLimitError in src/quality/dotnetreport.go for
+  the test leg only. Covered by src/quality/dotnetrunner_test.go and
+  src/quality/dotnetreport_test.go.
+impact:
+  visibility: internal
+  benefit: >
+    A red with an incomplete remedy list does not read as incomplete. It reads
+    as a wall, and the cost is paid quietly by a consumer deciding that the leg
+    is not for them — a decision nothing in this repository can observe, since
+    they simply stop passing the flag. The evidence envelope is the only place
+    the reader of a failure is already looking, which is why the sentence goes
+    there and not into a document they would have to know to open.
+  compatibility: fix
+  risk:
+    - >
+      This is not the "a tool that could not run must never read as clean" class
+      the rest of this repository is built around, and the capsule says so
+      rather than borrowing the language. No verdict was wrong. Exit 8 is a real
+      non-run, the leg correctly failed at every threshold including NONE, and
+      the messages were accurate about what happened. What was missing was one
+      of the available remedies. The case for adding it rests on the sentence
+      being nearly free, not on the old message being false — the same footing
+      CAPS-020 argued from.
+    - >
+      The remedy switches cicd's own test leg off, which is one careless edit
+      away from being the escape hatch --fail-on NONE is. Two properties hold
+      the line and neither is visible from reading the string. It stays off exit
+      1 and exit 5, whose remedies the consumer can reach inside their own tree,
+      so it never offers "run fewer projects" beside "fix this project". And the
+      text states what a declared leg still does — command recorded, coverage
+      harvested, ratchet applied — because a leg is a reduction that names
+      itself, unlike --minimum-expected-tests 0, which silences the zero-test
+      guard for the whole run and is refused outright in
+      src/quality/dotnetrunner_test.go. Both properties are asserted as tests,
+      including a list of the words a suppression hint would contain.
+    - >
+      Exit 8 is not the status a missing-browser test failure produces.
+      A Playwright suite with no browsers fails its tests, which is exit 2 —
+      tests ran, some failed — and the remedy is deliberately absent there,
+      because appending it to an ordinary red is advertising a way to delete the
+      failing project from the run. So the message lands on the escape attempt
+      rather than the first failure, and a consumer who never tries to filter
+      the project away never sees it. That is a real gap in reach, accepted
+      because closing it means putting the sentence where it would do harm.
+    - >
+      Nothing here lowers the wall, it only labels it. cicd still points the
+      test leg at the shallowest solution (dotnetTestTargets), still has no way
+      to test a subset of projects within quality.Check, and a repository
+      shipping multiple builder-produced images still has no artifact shape that describes
+      it — the case where --artifact none plus its NOT ATTESTED warning
+      remains the honest answer rather than a good one.
+    - >
+      The two messages are now long, and length is how a reader learns to skim.
+      The exit 8 diagnosis in particular carries two em-dash clauses in
+      sequence. This repository has consistently chosen a long accurate message
+      over a short one, and no test can measure whether the sentence was read.
+decisions:
+  - id: d01
+    choice: exit 8 only, of the four statuses in the MTP exit map
+    options:
+      - append the remedy to every non-run diagnosis (rejected)
+      - append it to exit 8 alone (chosen)
+      - emit it as a standing warning on every .NET run (rejected)
+    because: >
+      Exit 1 and exit 5 already name a remedy the consumer can reach in their
+      own tree, and a second remedy beside a reachable one dilutes it — the file
+      already refuses to assert a cause it did not see, for the same reason.
+      Exit 8 is the status a project that cannot run in any container produces
+      once someone tries to filter it away, which is exactly the moment the
+      reader needs to know the leg can be handed over. A standing warning is
+      worse than either: a disclosure on every run is noise a reader learns to
+      skip, which is the argument the NOT ATTESTED warning in
+      src/build/noartifact.go is scoped by.
+    confidence: high
+  - id: d02
+    choice: dotnetTargetLimitError appends the remedy for the test leg only
+    options:
+      - append it whenever the limit trips (rejected)
+      - gate on tool being dotnet test (chosen)
+    because: >
+      That function is shared with dotnet format, and --test-legs takes over
+      test execution, so offering it to a formatter failure names a remedy that
+      cannot fix the failure being reported. A wrong remedy costs a reader more
+      than no remedy. Both directions are asserted in
+      src/quality/dotnetreport_test.go, because a gate that silently stops
+      firing for the test leg would leave the check passing while the sentence
+      disappeared.
+    confidence: high
+  - id: d03
+    choice: no project filter on quality.Check
+    options:
+      - add a flag naming which .NET test projects to run (rejected)
+      - point consumers at the witnessed leg that already exists (chosen)
+    because: >
+      It would be a second narrowing mechanism doing --test-legs' job, and by
+      this repository's own doctrine every narrowing has to carry its own proof
+      that it cannot narrow to nothing — the argument written down for --include
+      in specs/refuse-a-language-set-that-scans-nothing.md. One mechanism whose
+      reduction is witnessed beats two, one of which is not. A consumer who
+      declares a leg gets the same coverage and the same ratchet; a consumer
+      handed a filter gets neither, and cicd would have no record of what it
+      skipped.
+    confidence: high
+  - id: d04
+    choice: no spec under specs/
+    options:
+      - write specs/name-the-remedy-outside-the-tree.md (rejected)
+      - the capsule and the const's own comment carry it (chosen)
+    because: >
+      specs/ in this repository is reserved for a measured false pass, and the
+      risk section above is explicit that this is not one. Filing a spec would
+      put doctrine weight behind an incomplete remedy list, which overstates it
+      in exactly the way CAPS-020 refused for the same reason. The remedy's
+      placement and the suppression argument belong beside dotnetBYOTestRemedy,
+      where the next person to edit that string can evaluate them.
+    confidence: high
+  - id: d05
+    choice: one shared const, not the sentence written twice
+    options:
+      - inline the text at each site (rejected)
+      - a named const both sites reference (chosen)
+    because: >
+      Two copies of a remedy drift, and the drift is invisible — each site keeps
+      printing something plausible. The file already holds dotnetMTPOptInRemedy
+      as the precedent for a remedy worth naming once. A single const also gives
+      the anti-suppression tests one string to assert against, so a future edit
+      that turns it into a way to make a red go away fails once rather than
+      maybe.
+    confidence: high
+tags:
+  - quality
+  - dotnet
+  - evidence

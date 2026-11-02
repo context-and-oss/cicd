@@ -1,0 +1,185 @@
+kind: change-capsule
+schema: 1
+id: CAPS-037
+status: sealed
+intent: >
+  The evidence envelope recorded whether tests passed and never how many ran.
+  A release report could say "tests passed" but not "1411 tests, 2 failed", and
+  a reviewer had no way to notice that a suite which used to run 431 cases now
+  runs 3 — the kind of regression that presents as a green run, because a test
+  binary that silently stops collecting is indistinguishable from one that has
+  nothing to complain about. cicd's own scripts/test-module-units.sh already
+  treats this as a failure class in its own right: it counts === RUN lines and
+  fails a run where test files exist but zero tests executed. That guard
+  protected cicd and nothing downstream of it.
+
+  So the envelope gains tests, an accounting of total, passed, failed, skipped
+  and duration, and testsByLanguage carrying the same per suite. The quality
+  module fills them for Go from the captured go test output and for .NET from
+  the TRX counters it already parses. buildCombined merges the per-language map
+  and derives the repo-wide total by summing it.
+
+  Counts are the mirror image of coverage percentages, and the difference
+  decides the design. Percentages cannot be combined without weights, which is
+  what CAPS-036 had to fix. Counts sum honestly, so there is no weighting to get
+  wrong — but the refusal to publish a partial figure as a whole one carries
+  over unchanged. When a language was tested and produced no accounting, the
+  repo-wide total is withheld rather than reported as a sum over the languages
+  that happened to report, because "980 tests" printed for part of a run is a
+  false claim in a field whose whole purpose is to be compared against last
+  week's number.
+
+  Where CAPS-036 left a known weakness, this change answers it. That capsule's
+  second risk records that its pairing invariant is held by a merge loop rather
+  than by the types, so a future field added in a separate loop reintroduces the
+  defect silently. The four count fields here must agree with each other in the
+  same way, so they travel as one struct value instead of as parallel maps.
+  Aggregation is then given no opportunity to mismatch them: there is no second
+  map to keep in step, and last-writer-wins moves a whole accounting or none.
+impact:
+  visibility: external
+  benefit: >
+    combined-evidence.json now states how much testing happened, not only
+    whether it passed. A report can print a count, a trend, and a failure
+    breakdown; a reviewer can see a suite shrink; and a consumer can tell "no
+    tests ran" apart from "tests ran and passed", which the passed flag alone
+    never distinguished.
+  compatibility: additive
+  risk:
+    - >
+      Only Go and .NET report counts. Node and Python run tests and produce no
+      accounting, so on any repo using them the repo-wide total is withheld by
+      design — the new fields will read as absent on much of the fleet until
+      those runners are wired up, and a consumer cannot tell "this language
+      cannot count yet" from "this run did not test" without reading languages.
+      Deferred deliberately: both need runner command changes and therefore
+      contract re-verification, which does not belong in the same change as the
+      schema.
+    - >
+      passed + failed + skipped need not equal total, by design, and no
+      validation enforces it. A consumer computing any of the four from the
+      other three will be wrong on exactly the runs that matter most — a suite
+      that panicked mid-run emits RUN lines with no verdict, and the gap is the
+      only trace of the tests whose outcome nobody knows.
+    - >
+      The Go count is parsed from go test -v output, which is a human-facing
+      format with no stability guarantee. It is recognised by the === RUN and
+      --- PASS/FAIL/SKIP line shapes; a toolchain that reformats them yields a
+      withheld accounting rather than a wrong one, but it yields it silently and
+      the tests here would not catch it, because they assert against captured
+      output from a real run rather than against the current toolchain.
+    - >
+      Subtests are counted at every depth, so a table-driven test of forty cases
+      contributes forty-one rather than one. That matches what
+      scripts/test-module-units.sh has always reported and what the module suite
+      figures in this repository's own history mean, so the alternative would
+      have made the new field disagree with the number the team already uses —
+      but it makes the count a measure of assertions exercised, not of test
+      functions written, and nothing on the wire says which.
+    - >
+      durationMs is absent far more often than it is present. TRX carries no
+      timing the counters can be trusted for, so .NET never reports one, and Go
+      withholds its own whenever any package was a cache hit — which on a
+      developer machine is most runs. A consumer cannot distinguish "this
+      language does not time tests", "this run was cached" and "the tests were
+      instant" from the field alone, and one language reporting a duration while
+      another does not means any cross-language sum is one language's figure
+      presented as the whole run's. Where it is present, it sums per-package
+      elapsed time, so it is test time consumed rather than wall clock.
+    - >
+      src/internal/evidence/schema.json declares additionalProperties false and
+      is not updated here, so it now rejects two more fields that ship in every
+      envelope. Nothing validates against it — the only other reference in the
+      repository is an unrelated config test — so nothing breaks today. It was
+      left stale deliberately rather than patched: a document nothing reads,
+      kept looking maintained, is how CAPS-036's false comment survived. Wiring
+      it in or deleting it is a decision, not a line edit.
+decisions:
+  - id: d01
+    choice: carry the four counts as one struct rather than as parallel maps
+    options:
+      - a map per figure, matching the surrounding envelope fields (rejected)
+      - one TestCounts value per language (chosen)
+    because: >
+      Parallel maps are what the neighbouring fields do and what CAPS-036 had to
+      repair: two last-writer-wins maps holding halves of one claim can be merged
+      apart, pairing one run's numerator with another run's denominator. That
+      capsule could only fix it with a nested merge loop and recorded the
+      residual risk that the invariant lives in the loop rather than the types.
+      Numbers that must agree belong in a value that cannot be split, which
+      removes the failure mode instead of guarding against it.
+    confidence: high
+  - id: d02
+    choice: withhold the repo-wide total when a tested language produced no accounting
+    options:
+      - sum whatever languages reported (rejected)
+      - emit nothing unless every language in languages was counted (chosen)
+    because: >
+      A sum over a subset is a total for part of the run printed beside the word
+      total, and nothing in the output says which part. This is the same rule
+      d02 of CAPS-036 settled for coverage, and the same rule quality.Check
+      already holds at main.go:164 — a gate that could not measure must never
+      read as satisfied. The per-language entries that were counted still ship,
+      because a counted suite is honest on its own; it is only the aggregate
+      claim that cannot be made.
+    confidence: high
+  - id: d03
+    choice: take total from the RUN lines and the breakdown from the verdict lines
+    options:
+      - total as passed + failed + skipped (rejected)
+      - count the two independently and let them disagree (chosen)
+    because: >
+      Deriving total from the breakdown makes the books always balance, which
+      means a run that lost results to a panic reports a smaller, tidier, wrong
+      total and looks like a clean run of fewer tests. Counting the starts and
+      the verdicts separately makes the loss visible as a gap. cicd should not
+      balance a tool's books on its behalf; see the type comment.
+    confidence: high
+  - id: d04
+    choice: let parsedDocs, not the counter values, decide whether TRX yielded an accounting
+    options:
+      - trust a zero-valued summary as a run of no tests (rejected)
+      - withhold when no document was readable (chosen)
+    because: >
+      parseTrxAll's own comment names the hazard: an unparseable payload sums to
+      zero, which is exactly what a passing run of zero tests looks like. The
+      document count is the only signal that separates them. The same reasoning
+      rejects clamping a negative derived figure — more failures than executions
+      means the document is internally inconsistent, and clamping turns a corrupt
+      report into a plausible one.
+    confidence: high
+  - id: d05
+    choice: count a failed run's tests, unlike its coverage
+    options:
+      - gate counts on the run having passed, as coverage is (rejected)
+      - count from the captured output regardless of verdict (chosen)
+    because: >
+      Coverage from a failed run is unreliable because the run did not complete,
+      so it is withheld. A failed run's test count is the most useful thing about
+      it: "3 of 431 failed" is a different report from "tests failed", and it is
+      the report a reviewer needs first. The asymmetry is deliberate and noted at
+      the call site so it does not read as an oversight.
+    confidence: high
+  - id: d06
+    choice: withhold the Go duration when any package was a cache hit
+    options:
+      - sum the packages that ran and let cached ones contribute nothing (rejected)
+      - emit nothing unless every package actually ran (chosen)
+      - report the duration beside a flag saying the run was partly cached (rejected)
+    because: >
+      Treating a cache hit as zero test time is defensible in isolation and
+      indefensible on the wire. The first envelope this change produced reported
+      fifty-nine tests taking eight milliseconds, because every package but one
+      was cached — the elapsed time of the packages that missed the cache,
+      presented as the whole suite's figure, with no field for a consumer to
+      check and no reason to doubt it. That is d02's mistake in a different
+      field: a partial measurement is not a small measurement. A companion flag
+      would preserve the number but splits one claim across two fields, which is
+      the shape d01 exists to avoid. The counts are untouched, because a cached
+      package still reports every test it ran.
+    confidence: high
+tags:
+  - evidence
+  - quality
+  - testing
+  - reporting

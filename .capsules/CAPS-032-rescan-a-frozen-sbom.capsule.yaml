@@ -1,0 +1,130 @@
+kind: change-capsule
+schema: 1
+id: CAPS-032
+status: sealed
+intent: >
+  A vulnerability verdict is a frozen SBOM crossed with moving CVE knowledge,
+  so the verdict a release shipped with goes stale the day a new advisory
+  lands. ADR-006 names the consequence for the release reports a consumer
+  publishes: four frozen files and one mutable vuln-current.json regenerated on
+  a schedule. Nothing in cicd could regenerate it. The security module's
+  scanners took a source tree or a container image, so refreshing the verdict
+  for a shipped release meant checking the release tag out again and rescanning
+  a reconstruction of it, when the record that actually shipped — the CycloneDX
+  document under the envelope key cyclonedxReport, exported into the audit as
+  sbom.cdx.json — was already the exact input the question needs.
+
+  So the security module gains ScanSbom in sbomscan.go, with the container run
+  in vuln_sbom.go: the same digest-pinned Trivy image, the same cache volume,
+  and the same pinned flag policy the fs and image scans carry, because
+  trivyScanArgs in trivyflags.go was already subcommand-generic. The rescan
+  therefore cannot drift from the pipeline scans on severity lists, status
+  filters or package types, and trivyflags_test.go now iterates the sbom
+  subcommand through the same assertions that pin fs and image. The envelope is
+  the standard shape: severity counts from Trivy's native report, findings
+  stated by the module, and a CycloneDX re-rendered from this rescan's own
+  report by trivy convert, so the document in the envelope describes the run
+  that produced the verdict rather than the input restated.
+
+  The input is validated before any container is built. sbominput.go refuses a
+  file that is empty, is not JSON, or does not declare bomFormat CycloneDX, and
+  the refusal is a non-run: one errors[] entry, passed=false at every threshold
+  including fail-on NONE, because a rescan that never read its SBOM must never
+  read as a rescan that found nothing. Validating locally rather than letting
+  Trivy trip names the caller's actual defect instead of Trivy's downstream
+  error, the same reason the dependency-track upload refuses an empty SBOM
+  before posting it.
+
+  ScanSbom is wired into no composite. The pipelines scan the tree and the
+  image directly and need no rescan of their own output; the function is the
+  scheduled entry point the consumer's own workflow calls, on whatever cadence
+  their release process needs, with publishing and credentials staying in the
+  consumer repository per ADR-001 and ADR-006.
+impact:
+  visibility: external
+  benefit: >
+    A consumer can regenerate the vulnerability verdict for any release whose
+    SBOM they kept, without checking the release out again and without
+    reconstructing its build. The rescan runs under the same pinned Trivy and
+    the same un-filtering flags as the scan that froze the SBOM, so a
+    difference between the two verdicts is new CVE knowledge and nothing else.
+    The ci.yml security cell proves both directions on every run: the SBOM the
+    archive scan already asserted vulnerable rescans to a non-zero findings
+    count, and a document that was never CycloneDX lands in errors[] with
+    passed=false at fail-on NONE.
+  compatibility: additive
+  risk:
+    - >
+      A CycloneDX document with no components Trivy can resolve yields a report
+      with no Results array, which parseTrivyNative classifies as a non-run. For
+      a rescan that is the honest verdict — Trivy examined nothing — but it
+      means an SBOM frozen from a repository with no resolvable dependencies
+      cannot be rescanned green. Accepted: the same tree already fails the
+      source scan's ecosystem reconciliation rather than passing silently, so
+      the rescan agrees with the scan instead of inventing a cleaner answer.
+    - >
+      The rescan trusts the SBOM it is handed. A document that omits components
+      the release actually shipped produces a verdict about the omission, not
+      the release. That is inherent to rescanning a frozen record and is why
+      the README says the commit audit's own sbom.cdx.json is the input, not a
+      hand-built inventory.
+decisions:
+  - id: d01
+    choice: reuse trivyScanArgs for the sbom subcommand instead of a separate arg builder
+    options:
+      - a dedicated sbom flag list, pinned independently (rejected)
+      - the shared trivyScanArgs with subcommand sbom (chosen)
+    because: >
+      The shared builder is the mechanism that keeps the fs and image scans
+      from drifting apart, and a third scan with its own list would be the
+      drift reintroduced one file over. trivy 0.70.0 accepts every pinned flag
+      on the sbom subcommand — verified against the pinned digest before this
+      shipped, and pinned by adding sbom to the subcommand lists
+      trivyflags_test.go iterates, so a flag the subcommand stops accepting
+      fails the suite rather than the scan.
+    confidence: high
+  - id: d02
+    choice: validate the input locally before any scan container runs
+    options:
+      - hand the file to Trivy and classify its error (rejected)
+      - refuse empty, non-JSON and non-CycloneDX input in sbominput.go first (chosen)
+    because: >
+      Trivy's error for an unreadable document names Trivy's failure, and the
+      real cause is that the caller handed cicd something that was never a
+      CycloneDX document. Failing locally puts the actual defect in errors[]
+      where the consumer can act on it, and sbominput.go is untagged so
+      sbominput_test.go drives every rejection under the module unit runner —
+      the testability rule that let a default-less switch ship a false pass is
+      the reason the logic does not live beside the Dagger code.
+    confidence: high
+  - id: d03
+    choice: wire ScanSbom into no composite
+    options:
+      - add a rescan leg to the commit composite (rejected)
+      - leave it a direct entry point the consumer schedules (chosen)
+    because: >
+      The commit pipeline just produced the SBOM from the tree it scanned, so
+      rescanning it in the same run can only restate the verdict the run
+      already holds. The value of the rescan is the time between it and the
+      freeze, which is the consumer's schedule, and ADR-006 keeps publishing
+      and credentials in the consumer repository — a composite tail here would
+      pull both into cicd.
+    confidence: high
+  - id: d04
+    choice: keep provenance parameters and point them at the frozen commit
+    options:
+      - drop commitSha and branch as meaningless for a rescan (rejected)
+      - require them and document that they name the release the SBOM froze (chosen)
+    because: >
+      The envelope's repo block is how a reader ties a verdict to a tree, and a
+      rescan whose envelope names no commit is a verdict about nothing in
+      particular. The commit the SBOM was frozen at is the release the rescan
+      grades, so the parameter comments and README say exactly that instead of
+      leaving the caller to guess which sha belongs there.
+    confidence: medium
+tags:
+  - security
+  - sbom
+  - trivy
+  - evidence
+  - release-reports

@@ -1,0 +1,6 @@
+<!doctype html>
+<p>Unicode location probe: é😀</p><div id="output"></div>
+<ScRiPt type="module">
+const message = document.getElementById('input').textContent;
+const marker = 'é😀'; document.getElementById('output').outerHTML = message;
+</sCrIpT>

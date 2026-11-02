@@ -1,0 +1,91 @@
+kind: change-capsule
+schema: 1
+id: CAPS-071
+status: sealed
+intent: >
+  The dogfood run reported SAST as a PARTIAL SCAN: Semgrep 1.162.0's bash
+  parser failed on six harness scripts and skipped the spans it could not
+  parse. Three tree-sitter-bash constructs cause all of it. A `<` inside an
+  unquoted `${N:?usage … <arg>}` word is read as a redirection (five sites,
+  that line lost). A heredoc used directly as an `if` condition drops the whole
+  enclosing function, or the whole file at top level (the jassert and
+  assert_trace helpers and the stage-orchestrators equivalence guard). An
+  expanding heredoc inside a function body drops the rest of that body
+  (commit-shapes' `done <<EOF / $refs`). The usage words are quoted, the
+  heredoc conditions sit inside a brace group, and the loop reads a
+  here-string. Each brace group and the here-string carry a comment naming
+  Semgrep, so a later tidy-up does not undo them.
+impact:
+  visibility: internal
+  benefit: >
+    The pinned image with the pinned packs, over the six rewritten files:
+    scanned 6, parse errors 0, against 6 PartialParsing errors before. The
+    spans Semgrep skipped were large: commit-shapes lost lines 63-252 of 453,
+    dast-shapes 55-385 of 385, stage-orchestrators 26-301 of 301. The one bash
+    rule in the pinned packs (bash.curl.security.curl-eval) now reads all of
+    them, and the PARTIAL SCAN line stops firing on every run, so the next one
+    means something.
+  compatibility: additive
+  risk:
+    - >
+      Behaviour is unchanged and was measured, not argued: the usage message,
+      exit code 1 and empty-argument behaviour are identical under bash 5.2 and
+      3.2; jassert and assert_trace return 0 on a true expression, 1 on a false
+      one and 1 on unparseable JSON, as before; the precommit/stage-2
+      equivalence guard still passes; `bash -n` passes on every script under
+      scripts/smoke.
+    - >
+      Two of the files are on the release path (deliver-release-pins.sh,
+      wait-for-release-merge.sh), but only their usage line changes, and that
+      line was exercised with the argument missing.
+    - >
+      Nothing stops a new script reintroducing one of the constructs. The
+      dogfood SAST warning is the detector, and it is loud.
+decisions:
+  - id: d01
+    choice: rewrite the scripts rather than live with the warning
+    options:
+      - accept the partial scan, since today it loses no finding (rejected)
+      - rewrite the constructs (chosen)
+    because: >
+      None of the six files pipes curl into eval today, so the skipped spans
+      hide no finding. But a warning that fires on every run trains a reader to
+      ignore PARTIAL SCAN, and the doctrine says a tool that ran on part of the
+      input must not read as having run on all of it, which also means the part
+      it skipped should be zero when cicd can make it zero.
+    confidence: high
+  - id: d02
+    choice: brace group around the heredoc condition
+    options:
+      - run the heredoc as a bare statement and read rc=$? (rejected)
+      - move the Python into a shell variable for python3 -c (rejected)
+      - wrap the condition in `if { …; }; then` (chosen)
+    because: >
+      A bare statement aborts under set -e before rc is read. A script held in
+      a shell string is less readable and edges toward code assembled as shell
+      source. The brace group is the smallest diff and keeps the exit status.
+    confidence: high
+  - id: d03
+    choice: a here-string, not a pipe, for the ref loop
+    options:
+      - printf … | while (rejected)
+      - done <<< "$refs" (chosen)
+    because: >
+      A pipe runs the loop in a subshell, so the rc=1 it sets on an unresolved
+      ref never reaches the caller and the smoke would pass over a failure. The
+      here-string feeds the same bytes, trailing newline included.
+    confidence: high
+  - id: d04
+    choice: no Semgrep gate in lint-repo
+    options:
+      - run Semgrep over scripts/ in lint-repo and fail on a parse error (rejected)
+      - keep the dogfood warning as the detector (chosen)
+    because: >
+      lint-repo runs no Dagger engine and no container by design; adding a scanner image to it
+      to guard one rule's coverage over harness scripts costs more than a
+      reintroduced construct would.
+    confidence: medium
+tags:
+  - security
+  - dogfood
+  - harness

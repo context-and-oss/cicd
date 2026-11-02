@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pipeline Evidence</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --pass: #3fb950;
+      --fail: #f85149;
+      --critical: #f85149;
+      --high: #d29922;
+      --medium: #388bfd;
+      --low: #56d364;
+      --radius: 8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+      padding: 32px 16px;
+    }
+
+    .container { max-width: 800px; margin: 0 auto; }
+
+    .header { margin-bottom: 24px; }
+    .header h1 { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+    .header .meta {
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .status-banner {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 20px;
+      border-radius: var(--radius);
+      margin-bottom: 20px;
+      border: 1px solid;
+    }
+    .status-banner.pass { background: rgba(63,185,80,0.08); border-color: var(--pass); }
+    .status-banner.fail { background: rgba(248,81,73,0.08); border-color: var(--fail); }
+    .status-icon { font-size: 22px; line-height: 1; }
+    .status-text { font-size: 17px; font-weight: 600; }
+    .status-banner.pass .status-text { color: var(--pass); }
+    .status-banner.fail .status-text { color: var(--fail); }
+
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .stat-card .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .stat-card .value { font-size: 22px; font-weight: 600; }
+
+    .section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+    .section-header {
+      padding: 10px 16px;
+      font-weight: 600;
+      font-size: 11px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .severity-row {
+      display: flex;
+      align-items: center;
+      padding: 10px 16px;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .severity-row:last-child { border-bottom: none; }
+
+    .severity-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      min-width: 76px;
+      text-align: center;
+      letter-spacing: 0.02em;
+    }
+    .sev-critical { background: rgba(248,81,73,0.18);  color: var(--critical); }
+    .sev-high     { background: rgba(210,153,34,0.18); color: var(--high); }
+    .sev-medium   { background: rgba(56,139,253,0.18); color: var(--medium); }
+    .sev-low      { background: rgba(86,211,100,0.18); color: var(--low); }
+
+    .bar-wrap {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .bar {
+      height: 100%;
+      border-radius: 3px;
+    }
+    .bar-critical { background: var(--critical); }
+    .bar-high     { background: var(--high); }
+    .bar-medium   { background: var(--medium); }
+    .bar-low      { background: var(--low); }
+    .bar-pass     { background: var(--pass); }
+
+    .sev-count { min-width: 28px; text-align: right; font-weight: 600; font-size: 13px; }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 16px;
+    }
+    .tag {
+      background: var(--border);
+      color: var(--text);
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+    }
+
+    .msg-list { list-style: none; }
+    .msg-list li {
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .msg-list li:last-child { border-bottom: none; }
+    .warn-item { color: var(--high); }
+    .err-item  { color: var(--fail); }
+
+    .empty-row { padding: 12px 16px; color: var(--muted); font-size: 13px; }
+
+    .sha {
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 32px;
+    }
+    .footer a { color: var(--muted); text-decoration: none; }
+    .footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+  <script type="application/json" id="ev">__EVIDENCE_JSON__</script>
+  <div id="app"></div>
+  <script>
+    const object = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const ev = object(JSON.parse(document.getElementById('ev').textContent));
+    const repo = object(ev.repo);
+    const langs = Array.isArray(ev.languages) ? ev.languages : [];
+    const numeric = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+    const stated = value => value === null ? 'Not stated' : String(value);
+
+    // Evidence is data, even after JSON.parse. Never reinterpret it as markup.
+    function node(tag, cls = '', text = null) {
+      const result = document.createElement(tag);
+      result.className = cls;
+      if (text !== null) result.textContent = String(text);
+      return result;
+    }
+
+    function section(title) {
+      const result = node('div', 'section');
+      result.append(node('div', 'section-header', title));
+      return result;
+    }
+
+    function barRow(label, value, width, cls) {
+      const row = node('div', 'severity-row');
+      const bar = node('div', 'bar ' + cls);
+      bar.style.width = Math.max(0, Math.min(100, width)) + '%';
+      const wrap = node('div', 'bar-wrap');
+      wrap.append(bar);
+      row.append(label, wrap, node('span', 'sev-count', value));
+      return row;
+    }
+
+    const root = node('div', 'container');
+    const header = node('div', 'header');
+    let label = typeof repo.repoUrl === 'string' ? repo.repoUrl : 'Pipeline Evidence';
+    try { label = new URL(label).pathname.replace(/^\//, '').replace(/\.git$/, ''); } catch { /* Display as text. */ }
+    header.append(node('h1', '', label));
+    const meta = node('div', 'meta');
+    if (repo.branch) {
+      const branch = node('span', '', 'branch: ');
+      branch.append(node('strong', '', repo.branch));
+      meta.append(branch);
+    }
+    if (typeof repo.commitSha === 'string' && repo.commitSha) {
+      const commit = node('span', '', 'commit: ');
+      commit.append(node('span', 'sha', repo.commitSha.slice(0, 8)));
+      meta.append(commit);
+    }
+    if (typeof ev.timestampUtc === 'string') {
+      const date = new Date(ev.timestampUtc);
+      if (Number.isFinite(date.getTime())) meta.append(node('span', '', date.toLocaleString()));
+    }
+    header.append(meta);
+    root.append(header);
+
+    const passed = ev.passed === true;
+    const banner = node('div', 'status-banner ' + (passed ? 'pass' : 'fail'));
+    banner.append(node('div', 'status-icon', passed ? '✓' : '✗'),
+      node('div', 'status-text', passed ? 'Pipeline passed' : 'Pipeline failed'));
+    root.append(banner);
+
+    const stats = node('div', 'stats-row');
+    function stat(title, value) {
+      const card = node('div', 'stat-card');
+      const display = node('div', 'value', value);
+      card.append(node('div', 'label', title), display);
+      stats.append(card);
+      return display;
+    }
+    const findings = numeric(ev.findingsCount);
+    const findingDisplay = stat('Findings', stated(findings));
+    findingDisplay.style.color = findings === null ? 'var(--muted)' : findings > 0 ? 'var(--fail)' : 'var(--pass)';
+    const duration = numeric(ev.durationMs);
+    stat('Duration', duration === null ? 'Not stated' : duration < 1000 ? duration + 'ms' : (duration / 1000).toFixed(1) + 's');
+    if (langs.length) stat('Languages', langs.length);
+    root.append(stats);
+
+    const severities = section('Findings by Severity');
+    const names = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+    const bySeverity = object(ev.findingsBySeverity);
+    const maxSeverity = Math.max(1, ...names.map(name => numeric(bySeverity[name]) || 0));
+    if (findings === 0 || findings === null) {
+      severities.append(node('div', 'empty-row', findings === 0 ? 'No findings' : 'Findings count not stated'));
+    } else {
+      for (const name of names) {
+        const count = numeric(bySeverity[name]);
+        severities.append(barRow(node('span', 'severity-badge sev-' + name.toLowerCase(), name),
+          stated(count), Math.round((count || 0) / maxSeverity * 100), 'bar-' + name.toLowerCase()));
+      }
+    }
+    root.append(severities);
+
+    const languages = section('Languages');
+    const tags = node('div', 'tags');
+    for (const lang of langs) tags.append(node('span', 'tag', lang));
+    languages.append(langs.length ? tags : node('div', 'empty-row', 'None detected'));
+    root.append(languages);
+
+    const byLanguage = object(ev.coverageByLanguage);
+    const coverageEntries = Object.entries(byLanguage);
+    if (!coverageEntries.length && ev.coveragePercent != null) coverageEntries.push(['overall', ev.coveragePercent]);
+    if (coverageEntries.length) {
+      const coverage = section('Coverage');
+      for (const [lang, value] of coverageEntries) {
+        const percent = numeric(value);
+        const title = node('span', '', lang);
+        title.style.minWidth = '80px';
+        title.style.fontSize = '13px';
+        coverage.append(barRow(title, percent === null ? 'Not stated' : percent.toFixed(1) + '%',
+          percent === null ? 0 : Math.round(percent), 'bar-pass'));
+      }
+      root.append(coverage);
+    }
+
+    for (const [title, values, cls] of [['Warnings', ev.warnings, 'warn-item'], ['Errors', ev.errors, 'err-item']]) {
+      if (!Array.isArray(values) || !values.length) continue;
+      const block = section(title + ' (' + values.length + ')');
+      const list = node('ul', 'msg-list');
+      for (const value of values) list.append(node('li', cls, value));
+      block.append(list);
+      root.append(block);
+    }
+    const footer = node('div', 'footer');
+    const link = node('a', '', 'context-and-oss/cicd');
+    link.href = 'https://github.com/context-and-oss/cicd';
+    footer.append(link, document.createTextNode(' · ' + (ev.moduleName || 'pipeline')));
+    root.append(footer);
+    document.getElementById('app').replaceChildren(root);
+  </script>
+</body>
+</html>

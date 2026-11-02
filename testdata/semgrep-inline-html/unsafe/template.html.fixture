@@ -1,0 +1,4 @@
+<template>
+<script>document.body.innerHTML = document.body.textContent;</script>
+</template>
+<!-- A template's script can run when its content is cloned and inserted. -->

@@ -1,0 +1,53 @@
+# Go
+*.exe
+*.test
+*.out
+/vendor/
+/dist/
+
+# Python (release/CI helper scripts)
+__pycache__/
+*.pyc
+
+# Dagger
+.dagger/
+**/internal/dagger/
+**/internal/querybuilder/
+**/internal/telemetry/
+**/.dagger-query-state/
+
+# Go workspace sum (generated)
+go.work.sum
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (health-check shim)
+node_modules/
+
+# .NET build output and auto-generated solution files
+*.sln
+**/obj/
+**/bin/
+
+# Smoke test output (exported by composite-smoke job locally)
+smoke-out/
+smoke-evidence*/
+
+# Local tool output and caches
+cover.html
+coverage/
+*.sarif
+.pytest_cache/
+.ruff_cache/
+.envrc
+
+# Exported risk proxy script (run: dagger -m ./src/risk call proxy export --path ./claude-proxy.js)
+/claude-proxy.js

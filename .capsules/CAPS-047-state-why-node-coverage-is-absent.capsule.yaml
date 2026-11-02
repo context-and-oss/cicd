@@ -1,0 +1,181 @@
+kind: change-capsule
+schema: 1
+id: CAPS-047
+status: sealed
+intent: >
+  cicd's auto-detected vitest leg needs @vitest/coverage-v8. It prefers a
+  provider the repository pins — npm ls short-circuits the fetch, which avoids
+  the version skew an unversioned --no-save install would introduce — and
+  fetches one only when the repository pins none. That fetch carries no version
+  range, and it is the skew the comment above it warns about.
+
+  The install is not merely able to fail; it does. @vitest/coverage-v8 5.x
+  peer-requires an exact vitest, and on a tree pinning vitest ^4 npm 11.16.0
+  does not report ERESOLVE — arborist throws (Cannot read properties of null,
+  reading 'children'). The 2>/dev/null that keeps the log readable swallows
+  that crash, the `if` takes its else, and the suite runs without --coverage.
+
+  For this repository the outcome was loud: ci.yml asserts
+  .coverageByLanguage.node > 0 against testdata/node-app, so the run went red
+  and CAPS-035 pinned the fixture. A consumer has no such assertion. Tests pass,
+  the gate passes, and the coverage number is absent — which is byte-identical
+  to a repository that measures no coverage at all. The fallback's silence was
+  deliberate, so that coverage availability never decides test pass/fail, and
+  that part was right. What was wrong is that the run degraded and told nobody,
+  so a consumer's coverage can leave their evidence with nothing to point at.
+
+  The floor the follow-up issue names is to report the fallback's outcome rather than fix the
+  install: cicd must not report a coverage-less run and a coverage-of-zero run
+  identically.
+impact:
+  visibility: external
+  benefit: >
+    Every Node project that reports no coverage number now reports a reason
+    beside it, distinguishing three outcomes that used to produce the same
+    bytes: the provider could not be installed, it installed and produced
+    nothing parseable, or cicd could not determine which. The warning states
+    that test results are unaffected and names the remedy. Warnings render
+    under their own heading in the PR comment, and the evidence schema already
+    documents that a pipeline must not fail because Warnings is non-empty, so a
+    degraded run becomes visible without becoming a failure.
+  compatibility: compatible
+  risk:
+    - >
+      The install is not fixed. A consumer pinning no provider on a tree whose
+      vitest major the latest provider rejects still loses coverage on every
+      run; they are now told, each time, in a warning they can act on or learn
+      to scroll past. Deriving the range from the repository's resolved vitest
+      is the actual repair and is deliberately not attempted here — see d02.
+    - >
+      coverageRatchet still reports skipped:no-coverage-output for this case.
+      The verdict and the reason now travel together in the same envelope but
+      are two separate fields, so anything reading only the verdict — a
+      dashboard, a consumer's own gate — sees exactly what it saw before. A
+      distinct verdict was rejected in d03; the reference table in
+      docs/reference/index.md enumerates the verdict strings and would have
+      become a consumer-visible change.
+    - >
+      The sentinel is a file in the container. A container that dies before the
+      script's first command leaves no sentinel and no coverage, which lands in
+      the could-not-determine case rather than being attributed to a provider
+      failure. That is the intended reading, but it means the warning's three
+      cases are not a partition of causes — the third is "no evidence either
+      way", and a reader who takes it as "cicd is broken" will be wrong as
+      often as right.
+    - >
+      Nothing verifies the sentinel end to end. The script's structure and the
+      reader's branching are unit-tested, and the happy path is covered by
+      ci.yml's existing assertion that the fixture reports node coverage above
+      zero, but no test proves that a real container with an uninstallable
+      provider produces the provider-missing warning. Producing that state in
+      CI means breaking egress inside the test, and a smoke that pins the
+      provider to a version known to conflict would start passing for the wrong
+      reason the moment that version resolves cleanly again.
+    - >
+      Warnings on this envelope are per-project and labelled through
+      nodeProjectLabel, so a monorepo with eight Node projects and no pinned
+      provider emits eight warnings saying the same thing. That is louder than
+      one summary line and was preferred over deduplication, because which
+      project lost coverage is the part a reader needs — but it does make the
+      warnings block long in exactly the repositories where it is least
+      surprising.
+    - >
+      vitestScript is now a function returning a constant string rather than
+      the string built at its point of use. The script is still a single
+      untested-in-integration shell command; moving it changed who can read it,
+      not what runs. A reader looking for the vitest invocation in test.go now
+      finds a call and has to follow it.
+decisions:
+  - id: d01
+    choice: record the provider outcome in a sentinel file rather than infer it
+    options:
+      - infer from the absence of a coverage report (rejected)
+      - parse the npm failure out of the captured output (rejected)
+      - write a sentinel on both branches and read it (chosen)
+    because: >
+      Absence cannot be inferred, which is the whole defect: no report is what a
+      failed provider install and a repository measuring nothing both produce.
+      Parsing the output is worse than it sounds — the crash goes to
+      /dev/null by design so the log stays readable, and the message is npm's
+      internal arborist stack, which is a string that changes between npm
+      releases and would silently stop matching.
+
+      The sentinel is written on both branches, before vitest runs, and its
+      absence is a third state rather than a success. The same shape closed the
+      hook check in CAPS-045 for the same reason: an earlier draft there folded
+      "could not tell" into "fine" and printed a false claim, and a reader
+      treating a missing file as good news is the absent-check-reads-as-passing
+      failure this change is about.
+    confidence: high
+  - id: d02
+    choice: report the outcome, do not derive the provider version range
+    options:
+      - resolve the repository's vitest version and install the matching provider (rejected)
+      - pin a provider range in cicd (rejected)
+      - report the outcome and leave the install as it is (chosen)
+    because: >
+      Deriving the range is the real repair and the follow-up issue lists it first. It needs a
+      version-resolution step inside the container — read the resolved vitest,
+      map it to a provider range, install that — and every one of those steps
+      can fail in the same conditions that break the install today. Its failure
+      would have to be reported anyway, so reporting is not an alternative to
+      it: it is the prerequisite. Building the resolution first would have
+      shipped a smarter install whose failures were still silent.
+
+      Pinning a range in cicd trades a consumer's skew for cicd's: a range that
+      suits vitest 4 is wrong for whatever ships next, and cicd would then be
+      the reason a current repository cannot measure coverage. The repository's
+      own pin already wins via npm ls, so a cicd-side pin only ever applies to
+      trees that declared nothing.
+    confidence: high
+  - id: d03
+    choice: a warning, not an errors[] entry and not a new ratchet verdict
+    options:
+      - add an errors[] entry when coverage was requested and not produced (rejected)
+      - add a coverageRatchet verdict distinguishing the cause (rejected)
+      - a labelled warning on the envelope (chosen)
+    because: >
+      An errors[] entry fails the run. The tests ran and their result is valid;
+      failing a consumer's pipeline because cicd could not install a coverage
+      provider punishes them for cicd's environment, and the evidence schema
+      states outright that a pipeline must not fail because Warnings is
+      non-empty — which is the field this belongs in by that contract.
+
+      A new verdict string is the more attractive of the rejected options,
+      because the verdict is where the decision is made. It is also a
+      consumer-visible interface change: the verdict set is enumerated in
+      docs/reference/index.md and in three schema.go copies, and anything
+      matching on the existing strings would meet a value it does not know.
+      That is worth doing deliberately, with the schema-version question from
+      the aggregate-envelope work settled first, rather than as a side effect of
+      making a silent failure loud.
+    confidence: medium
+  - id: d04
+    choice: extract the script into an untagged file so its branches are testable
+    options:
+      - leave the script inline in test.go and test nothing (rejected)
+      - integration-test the container path (rejected)
+      - extract the script and the sentinel reader, unit-test both (chosen)
+    because: >
+      test.go is //go:build !unit_test, so nothing in the unit suite could see
+      the script; it ran only under Dagger and was covered by no test at all.
+      That is how a branch which silently drops coverage survived in it, and
+      leaving it there would have added a sentinel nothing checked was written.
+
+      An integration test is the stronger evidence and is not available: making
+      the provider genuinely uninstallable in CI means breaking egress inside
+      the test, and pinning a version known to conflict starts passing for the
+      wrong reason as soon as that conflict resolves. The extraction follows the
+      pattern the module already uses for nodeproject.go and eslintreport.go —
+      pure logic untagged, Dagger entrypoints tagged — and buys twelve tests,
+      each named red by at least one of thirteen mutations. Two of those
+      mutations were worth the exercise on their own: writing the sentinel after
+      the suite, and writing it after `echo $?`, which would have reported the
+      write's exit status as the test result.
+    confidence: high
+tags:
+  - quality
+  - coverage
+  - evidence
+  - silent-failure
+  - vitest

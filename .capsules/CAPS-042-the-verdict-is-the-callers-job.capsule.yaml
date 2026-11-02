@@ -1,0 +1,155 @@
+kind: change-capsule
+schema: 1
+id: CAPS-042
+status: sealed
+intent: >
+  Since v1.16.1 composites/precommit has been a producer rather than a gate. It
+  returns a nil error and exits 0 on a tripped gate exactly as it does on a clean
+  run, and the verdict lives only in `passed` inside combined-evidence.json. The
+  contract is right — a producer that aborts cannot hand back the evidence that
+  explains the abort — but it silently relocated the gate into every caller, and
+  nothing said so anywhere a caller would look.
+
+  Swept every caller in this repository for a read of `passed`. Three GitHub
+  workflows read it: .github/workflows/precommit.yml, commit.yml and
+  dogfood-precommit.yml, plus ci.yml. templates/local/scripts/cicd-prepush reads
+  it too, and reads it best — it fails on a missing evidence file and on
+  unparseable JSON before it ever compares the verdict.
+
+  All FOUR Azure DevOps templates read it zero times. Not two: the sweep started
+  from the precommit pair and the commit pair turned out to
+  have the same missing verdict check, which matters more rather than less, because the commit lane's
+  evidence is what a release record is built from. Every one of them runs the
+  composite, publishes the build summary, uploads the artifact — precommit posts
+  the PR comment too — and never looks at the answer. As shipped they scan the
+  code and then go green whatever they find.
+
+  Documented in four places, chosen so a reader hits it wherever they enter: the
+  composite README and CLAUDE.md for anyone calling the module, precommit-setup.md
+  for anyone wiring a lane, and a banner at the top of each of the four templates
+  for anyone who copied one. The templates also gain a commented-out
+  "GATE GOES HERE" step with the defensive read spelled out.
+
+  Prose alone would have been the same mistake in a new form, so the contract is
+  now enforced: check_evidence_verdict in scripts/ado_templates.py is an
+  eleventh ADO template check requiring every template to either read `passed` in
+  a live step or carry the banner verbatim. Silence is the single rejected state.
+  Seven tests in scripts/tests/test_ado_templates.py pin it in both directions,
+  including that a commented-out gate does NOT count — otherwise pasting the
+  snippet would silence the check without changing what the pipeline does.
+
+  This capsule documents the gap and deliberately does not close it in the ADO
+  templates. That stop is recorded in d03.
+impact:
+  visibility: external
+  benefit: >
+    The producer/verdict split stops being tribal knowledge held by the three
+    callers that happened to implement it. A team that copied an ADO template
+    can now discover, from the template itself, that their security pipeline
+    does not block — which is the difference between an advisory scan they know
+    about and false assurance they do not.
+  compatibility: internal
+  risk:
+    - >
+      Naming the ADO templates fail-open in the repository is also telling
+      anyone reading it where the soft spot is. Accepted, because the people who
+      copied those templates are the ones who most need to know, and the
+      behaviour is observable from a single green build with real findings in
+      its artifact anyway.
+    - >
+      A commented-out gate is a gate someone has to notice. It can sit
+      unnoticed indefinitely, and a reader who skims may conclude the template
+      gates because a gate step is visibly present. The banner at the top of the
+      file exists to make that misreading harder, but it does not make it
+      impossible.
+    - >
+      The contract is now stated in prose in four documents and enforced by one
+      check, and the check enforces the weaker half. It proves every template
+      declares a stance; it does not prove the stance is true, because it cannot
+      tell a real gate from a step that reads `passed` and ignores it. If the
+      composites ever start returning a non-nil error on a gate trip, the prose
+      goes stale in five places and no build fails — the check would still pass,
+      since a template that gates would go on gating.
+    - >
+      check_evidence_verdict matches the banner as a fixed string. Reword the
+      banner in one template and that template silently becomes exempt from the
+      "no gate" half of the check while still reading, to a human, as a warning.
+      The test that runs the real inventory would catch a template that dropped
+      the banner entirely, not one that paraphrased it.
+decisions:
+  - id: d01
+    choice: measure which callers gate rather than describe the split abstractly
+    options:
+      - state the producer/verdict contract and leave it at that (rejected)
+      - grep every caller for a read of `passed` and publish the table (chosen)
+    because: >
+      The abstract statement was already in precommit-setup.md, scoped to the
+      local runner, and it did not stop two templates from shipping without a
+      gate. A table naming which callers read the verdict makes the gap a fact
+      about specific files rather than a caveat, and it is the artifact that
+      identified the ADO templates in the first place.
+    confidence: high
+  - id: d02
+    choice: warn in the ADO templates themselves, not only in docs
+    options:
+      - document it in docs/ and the composite README (rejected as insufficient)
+      - add a banner and a commented gate step to both templates (chosen)
+    because: >
+      These templates are copied into application repositories, and the copy
+      does not come with the docs tree. A team's pipeline file is the only
+      artifact they are guaranteed to read, so the warning has to live in the
+      thing that gets copied or it does not reach the people affected.
+    confidence: high
+  - id: d03
+    choice: ship the gate commented out rather than enabled
+    options:
+      - enable the gate step in both templates (rejected here)
+      - ship it commented, with the reason stated inline (chosen)
+      - leave the templates untouched and document only (rejected)
+    because: >
+      Enabling it changes behaviour in every repository that copied the shared
+      template: pipelines green today go red the next run, on findings that were
+      always there. That is the correct end state and it is not this change's
+      call to make unilaterally; enabling shared-template gates is a separate
+      compatibility decision. Commented-out is the honest middle: the fix is
+      present and paste-ready, the reason it is off is written next to it, and
+      nobody's pipeline changes today. If the gates are enabled later, this
+      capsule records why the change was staged.
+    confidence: medium
+  - id: d04
+    choice: spell out the defensive read, not just the happy-path read
+    options:
+      - show `passed=$(jq -r .passed ...)` and a comparison (rejected)
+      - fail first on a missing or unparseable evidence file, then compare (chosen)
+    because: >
+      No verdict is not a pass. An unguarded `jq -r '.passed'` on a missing file
+      yields the empty string and on a malformed one yields a parse error to
+      stderr, and in both cases a naive `if [ "$passed" != "true" ]` can be
+      written so the run falls through to green. That is the same failure the
+      gate exists to prevent, reintroduced inside the gate. cicd-prepush already
+      does it correctly, so the copy that gets pasted should match the reference
+      rather than the minimal example.
+    confidence: high
+  - id: d05
+    choice: enforce the stance with a template check instead of trusting the prose
+    options:
+      - document the split in four places and stop (rejected)
+      - add check_evidence_verdict and require every template to declare (chosen)
+      - require every template to actually gate (rejected — that is d03's call)
+    because: >
+      The producer/verdict split was already documented, in precommit-setup.md,
+      scoped to the local runner, and four templates still shipped without a
+      gate. Prose that has already failed to prevent the thing once is not the
+      control. The check does not force a gate, because forcing one is d03's
+      deferred decision — it forces the choice to be visible in the file that
+      gets copied, which makes "nobody noticed" unreachable as a fifth
+      template's excuse. The commented-gate test is the load-bearing one: with
+      it, the only way to silence the check is to change the pipeline or to say
+      out loud that you did not.
+    confidence: high
+tags:
+  - composites
+  - repo-checks
+  - azure-devops
+  - documentation
+  - fail-open

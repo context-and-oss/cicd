@@ -1,0 +1,190 @@
+kind: change-capsule
+schema: 1
+id: CAPS-022
+status: sealed
+intent: >
+  A witnessed test leg could not name its own coverage report on
+  Microsoft.Testing.Platform, so the coverage figure a consumer could get from
+  cicd was either absent or wrong. src/quality/byotest.go read a leg's
+  coveragePath with ctr.File(path) — one literal path — and MTP names each test
+  application's report after a guid. The guid is load-bearing: it is what stops
+  two applications overwriting each other's numbers, which is why cicd's own
+  .NET leg refuses to pass --coverage-output at all, measured on a two-project
+  solution where forcing the name left one document holding whichever project
+  finished last.
+
+  That left a consumer two remedies and both are traps. Force the filename, which
+  is safe for exactly one test application and silently wrong for two. Or merge
+  by hand, which nothing verifies. A well-formed cobertura holding half a
+  repository's numbers is worse than no document at all, because it reads as a
+  successful measurement — and coverage is the one figure here that is wrong in
+  the direction that survives a ratchet.
+
+  The multi-document machinery already existed for cicd's own leg —
+  parseCoberturaSet, with byte-identical dedup because MTP writes every report a
+  second time into the .trx attachment tree. The BYO path simply could not reach
+  it. So coveragePath now accepts a filename pattern, and the logic lives in the
+  new src/quality/coverageglob.go with src/quality/coverageglob_test.go beside
+  it. src/quality/byotest.go gains harvestCoverageGlob, which expands the
+  pattern and reads bytes and decides nothing. The single-command form gets it
+  for free, because --coverage-path funnels through the same leg struct via
+  legacyTestLeg. Documented on both reusable workflows and in the parameter's own
+  doc block in src/quality/byotest.go and src/quality/testlegs.go.
+impact:
+  visibility: internal
+  benefit: >
+    It is the difference between a .NET consumer getting a coverage ratchet and
+    getting nothing. Found while writing the advice for the consumer in CAPS-021
+    — the remedy that capsule tells them to reach for is a witnessed leg, and on
+    their runner that leg could not have reported coverage, so the reply would
+    have shipped a workaround with a false-precision trap inside it.
+  compatibility: fix
+  risk:
+    - >
+      A literal coveragePath is untouched. coveragePathIsGlob only fires on one
+      of * ? [ and the original single-file branch is unchanged below it, so the
+      evidence for every leg that works today stays where it is — asserted in
+      TestCoveragePathIsGlob over paths holding dots, dashes and underscores,
+      because a pattern test that was too eager would silently reroute working
+      legs through new code.
+    - >
+      cicd cannot know how many reports a consumer's own command should have
+      written — that is the nature of a BYO leg — so it cannot tell a complete
+      harvest from a partial one. This is the honest limit of the change and it
+      is not closed: a pattern matching three of a repository's four reports
+      yields a figure over three, and nothing here can tell. What it does
+      instead is state the counts in the evidence on every run, including the
+      clean one, so a reviewer who knows the repository can judge it. A figure
+      with no count beside it is a claim about a number of projects nobody
+      stated.
+    - >
+      The search descends, matching the reasoning already recorded for cicd's
+      own harvest: pooled MTP reports sit at the top of the results directory
+      and a per-project run writes them into each build tree, so a depth limit
+      is right for one layout and quietly wrong for the other. The cost is that
+      a pattern reaches further than a reader of it expects, and the duplicates
+      recursion picks up are counted and dropped rather than merged. Asserted,
+      including the absence of -maxdepth.
+    - >
+      This is a false *absence* rather than a false pass, and the capsule says
+      so rather than borrowing the founding doctrine's language. A leg with an
+      unreadable coveragePath already warned and already contributed no figure;
+      nothing reported coverage it had not measured. The exception is the trap
+      the change removes rather than introduces: --coverage-output over a pooled
+      multi-application run, which is a real false precision, and it was
+      previously the remedy a consumer would find by themselves.
+    - >
+      Verified by compiling the tagged module, which the unit_test suite cannot
+      see: byotest.go is //go:build !unit_test, so harvestCoverageGlob is
+      covered by go build and go vet under a generated SDK and by nothing else.
+      Everything it decides was moved out to keep that surface as small as it
+      is, and the generated SDK plus its go.mod bookkeeping were reverted rather
+      than committed.
+decisions:
+  - id: d01
+    choice: a pattern in coveragePath, not a new leg field
+    options:
+      - add a coverageGlob field beside coveragePath (rejected)
+      - let coveragePath hold a pattern (chosen)
+      - always treat coveragePath as a directory to search (rejected)
+    because: >
+      Two fields is two ways to say one thing, and the validation would then owe
+      an answer for both being set — a question with no useful answer. Treating
+      the path as a directory would change what every working leg means, which
+      is the one thing this change must not do. A pattern is self-describing:
+      the metacharacter is the opt-in, so a consumer who writes a literal path
+      cannot accidentally get pattern behaviour, and the code path they are on
+      is readable from the value they wrote.
+    confidence: high
+  - id: d02
+    choice: a pattern in a directory segment is an error
+    options:
+      - search the pattern's parent and widen the match set (rejected)
+      - drop the patterned segment and narrow it (rejected)
+      - refuse it and name a pattern that works (chosen)
+    because: >
+      find takes one starting point, so /tmp/*/cover.xml cannot be expressed as
+      written, and both approximations change the match set without saying so —
+      one measures files the consumer did not ask about, the other misses files
+      they did. Either produces a coverage figure over the wrong documents with
+      no way to tell from the evidence. An error costs a rewrite; the error
+      message carries a working pattern so the rewrite is mechanical.
+    confidence: high
+  - id: d03
+    choice: three counts in the evidence, not one figure
+    options:
+      - report the merged figure and stay quiet when it worked (rejected)
+      - state matched, merged and dropped on every run (chosen)
+    because: >
+      None of the three is derivable from the others, and a single figure cannot
+      distinguish "the pattern found one report" from "the pattern found four,
+      three of which nothing could read" — the second being a figure over a
+      quarter of a repository that looks exactly as authoritative as the first.
+      The count is stated on the clean path too, which is a deliberate exception
+      to this repository's rule that a disclosure on every run is noise: here the
+      number is the only thing standing between a partial harvest and a complete
+      one, and cicd cannot tell them apart itself.
+    confidence: high
+  - id: d04
+    choice: byte-identical dedup, counted rather than silent
+    options:
+      - merge every match (rejected)
+      - dedup on path or filename (rejected)
+      - dedup on content, and say how many were dropped (chosen)
+    because: >
+      MTP writes each report twice, into the results directory and into the .trx
+      attachment tree beneath it, and the search descends — so a pattern that
+      matches the real report matches its copy. Merging both double-weights that
+      project against every other leg in the same language, which moves the
+      figure with nothing failing. Content is the right key because the two
+      copies have different paths and the same bytes, and it borrows
+      parseCoberturaSet's already-measured behaviour (4 files, 2 distinct
+      reports) rather than inventing a rule. The count is stated only when the
+      dedup fired, unlike d03, because a dedup that dropped nothing is not a
+      fact about the harvest's completeness.
+    confidence: high
+  - id: d05
+    choice: the pattern reaches find as an argv element
+    options:
+      - build a find command string and run it through sh -c (rejected)
+      - pass argv, with no shell in the chain (chosen)
+    because: >
+      A consumer-supplied pattern spliced into a shell body is a shell injection
+      whose vector is a coverage report's filename — the same rule the ADO
+      templates are held to by check-ado-templates.py, applied to cicd's own
+      generated shell. discoverDotnetTargets sets the precedent by handing its
+      marker alternation to grep through the environment. Asserted, because a
+      later edit that reaches for sh -c to add a pipe would reintroduce it
+      quietly.
+    confidence: high
+  - id: d06
+    choice: the logic goes in an untagged file
+    options:
+      - implement it inside byotest.go beside the existing read (rejected)
+      - a new untagged coverageglob.go, with byotest.go reading bytes (chosen)
+    because: >
+      byotest.go is //go:build !unit_test, so anything in it is invisible to the
+      only suite that runs without a Dagger session — and the last thing to live
+      only in such a file was the default-less switch that let --include golang
+      resolve to an empty language set. include.go and noartifact.go carry the
+      same split for the same reason. Everything a reader has to trust here is
+      which patterns are refused, how documents are deduped and what is said
+      about the unreadable ones, and all three are now driven by tests.
+    confidence: high
+  - id: d07
+    choice: no spec under specs/
+    options:
+      - write a spec, as the .NET runner change did (rejected)
+      - the capsule and coverageglob.go's own header carry it (chosen)
+    because: >
+      specs/ is reserved for a measured false pass. This is a false absence — a
+      leg that could not name its report warned and contributed no figure, and
+      reported nothing it had not measured. The false-precision trap belongs to
+      the workaround a consumer would have found on their own, which this change
+      removes. Filing a spec would overstate it in the way CAPS-020 and CAPS-021
+      both refused.
+    confidence: high
+tags:
+  - quality
+  - dotnet
+  - coverage

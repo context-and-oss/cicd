@@ -1,0 +1,14 @@
+[project]
+name = "python-app"
+version = "1.0.0"
+description = "Python test fixture for CD module integration tests"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml==5.3.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+
+[tool.pylint.main]
+fail-under = 0

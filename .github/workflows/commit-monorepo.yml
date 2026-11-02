@@ -1,0 +1,322 @@
+name: Commit app evidence (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      parallelism:
+        description: 'Independent check groups, and declared test legs, in flight: integer 1–4. Default 1 preserves sequential execution. Peak containers reach 2p-1 (p test legs beside p-1 other groups). Does not change compiler/test-runner concurrency or runner capacity.'
+        type: number
+        default: 1
+      prepare-cmd:
+        description: 'Optional install/restore and compile command executed once. Requires toolchain-image, prepare-language and BYO tests. Lint, selected tests and packaging branch from its state.'
+        type: string
+        default: ''
+      prepare-language:
+        description: 'node or dotnet when prepare-cmd is set.'
+        type: string
+        default: ''
+      prepare-test-label:
+        description: 'Test leg sharing prepared state. Required with test-legs; omit for test-cmd.'
+        type: string
+        default: ''
+      app-id:
+        description: 'Stable lowercase app identity. One caller workflow per app.'
+        required: true
+        type: string
+      source-paths:
+        description: 'Newline-separated literal repository-relative source files/folders, including shared code and plugins. No globs or implicit dependencies.'
+        required: true
+        type: string
+      lint-legs:
+        description: 'JSON array: label, language (node|dotnet), cmd, reportPath, format (eslint|dotnet-format), optional toolchainImage. Command includes setup and writes fresh native JSON.'
+        required: true
+        type: string
+      test-legs:
+        description: 'JSON array: label, language (node|dotnet), cmd, optional coveragePath and toolchainImage. Command includes setup. Declared coverage must be a fresh, literal repository-relative file.'
+        required: true
+        type: string
+      artifact:
+        description: 'archive | none. SBOM and dependency assessments are disabled in this workflow.'
+        required: true
+        type: string
+      build-cmd:
+        description: 'Archive build command including setup, executed in the toolchain container.'
+        type: string
+        default: ''
+      output-path:
+        description: 'Archive output directory, relative to checkout. Freshly produced by build-cmd.'
+        type: string
+        default: ''
+      toolchain-image:
+        description: 'Archive build toolchain override. Check legs select their own images.'
+        type: string
+        default: ''
+      fail-on:
+        description: 'CRITICAL | HIGH | MEDIUM | LOW | NONE. Execution failures always fail.'
+        type: string
+        default: 'HIGH'
+      sast-rulesets:
+        description: 'Semgrep packs, or an explicitly included configuration file.'
+        type: string
+        default: 'p/security-audit,p/owasp-top-ten,p/secrets'
+      license-gate:
+        description: 'gate | warn. Missing licence scan evidence fails in either mode.'
+        type: string
+        default: 'warn'
+      license-allow:
+        description: >-
+          Comma-separated licence categories (permissive, notice, unencumbered,
+          reciprocal, restricted, forbidden) and/or declared licence names —
+          "BlueOak-1.0.0" globally, or "example-sdk=SEE LICENSE IN LICENSE" for
+          one package. Empty keeps cicd's default policy. "unknown" is not a
+          category you can allow; allow the specific unrecognised name instead.
+          A declared name containing a comma cannot be passed here — call the
+          module directly with repeated --license-allow for that one.
+        type: string
+        default: ''
+      license-exclude:
+        description: >-
+          Comma-separated globs whose licence declarations are reported but not
+          judged against the policy, e.g. "docs/**". It narrows scope, never
+          findings: there is no way to exclude a licence by name.
+        type: string
+        default: ''
+      npm-feed-url:
+        description: 'Optional private npm registry for check commands.'
+        type: string
+        default: ''
+      npm-feed-routing:
+        description: 'How npm-feed-url is applied. "registry" (default) makes it the registry for every package, which needs a feed that proxies the public registry. "npmrc" binds only the token to the feed host and lets the project .npmrc route its scopes there (`@scope:registry=<feed>`), for a feed with no public upstream.'
+        type: string
+        default: ''
+      nuget-feed-url:
+        description: 'Optional private NuGet feed for check commands.'
+        type: string
+        default: ''
+    secrets:
+      NPM_FEED_TOKEN:
+        required: false
+      NUGET_FEED_TOKEN:
+        required: false
+    outputs:
+      build-artifact:
+        description: 'Uploaded deployable bundle name; empty unless a candidate was built and the gate passed. Contains transport bytes, artifact-manifest.json and bound evidence.'
+        value: ${{ jobs.commit.outputs.build-artifact }}
+      build-artifact-id:
+        description: 'Immutable workflow artifact ID. Select this exact producing run/artifact when deploying.'
+        value: ${{ jobs.commit.outputs.build-artifact-id }}
+      evidence-artifact:
+        description: 'Uploaded evidence bundle name; empty when no bundle could be uploaded.'
+        value: ${{ jobs.commit.outputs.evidence-artifact }}
+      passed:
+        description: 'True when execution and enabled gates passed. SBOM and dependency assessments are intentionally skipped.'
+        value: ${{ jobs.commit.outputs.passed }}
+
+permissions:
+  contents: read
+
+env:
+  DAGGER_VERSION: "0.20.8"
+
+jobs:
+  commit:
+    name: Commit evidence — ${{ inputs.app-id }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      build-artifact: ${{ steps.build-artifact.outputs.artifact-id != '' && format('commit-build-{0}-{1}-{2}-{3}', inputs.app-id, github.sha, github.run_id, github.run_attempt) || '' }}
+      build-artifact-id: ${{ steps.build-artifact.outputs.artifact-id }}
+      evidence-artifact: ${{ steps.identity.outputs.evidence-artifact }}
+      passed: ${{ steps.execute.outcome == 'success' && steps.gate.outputs.passed == 'true' && (inputs.artifact == 'none' || steps.build-artifact.outcome == 'success') && 'true' || 'false' }}
+    steps:
+      - name: Validate identity
+        env:
+          APP_ID: ${{ inputs.app-id }}
+        run: |
+          [[ "$APP_ID" =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || { echo '::error::Invalid app-id'; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Dagger CLI
+        # Inline copy of .github/actions/install-dagger: a reusable workflow
+        # runs in the caller's checkout and cannot `uses:` a local action.
+        # scripts/tests/test_install_dagger.py keeps this body identical.
+        env:
+          VERSION: ${{ env.DAGGER_VERSION }}
+        run: |
+          set -euo pipefail
+          asset="dagger_v${VERSION}_linux_amd64.tar.gz"
+          base="https://dl.dagger.io/dagger/releases/${VERSION}"
+          tmp="$(mktemp -d)"
+          curl -fsSL --retry 3 -o "${tmp}/${asset}" "${base}/${asset}"
+          curl -fsSL --retry 3 -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+          # Keep only the line naming this asset, so a checksums.txt that lists
+          # every platform cannot match on a different file, and a checksums.txt
+          # that omits ours fails here rather than verifying nothing.
+          grep -E "^[0-9a-f]{64}  ${asset}\$" "${tmp}/checksums.txt" > "${tmp}/expected.sum"
+          (cd "$tmp" && sha256sum -c expected.sum)
+          tar -xzf "${tmp}/${asset}" -C "$tmp" dagger
+          install -m 0755 "${tmp}/dagger" "${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger"
+          rm -rf "$tmp"
+          # Prove the binary that landed is the one that will run, and fail the
+          # step if it is not — an install that silently produced nothing would
+          # otherwise surface later as a confusing "dagger: command not found".
+          installed="$("${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger" version)"
+          echo "$installed"
+          case "$installed" in
+            *"v${VERSION} "*) ;;
+            *) echo "installed dagger is not v${VERSION}: ${installed}" >&2; exit 1 ;;
+          esac
+          # Provision the Dagger engine from ghcr.io/dagger/engine (Dagger's
+          # official mirror, on GitHub's network) instead of registry.dagger.io,
+          # whose path from GitHub runners intermittently times out during engine
+          # provisioning (dagger/dagger #7548/#7593). Identical image + digest.
+          # Pre-pull with backoff to warm the cache and fail loud if ghcr is
+          # unreachable; _EXPERIMENTAL_DAGGER_RUNNER_HOST makes the CLI provision
+          # from the ghcr image directly in the dagger steps that follow.
+          engine="ghcr.io/dagger/engine:v${VERSION}"
+          ok=
+          for delay in 0 5 10 15 20 30 45 60; do
+            [ "$delay" = 0 ] || sleep "$delay"
+            if docker pull "$engine"; then ok=1; break; fi
+            echo "engine image pull failed; retrying"
+          done
+          if [ -z "$ok" ]; then
+            echo "::error::Failed to pull $engine after 8 attempts"
+            exit 1
+          fi
+          echo "_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-image://$engine" >> "$GITHUB_ENV"
+
+      - name: Execute app checks and collect evidence
+        id: execute
+        env:
+          APP_ID: ${{ inputs.app-id }}
+          SOURCE_PATHS: ${{ inputs.source-paths }}
+          LINT_LEGS: ${{ inputs.lint-legs }}
+          TEST_LEGS: ${{ inputs.test-legs }}
+          ARTIFACT: ${{ inputs.artifact }}
+          PARALLELISM: ${{ inputs.parallelism }}
+          PREPARE_CMD: ${{ inputs.prepare-cmd }}
+          PREPARE_LANGUAGE: ${{ inputs.prepare-language }}
+          PREPARE_TEST_LABEL: ${{ inputs.prepare-test-label }}
+          BUILD_CMD: ${{ inputs.build-cmd }}
+          OUTPUT_PATH: ${{ inputs.output-path }}
+          TOOLCHAIN_IMAGE: ${{ inputs.toolchain-image }}
+          FAIL_ON: ${{ inputs.fail-on }}
+          SAST_RULESETS: ${{ inputs.sast-rulesets }}
+          LICENSE_GATE: ${{ inputs.license-gate }}
+          LICENSE_ALLOW: ${{ inputs.license-allow }}
+          LICENSE_EXCLUDE: ${{ inputs.license-exclude }}
+          NPM_FEED_URL: ${{ inputs.npm-feed-url }}
+          NPM_FEED_ROUTING: ${{ inputs.npm-feed-routing }}
+          NUGET_FEED_URL: ${{ inputs.nuget-feed-url }}
+          NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
+          NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+        run: |
+          evidence_dir=$(mktemp -d "$RUNNER_TEMP/commit-evidence.XXXXXX")
+          echo "evidence-path=$evidence_dir" >> "$GITHUB_OUTPUT"
+          extra=(--parallelism "$PARALLELISM")
+          [[ -z "$PREPARE_CMD" ]] || extra+=(--prepare-cmd "$PREPARE_CMD")
+          [[ -z "$PREPARE_LANGUAGE" ]] || extra+=(--prepare-language "$PREPARE_LANGUAGE")
+          [[ -z "$PREPARE_TEST_LABEL" ]] || extra+=(--prepare-test-label "$PREPARE_TEST_LABEL")
+          while IFS= read -r source_path || [[ -n "$source_path" ]]; do
+            [[ -z "$source_path" ]] || extra+=(--source-paths "$source_path")
+          done <<< "$SOURCE_PATHS"
+          [[ -z "$BUILD_CMD" ]] || extra+=(--build-cmd "$BUILD_CMD")
+          [[ -z "$OUTPUT_PATH" ]] || extra+=(--output-path "$OUTPUT_PATH")
+          [[ -z "$TOOLCHAIN_IMAGE" ]] || extra+=(--toolchain-image "$TOOLCHAIN_IMAGE")
+          [[ -z "$NPM_FEED_TOKEN" ]] || extra+=(--npm-token env:NPM_FEED_TOKEN)
+          [[ -z "$NPM_FEED_ROUTING" ]] || extra+=(--npm-feed-routing "$NPM_FEED_ROUTING")
+          [[ -z "$NUGET_FEED_TOKEN" ]] || extra+=(--nuget-token env:NUGET_FEED_TOKEN)
+          # Licence allowances and exclusions: one flag per entry, like
+          # --source-paths above. Relying on the CLI to split a comma-separated
+          # value would make the policy depend on argument parsing we do not
+          # own. Whitespace is trimmed with parameter expansion rather than
+          # `xargs`, which also interprets quotes and backslashes — a declared
+          # licence name may legally contain an apostrophe, and xargs answers an
+          # unmatched quote by failing the whole step rather than by trimming.
+          # Case is folded nowhere here: an entry may be an SPDX identifier,
+          # where case is part of the name, and a path where it is significant.
+          _trim() {
+            local _s="$1"
+            _s="${_s#"${_s%%[![:space:]]*}"}"
+            _s="${_s%"${_s##*[![:space:]]}"}"
+            printf '%s' "$_s"
+          }
+          _license_flags() {
+            local _flag="$1" _value="$2" _n=0 _entry
+            local -a _parts
+            [[ -n "$_value" ]] || return 0
+            IFS=',' read -ra _parts <<< "$_value"
+            for _entry in "${_parts[@]}"; do
+              _entry="$(_trim "$_entry")"
+              [[ -n "$_entry" ]] || continue
+              extra+=("$_flag" "$_entry")
+              _n=$((_n + 1))
+            done
+            if [[ "$_n" -eq 0 ]]; then
+              echo "::error::$_flag was set but names no entry; clear the input to use the default policy."
+              return 1
+            fi
+          }
+          # `|| exit 1` explicitly rather than trusting errexit: the default
+          # shell sets it, but a step that grows a `set +e` later would turn a
+          # refused policy input into a silently narrowed allowlist.
+          _license_flags --license-allow "$LICENSE_ALLOW" || exit 1
+          _license_flags --license-exclude "$LICENSE_EXCLUDE" || exit 1
+          dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.2 call run \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --src . --app-id "$APP_ID" --lint-legs "$LINT_LEGS" --test-legs "$TEST_LEGS" \
+            --artifact "$ARTIFACT" \
+            --fail-on "$FAIL_ON" --sast-rulesets "$SAST_RULESETS" --license-gate "$LICENSE_GATE" \
+            --npm-feed-url "$NPM_FEED_URL" --nuget-feed-url "$NUGET_FEED_URL" \
+            --commit-sha "$GITHUB_SHA" --branch "$GITHUB_REF_NAME" --repo-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            "${extra[@]}" export --path "$evidence_dir"
+
+      - name: Upload evidence
+        id: upload
+        if: always() && steps.execute.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: commit-evidence-${{ inputs.app-id }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.execute.outputs.evidence-path }}/
+            !${{ steps.execute.outputs.evidence-path }}/artifacts/**
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Expose uploaded bundle identity
+        id: identity
+        if: always() && steps.upload.outcome == 'success'
+        env:
+          APP_ID: ${{ inputs.app-id }}
+        run: echo "evidence-artifact=commit-evidence-$APP_ID-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Gate on evidence
+        id: gate
+        if: always()
+        env:
+          EXECUTION: ${{ steps.execute.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+          EVIDENCE_PATH: ${{ steps.execute.outputs.evidence-path }}
+        run: |
+          echo 'passed=false' >> "$GITHUB_OUTPUT"
+          [[ "$EXECUTION" == success && "$UPLOAD" == success ]] || exit 1
+          jq -e '.passed == true' "$EVIDENCE_PATH/combined-evidence.json" >/dev/null
+          echo 'passed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Upload deployable candidate
+        id: build-artifact
+        if: success() && steps.gate.outputs.passed == 'true' && inputs.artifact != 'none'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: commit-build-${{ inputs.app-id }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.execute.outputs.evidence-path }}/artifacts/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90

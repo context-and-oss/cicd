@@ -1,0 +1,14 @@
+documents:
+  - path: docs/spec.md
+    required_sections: [Overview, Goals, "Acceptance Criteria"]
+
+  - glob: docs/decisions/ADR-*.md
+    frontmatter_required: false
+    required_sections: [Status, Context, Decision, Consequences]
+
+severities:
+  missing_section: error
+  frontmatter_invalid: error
+  frontmatter_missing: error
+  file_not_found: error
+  threshold_exceeded: warn

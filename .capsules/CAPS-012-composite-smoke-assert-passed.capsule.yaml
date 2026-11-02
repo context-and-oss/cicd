@@ -1,0 +1,152 @@
+kind: change-capsule
+schema: 1
+id: CAPS-012
+status: sealed
+intent: >
+  composite-smoke's "Validate combined evidence" step asserted that the
+  combined envelope's verdict field EXISTS, not that it is true. Since
+  "passed" in d is satisfied by passed=false, a precommit composite that
+  ran, gated itself and reported a failure printed OK and turned the job
+  green. This is the repository's founding doctrine — a tool that could
+  not run must never read as clean — failing inside the check that
+  enforces it, at the last hop, on the job every module pull request
+  leans on for end-to-end proof. Tighten it to assert the value, add an
+  independent errors[] assertion and a languages[] "nothing ran" guard,
+  and stop the surrounding shell loop from returning only its last
+  iteration's status. All of this lands in .github/workflows/ci.yml, whose
+  two sibling passed sites also gain a comment naming which strength each
+  is, because grepping for passed in that file previously showed three
+  sites and no way to tell them apart.
+impact:
+  visibility: internal
+  benefit: >
+    composite-smoke can now fail. It was structurally incapable of
+    failing on a red gate, which is the one thing it is there to detect.
+    A reviewer reading the log learns which fixture failed and why from
+    a single line carrying errors, findingsBySeverity, findingsCount and
+    languages — no artifact download, no Dagger rerun.
+  compatibility: fix
+  risk:
+    - >
+      This turns composite-smoke RED on main immediately, and that is
+      correct rather than a regression. Measured on the uploaded
+      smoke-evidence artifacts of three successful runs of main
+      (2026-08-05, 2026-08-12, 2026-08-14), the
+      dotnet leg reported passed=false every time, with the error
+      "trivy: report contains no scan results, so no target was
+      examined". go and node reported passed=true. So the presence-only
+      assertion had been masking a real non-run for at least twelve days
+      while the job stayed green, and the notify comment.md inside those
+      same artifacts had been rendering "precommit — Failed" the whole
+      time. The masked bug is filed separately; it is not fixed here
+      because testdata/ and src/security/ are outside this change.
+    - >
+      A known-red fixture is deliberately NOT allow-listed. Encoding
+      dotnet's current passed=false as expected would restore exactly
+      the property being removed — a gate whose failure is
+      indistinguishable from its success — with an allow-list entry and
+      no expiry as the extra cost. The job going red is the honest state
+      and the pressure that gets the fixture fixed.
+    - >
+      passed=true is asserted uniformly and is NOT a claim that the
+      fixtures are clean. It is a claim that every leg executed, and it
+      is only that because the smokes run --fail-on NONE: under NONE
+      gatedPassed gates severityOK alone, so findings cannot move the
+      verdict. go-app carries 1 HIGH and node-app 14 findings including
+      a CRITICAL, and both pass — verified against the real artifacts.
+      Should a smoke ever drop --fail-on NONE, this assertion silently
+      changes meaning into a findings gate and would have to be revisited.
+    - >
+      The languages[] assertion tests membership, not equality, so it
+      proves the intended language was detected and not that it was the
+      only one. It does not prove any particular scanner produced output;
+      that question is what the errors[] assertion answers.
+    - >
+      Nothing here proves the composite legs themselves are correct. The
+      step reads an envelope the composite wrote. It gains no ability to
+      detect a leg that reports success dishonestly, only a leg that
+      reports failure honestly and was previously ignored.
+decisions:
+  - id: d01
+    choice: assert passed == True uniformly and let composite-smoke go red
+    options:
+      - assert per fixture with dotnet allow-listed as expected-red (rejected)
+      - keep presence-only and only improve the log message (rejected)
+      - assert passed == True uniformly for all three fixtures (chosen)
+    because: >
+      The measured red is a genuine non-run, not fixture debt. Under
+      --fail-on NONE the only thing that can set passed=false is a leg
+      that could not do its work, which is precisely the condition this
+      job exists to surface, so suppressing it per fixture would be
+      suppressing the finding rather than the noise. An allow-list would
+      also have to be trusted to be removed later, and nothing in the
+      repository would notice if it never was.
+    confidence: high
+  - id: d02
+    choice: assert errors[] is empty as its own assertion
+    options:
+      - trust passed == True to imply errors is empty (rejected)
+      - report errors only inside the failure message (rejected)
+      - assert errors[] empty independently (chosen)
+    because: >
+      buildCombined in src/cross-cutting/evidence/main.go derives the two
+      from separate loops — Passed is the AND of the legs' verdicts,
+      Errors is the concatenation of theirs. A leg that classified a
+      non-run into errors[] but forgot to fail its own gate therefore
+      yields passed=true with a populated errors[], and the verdict
+      assertion alone would pass it. That is the same false pass one
+      level down, and this step is where it becomes visible. Proven by
+      negative control: a doctored envelope with the real trivy error
+      and passed forced true fails on this assertion and no other.
+    confidence: high
+  - id: d03
+    choice: assert the expected language is present, do not assert findingsCount
+    options:
+      - assert findingsCount > 0 so an empty run cannot pass (rejected)
+      - assert nothing beyond the verdict and errors (rejected)
+      - assert the fixture's language is in languages[] (chosen)
+    because: >
+      "Gate passed because nothing ran" needs a guard, but findingsCount
+      is the wrong one: pinning it couples the job to scanner database
+      drift, so a CVE aging out of a feed turns composite-smoke red for a
+      reason that has nothing to do with the pipeline — a false-failure
+      generator, and this repository accepts a false failure only where a
+      false pass is worse. languages[] closes the same hole without that
+      coupling, since detection returning empty would no-op every leg and
+      produce the clean zero-finding envelope in question. Proven by
+      negative control: languages forced to [] fails.
+    confidence: high
+  - id: d04
+    choice: collect per-fixture failures and exit once, rather than abort on the first
+    options:
+      - rely on the default shell's -e to abort at the first red fixture (rejected)
+      - run all three, collect failures, exit non-zero at the end (chosen)
+    because: >
+      A bare for loop returns only its LAST iteration's status, so a red
+      go-app followed by a green dotnet-app would have exited 0 — the
+      same masking this change exists to remove, one level in, and left
+      resting entirely on an implicit shell default that a later
+      shell:-key addition could remove without comment. Collecting also
+      means a reviewer sees every red fixture in one log instead of
+      rediscovering the second after fixing the first. Proven by negative
+      control: the first fixture forced red and the last left green exits 1.
+    confidence: high
+  - id: d05
+    choice: no specs/ entry — the capsule, the in-file comment and an issue carry it
+    options:
+      - add specs/assert-the-composite-gate-passed.md and declare it (rejected)
+      - capsule plus a comment block at the step itself (chosen)
+    because: >
+      No public surface and no doctrine changes here; this is an existing
+      doctrine being applied where it had been missed. The durable record
+      belongs where the next person will be editing, which is the step
+      itself, and the measured dates and shas belong in the capsule. The
+      masked dotnet non-run gets its own issue rather than a spec, since
+      it is an open defect and not a decision.
+    confidence: medium
+tags:
+  - composite-smoke
+  - ci
+  - evidence
+  - false-pass
+  - doctrine

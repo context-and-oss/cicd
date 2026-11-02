@@ -1,0 +1,13 @@
+{
+  "stage": "stage-4",
+  "step": "orchestrator",
+  "function": "Run",
+  "params": [
+    { "name": "src",       "type": "Directory", "required": true },
+    { "name": "commitSha", "type": "String",    "required": true },
+    { "name": "branch",    "type": "String",    "required": true },
+    { "name": "repoUrl",   "type": "String",    "required": true },
+    { "name": "failOn",    "type": "String",    "required": false, "default": "HIGH" }
+  ],
+  "outputSchema": "evidence-1[]"
+}

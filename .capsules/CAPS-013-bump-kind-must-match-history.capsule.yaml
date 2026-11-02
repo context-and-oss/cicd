@@ -1,0 +1,104 @@
+kind: change-capsule
+schema: 1
+id: CAPS-013
+status: sealed
+
+intent: >
+  Releases v1.14.2 and v1.14.3 both shipped a feat commit as a patch bump, because
+  git cliff --bumped-version partitions history by commit date rather than by
+  reachability, so a commit merged from a branch that stayed open across a release
+  is filed under a release that already shipped. This change passes --unreleased at
+  both bump call sites in .github/workflows/cd.yml and scripts/release_drift.py,
+  and adds scripts/check-release-bump.py with its logic in scripts/release_bump.py,
+  which derives the bump the range requires from git log and refuses the release
+  when cliff disagrees. The check exists in addition to the flag because a feature
+  released as a patch reads exactly like a release that shipped no features, and
+  release-drift.yml cannot detect it: it compares the newest tag against the same
+  cliff that mis-filed the commit, therefore both sides of its comparison agree.
+
+impact:
+  visibility: internal
+  benefit: >
+    A release whose tag disagrees with the history it ships stops instead of
+    tagging, since a wrong tag cannot be withdrawn and the commits behind it can
+    never be accounted for by a later bump.
+  compatibility: backward-compatible
+  risk:
+    - >
+      The check refuses a release rather than tagging one, so a false failure
+      blocks every release until a subject is corrected. Mitigated because the
+      classification tables in scripts/tests/test_release_bump.py were measured
+      against the pinned git-cliff 2.13.1 rather than read off the Conventional
+      Commits specification, and because an unparseable subject contributes
+      nothing here, which is what cliff does with it too.
+    - >
+      The skip patterns are read out of cliff.toml with a regex instead of a TOML
+      parse, given that tomllib requires Python 3.11 and these scripts run on the
+      runner's system interpreter. A malformed commit_parsers array exits 2 rather
+      than yielding an empty skip list, because an empty list would reclassify
+      every chore commit as a patch and refuse every release.
+
+decisions:
+  - id: D1
+    choice: >
+      Derive the required bump from git log and compare it against cliff's version,
+      rather than reading the rendered release notes for a Features heading.
+    options:
+      - grep the notes cliff renders for its group headings
+      - derive the required bump from the commit subjects and bodies in the range
+    because: >
+      cliff.toml sets an empty header and the body template emits no version
+      heading, so the notes carry group names only, and a group name is a label
+      commit_parsers derived from the same commit that was mis-filed. Asking about
+      the label is asking cliff twice over the partition that produced the wrong
+      answer, whereas git log resolves its range by reachability and is therefore
+      independent on the axis that broke.
+    confidence: high
+
+  - id: D2
+    choice: Include merge commits in the range the check examines.
+    options:
+      - pass --no-merges and judge only non-merge commits
+      - include merges, which contribute nothing unless their subject parses
+    because: >
+      a --no-ff merge whose subject reads feat colon does make cliff bump a minor,
+      measured, so excluding merges would have created a class of false failure
+      instead of removing noise. They are collapsed into a count in the report
+      rather than listed, since twenty merge lines push the deciding commit off a
+      reviewer's screen and none of them can change the verdict.
+    confidence: high
+
+  - id: D3
+    choice: >
+      Leave .github/workflows/release.yml unchecked, and wire the check only into
+      the next-version job of .github/workflows/cd.yml.
+    options:
+      - check every path that creates a tag
+      - check only the path where the version is computed rather than supplied
+    because: >
+      release.yml releases a version a human typed, which is a deliberate
+      override, so asking whether the history agrees with it would refuse the
+      override for doing the job it exists to do. A computed version is where a
+      bump can be wrong without anyone having decided it.
+    confidence: high
+
+  - id: D4
+    choice: >
+      Report a chore-typed commit carrying a BREAKING CHANGE footer as a defect
+      that refuses the release on its own.
+    options:
+      - ignore it, since cliff ignores it
+      - refuse the release and name the commit
+    because: >
+      cliff's skip parser removes the commit before the footer is read, therefore
+      the breaking change releases nothing at all. That is this capsule's own
+      subject one commit type further along, and it is always a real defect when
+      it occurs, so the remedy is named in the message: put the exclamation mark
+      in the subject where the first parser sees it.
+    confidence: high
+
+tags:
+  - release
+  - git-cliff
+  - versioning
+  - silent-false-pass

@@ -1,0 +1,75 @@
+{
+  "why": "One corpus, two readers. src/quality/parseTestLegs and src/composites/commit/parseAppLegs both decode this leg document, and app mode marshals []appLeg straight into quality.Test's --test-legs, so a key one of them models and the other drops is a service that is configured and never bound. The modules are isolated Go modules and cannot import each other, so the agreement is asserted against this file from both sides rather than assumed. Every document here is otherwise valid for both parsers: a test-kind dotnet leg with a label and command both accept, varying only in its services.",
+  "documents": [
+    {
+      "name": "no services at all",
+      "accept": true,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\"}]"
+    },
+    {
+      "name": "one fully declared service",
+      "accept": true,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"image\":\"postgres:16\",\"port\":5432,\"env\":{\"POSTGRES_PASSWORD\":\"test\"},\"readyCmd\":\"pg_isready -h db\",\"readyTimeout\":45}]}]"
+    },
+    {
+      "name": "two services",
+      "accept": true,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"image\":\"postgres:16\",\"port\":5432},{\"alias\":\"cache\",\"image\":\"redis:7\",\"port\":6379}]}]"
+    },
+    {
+      "name": "empty service array",
+      "accept": true,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[]}]"
+    },
+    {
+      "name": "unknown key inside a service",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"image\":\"postgres:16\",\"port\":5432,\"readyCommand\":\"pg_isready\"}]}]"
+    },
+    {
+      "name": "readyCmd spelled in the wrong case",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"image\":\"postgres:16\",\"port\":5432,\"readycmd\":\"pg_isready\"}]}]"
+    },
+    {
+      "name": "no port declared",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"image\":\"postgres:16\"}]}]"
+    },
+    {
+      "name": "port out of range",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"image\":\"postgres:16\",\"port\":70000}]}]"
+    },
+    {
+      "name": "no image declared",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"port\":5432}]}]"
+    },
+    {
+      "name": "alias with an underscore is not a hostname",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"my_db\",\"image\":\"postgres:16\",\"port\":5432}]}]"
+    },
+    {
+      "name": "alias with a capital is not a hostname",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"DB\",\"image\":\"postgres:16\",\"port\":5432}]}]"
+    },
+    {
+      "name": "duplicate alias",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"image\":\"postgres:16\",\"port\":5432},{\"alias\":\"db\",\"image\":\"redis:7\",\"port\":6379}]}]"
+    },
+    {
+      "name": "readyTimeout with no readyCmd to spend it on",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"db\",\"image\":\"postgres:16\",\"port\":5432,\"readyTimeout\":30}]}]"
+    },
+    {
+      "name": "one more service than the limit",
+      "accept": false,
+      "legs": "[{\"label\":\"api\",\"language\":\"dotnet\",\"cmd\":\"dotnet test\",\"services\":[{\"alias\":\"s0\",\"image\":\"redis:7\",\"port\":6379},{\"alias\":\"s1\",\"image\":\"redis:7\",\"port\":6379},{\"alias\":\"s2\",\"image\":\"redis:7\",\"port\":6379},{\"alias\":\"s3\",\"image\":\"redis:7\",\"port\":6379},{\"alias\":\"s4\",\"image\":\"redis:7\",\"port\":6379}]}]"
+    }
+  ]
+}

@@ -1,0 +1,159 @@
+kind: change-capsule
+schema: 1
+id: CAPS-017
+status: sealed
+intent: >
+  The commit composite's --artifact none arm recorded nothing. In
+  src/composites/commit/main.go the whole case was a comment explaining that
+  the SBOM comes from stage-2's source scan, and no evidence file, warning or
+  field followed it. So a commit-stage audit of a repository that ships several
+  deployables cicd was never pointed at and an audit of a repository that ships
+  none were the same bytes — passed true, a sbom.cdx.json built from source
+  lockfiles, and no statement anywhere that no artifact had been built, SBOM'd
+  or scanned. Measured by grep over the branch, the only occurrences of the
+  shape were the case label and the invalid-value error. This change adds
+  src/build/noartifact.go with build.NoArtifact, an evidence function that runs
+  no tool and returns a warned pass carrying the warning
+  "artifact: NOT ATTESTED — ..." plus genericReport.artifactAttested false,
+  wires it as the none tail, and asserts both channels in
+  scripts/smoke/commit-shapes.sh. Artifact multiplicity and accepting
+  builder-produced images remain separate gaps, described in d07.
+impact:
+  visibility: internal
+  benefit: >
+    A reviewer reading a none-shape audit now learns from the PR comment that
+    no artifact was attested, which five build and scan functions were skipped,
+    and that the SBOM sitting in the same directory describes source lockfiles
+    rather than a deployable. That last clause is the one a reader was most
+    likely to get wrong, because the file is present and named exactly as it is
+    in a container-shape audit. Machines read artifactAttested false instead of
+    inferring an absence from a missing file.
+  compatibility: fix
+  risk:
+    - >
+      The disclosure is unconditional and states no more than the selector
+      value it was given. Nothing here probes the source tree for a Dockerfile
+      or a project file to catch a consumer who selected none over a repository
+      that plainly ships something, so a wrong selection is now legible but
+      still not contradicted. A probe was rejected under d04.
+    - >
+      A warned pass adds a line to every none-shape PR comment. That is why the
+      smoke asserts the record's absence for container and archive as well as
+      its presence for none: a disclosure printed on every run is noise a
+      reader stops reading, and the negative control is what keeps this one
+      attached to the shape that earned it.
+    - >
+      The warning text is load-bearing prose in a single envelope field, and
+      notify/render.go writes each warning as a markdown code span. A backtick
+      would close the span and a newline would break the list item, so a future
+      edit can degrade the rendering without failing any gate. That is asserted
+      in src/build/noartifact_test.go and written into src/build/CLAUDE.md
+      rather than left to review.
+    - >
+      moduleName and moduleStage moved out of src/build/main.go, which carries
+      a !unit_test build tag, into the untagged src/build/noartifact.go. The
+      identity strings are unchanged, and cross-cutting/evidence rejects an
+      envelope with an empty moduleName, so the move is covered by the round-trip
+      test and by the smoke run rather than by inspection alone.
+decisions:
+  - id: d01
+    choice: a warned pass, never a gate failure
+    options:
+      - fail the run when no artifact was attested (rejected)
+      - warn, keep passed true, and leave failOnSeverity unset (chosen)
+    because: >
+      A library or an infra repository genuinely has nothing deployable, and
+      none is the value that exists for it. --fail-on NONE deliberately does not
+      suppress a non-run, so the one knob a consumer would reach for could not
+      clear this failure either, and it would be a permanent red with no remedy
+      available to them. That is the same reasoning that made
+      quality NO LANGUAGE DETECTED a warning. An envelope that gates nothing
+      also must not claim a threshold, so failOnSeverity stays empty.
+    confidence: high
+  - id: d02
+    choice: build.NoArtifact, not an envelope assembled inside the composite
+    options:
+      - build the envelope in src/composites/commit/main.go (rejected)
+      - a new evidence function in the build module (chosen)
+    because: >
+      scripts/repo-inventory.json records that composites hold no schema.go
+      copy: they read evidence through their dependencies and produce none of
+      their own. Writing an envelope in the composite would need a fourth copy
+      of the schema in a directory the sync-schema target does not walk, and it
+      would put the sentence about which build functions were skipped somewhere
+      other than the module that owns those functions. The build module already
+      has schema.go and already owns the artifact concept.
+    confidence: high
+  - id: d03
+    choice: state facts in the warning, not a bare claim
+    options:
+      - a bare 'artifact NOT ATTESTED, no artifact was built' (rejected)
+      - name the selector value, the five skipped functions, and what sbom.cdx.json describes (chosen)
+    because: >
+      quality NOT SCANNED quotes the marker path that triggered it for the same
+      reason: a bare language name is something a reader has to take on trust.
+      Here the fact most worth quoting is what the SBOM in the same audit
+      directory covers, because its presence is what makes the absence of an
+      artifact SBOM hard to notice. The remedy names --artifact, a flag owned by
+      the commit composite rather than by the build module, which is precedented
+      by intent.Check naming --require-intent.
+    confidence: high
+  - id: d04
+    choice: do not verify the claim against the source tree
+    options:
+      - probe for a Dockerfile, a project file or an AppHost to catch a wrong selection (rejected)
+      - disclose unconditionally and probe nothing (chosen)
+    because: >
+      A probe fixes one marker at a time forever, which is the trap the marker
+      lists in markers.go already document, and it costs a container run in the
+      one shape that currently starts none. Decisively, it would not have caught
+      the repository that motivated this change: that repository has no
+      Dockerfile at all. Builder-produced images need not have that marker. An unconditional statement needs no heuristic to be right.
+    confidence: high
+  - id: d05
+    choice: assert the record in the rendered comment as well as in the envelope
+    options:
+      - assert the warning in combined-evidence.json only (rejected)
+      - assert it in combined-evidence.json and in comment.md, and its absence for the other two shapes (chosen)
+    because: >
+      The envelope is not what a reviewer reads. A change that keeps the
+      warning in the envelope while notify stops rendering warnings would
+      return the reviewer to the silence this change removes, with every
+      envelope assertion still green. scripts/smoke/commit-shapes.sh already
+      exports comment.md for all three shapes, so the second channel costs one
+      grep.
+    confidence: high
+  - id: d06
+    choice: put the logic in an untagged file with the Dagger entry as a wrapper
+    options:
+      - implement it inside the !unit_test-tagged src/build/main.go (rejected)
+      - src/build/noartifact.go untagged, with a three-line entry point in main.go (chosen)
+    because: >
+      Assembling an envelope that records an absence needs no container, no
+      source tree and no exit status, so nothing here needs Dagger to be tested.
+      src/quality/include.go carries the same split for a measured reason: a
+      switch with no default arm survived in the tagged lint.go for as long as
+      it did because nothing in that file could be driven by a test. Keeping
+      the identity constants in the untagged file means the tests assert the
+      module identity that ships instead of one they supplied themselves.
+    confidence: high
+  - id: d07
+    choice: leave artifact multiplicity and builder-produced images out
+    options:
+      - add --artifact-legs and accept an image cicd did not build in the same change (rejected)
+      - close the disclosure gap only, and write down what stays open (chosen)
+    because: >
+      Multiplicity is additive and needs an ADR-005 amendment of its own plus
+      contract work. Accepting a tarball or a registry reference that cicd did
+      not build weakens ADR-001's ownership split from cicd owning execution and
+      the evidence plane to cicd owning the evidence plane, which is a decision
+      to argue in an ADR and not a parameter to add. Bundling either one would
+      have made a disclosure fix into a change nobody can review in one pass.
+      Both are written into the spec's closing section so a green none-shape run
+      cannot read as coverage they would provide.
+    confidence: high
+tags:
+  - evidence
+  - false-pass
+  - commit-stage
+  - disclosure

@@ -1,0 +1,185 @@
+kind: change-capsule
+schema: 1
+id: CAPS-040
+status: sealed
+intent: >
+  Two documentation pages claimed cicd checked dependency licenses. Nothing
+  did. The CycloneDX SBOM already carried a licenses field per component,
+  which is what made the claim look true, but an SBOM is an inventory and a
+  license check is a verdict. A repository can hold a complete manifest of
+  what it depends on and still have no statement about whether any of it is
+  allowed to ship.
+
+  So security gains scanLicenses, a fourth Trivy invocation with its own
+  pinned flags in src/security/licenseflags.go, its own classification and
+  policy in src/security/licensereport.go, and its own evidence envelope under
+  the new security-license scope. It is not a fourth leg inside scanSource. A
+  license finding has no CVE and no fix version, and merging it into the
+  security counts would let a copyleft dependency consume the finding budget
+  of the gate that exists to stop exploitable code shipping.
+
+  The invocation stays separate from trivyPinnedFlags for a measured reason.
+  Every vulnerability pin there is meaningless or wrong for licenses,
+  --scanners vuln most of all, and that flag has a recorded silent-zero
+  history when paired with an output format that turns Trivy into a generator
+  rather than a scanner. License output is a third shape again.
+
+  The pins that do apply were found the same way the vulnerability pins were.
+  On the pinned Trivy 0.70.0 against testdata/node-app: no config and no
+  flags reported one license finding; a consumer trivy.yaml carrying
+  license.ignored: [MIT] reported zero; the same config with
+  --ignored-licenses "" on the command line reported one again. Same hole
+  shape and same remedy as the vulnerability pins already document, and
+  TestLicenseScanArgsPinsIgnoredLicensesEmpty is what stops the pin being
+  deleted. A separate attempt to reclassify a license from a consumer config,
+  license.forbidden: [MIT], did not take effect at all — MIT still reported
+  category notice — so cicd trusts Trivy's Category and pins only the flags
+  that remove findings.
+
+  --license-full defaults to on because metadata mode reads the license field
+  of a package manifest and go.mod has none. Sixteen go.mod files produced
+  zero findings; only full mode found anything, and what it found was this
+  repository's own Apache-2.0. Left off, the step would be decorative for
+  every Go consumer, which is the unreachable-capability sin being removed
+  from the precommit Dependency Track block in the same pass. Full mode
+  measured about one second and produced no extra findings on either tree.
+impact:
+  visibility: external
+  benefit: >
+    A consumer sets license-gate on the precommit reusable workflow and
+    license-allow to name the Trivy categories they permit. The default policy
+    is permissive, notice and unencumbered, and the default mode is warn, so
+    every consumer's license exposure lands in their evidence before the gate
+    can block anyone on it. The effective policy is stated next to the
+    verdict on every run, because passed under a strict allowlist and passed
+    under a permissive one are otherwise the same word and a reader cannot tell
+    which one produced the green. It is stated twice on purpose: in full inside
+    genericReport, and as one warning line, because buildCombined in
+    cross-cutting/evidence drops the generic payload and the warning is what
+    survives into the audit bundle a consumer uploads and into the PR comment.
+    The precedent for an informational warning is the intent gate's NOT
+    REQUIRED line. The step is wired through stage-2 into both composites, so
+    it reports on the precommit and the commit lane, and it was measured end to
+    end on this repository — the run records scope security-license, tool
+    trivy-license, in combined-evidence.json sources[].
+  compatibility: additive
+  risk:
+    - >
+      warn is the default mode, so a consumer who reads only the pass or fail
+      bit gets no license enforcement until they opt in. Chosen over gate
+      because a default that blocks on first upgrade teaches consumers to pin
+      the previous release. The findings and the policy are recorded either
+      way, and warn is implemented by lowering the effective threshold to NONE
+      rather than by editing the verdict afterwards, so the row verdict,
+      FailOnSeverity and Passed all describe one threshold. It inherits
+      gatedPassed's property that a scan which could not run fails at every
+      threshold including NONE, so warn does not hide a skipped scanner.
+    - >
+      There is no off value. validateLicenseGate rejects anything but gate or
+      warn with an error rather than falling back, following coverageGate's
+      precedent. A license check that can be switched off in a consumer config
+      is a license check nobody downstream can rely on, and warn already
+      costs nothing.
+    - >
+      An unrecognised category is a finding at High severity, not a pass.
+      Trivy can classify a license as unknown, and treating that as allowed
+      would make an unreadable LICENSE file indistinguishable from a
+      permissive one. A consumer who wants that must name unknown in
+      license-allow, in their own pull request, where a reviewer sees it.
+    - >
+      The measurement behind the pins covers one config key on one Trivy
+      version. A future release could add another way to drop license findings
+      from a consumer config, and the pin list would not know. This is
+      recorded in licenseflags.go's header rather than solved, because the
+      alternative is reimplementing Trivy's classifier.
+decisions:
+  - id: d01
+    choice: a separate step with its own envelope, not a fourth leg of scanSource
+    options:
+      - add license as a leg inside scanSource (rejected)
+      - a separate ScanLicenses method with its own evidence file (chosen)
+    because: >
+      The invocations do not share a flag set: --scanners vuln, --ignore-unfixed,
+      --ignore-status and the severity pin are each meaningless or wrong for a
+      license scan, and --scanners vuln has a recorded silent-zero interaction
+      with output format. Sharing the envelope would also mean a copyleft
+      dependency counting against a severity budget that exists for
+      exploitable code, so a compliance question could fail a security gate or
+      hide behind its threshold.
+    confidence: high
+  - id: d02
+    choice: trust Trivy's Category, pin only the flags that remove findings
+    options:
+      - classify SPDX identifiers in Go so no consumer config can reach it (rejected)
+      - read Category from the report and pin the finding-removers (chosen)
+    because: >
+      The first draft assumed a consumer trivy.yaml could reclassify a license
+      and that cicd would have to classify in Go to be safe. Measured against
+      0.70.0, license.forbidden: [MIT] was loaded and MIT still reported
+      category notice, so the reclassification path does not exist. A Go
+      classifier would then be a second copy of Trivy's license database,
+      drifting from the scanner it is meant to interpret.
+    confidence: medium
+  - id: d03
+    choice: an allowlist of categories rather than of license identifiers
+    options:
+      - allowlist SPDX identifiers (rejected)
+      - allowlist Trivy categories, seven of them (chosen)
+    because: >
+      An identifier list is unbounded and silently stale: a new dependency
+      carrying a license nobody listed reads as denied, so the list grows by
+      pipeline failure. Categories are a closed set the scanner already
+      assigns, which makes the policy short enough to review in a pull request
+      and stable across dependency changes. resolveLicenseAllowlist rejects a
+      name outside that set, so a typo fails the run instead of narrowing the
+      policy.
+    confidence: high
+  - id: d04
+    choice: read Licenses from every Results entry, not only Class license
+    options:
+      - filter on Class == "license" (rejected)
+      - read Licenses[] wherever it appears (chosen)
+    because: >
+      Class is Trivy's grouping of a result, and a license array attached to a
+      result classed some other way would be dropped by the filter — findings
+      lost to a field cicd does not control the values of. Reading the array
+      wherever it appears cannot lose one, and a result with no licenses
+      contributes nothing.
+    confidence: high
+  - id: d05
+    choice: state the policy as a warning as well as in genericReport
+    options:
+      - leave it in genericReport only (rejected)
+      - teach buildCombined to materialise generic payloads as files (rejected)
+      - add one informational warning line the aggregator already carries (chosen)
+    because: >
+      Measured on a real run: genericReport does not reach the audit directory
+      at all. buildCombined extracts findings from the intent and risk payloads
+      and drops the payloads, and Wrap writes only combined-evidence.json,
+      findings.sarif and sbom.cdx.json — so the first option ships a verdict
+      with no record of the policy behind it, which is the conflation this step
+      exists to avoid. Teaching the aggregator to write generic payloads would
+      add files to every consumer's artifact for intent and risk as well, which
+      is a wider change than the claim needs. Warnings already travel, already
+      render in the PR comment, and the intent gate already uses one to record
+      what was not checked. The string is built in licensereport.go rather than
+      in the Dagger entrypoint so a test can read it.
+    confidence: high
+  - id: d06
+    choice: expose license-gate and license-allow as workflow inputs, not license-full
+    options:
+      - expose all three inputs (rejected)
+      - expose the two policy inputs and leave licenseFull at the module (chosen)
+    because: >
+      Turning licenseFull off makes the step report nothing at all in
+      ecosystems whose manifests carry no license field, which is a documented
+      knob for making a green run mean less. It measured about one second, so
+      there is no cost to trade against. It stays a module parameter for a
+      caller driving security directly and is not a documented pipeline knob.
+    confidence: medium
+tags:
+  - security
+  - licensing
+  - evidence
+  - trivy
+  - workflows

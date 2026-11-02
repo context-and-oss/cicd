@@ -1,0 +1,11 @@
+rules:
+  - id: fixture-eval
+    languages: [javascript]
+    message: Deliberate fixture eval
+    severity: ERROR
+    pattern: eval($X)
+  - id: fixture-plugin
+    languages: [csharp]
+    message: Deliberate plugin fixture finding
+    severity: WARNING
+    pattern: JsonConvert.SerializeObject($X)

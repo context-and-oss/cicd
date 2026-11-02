@@ -1,0 +1,57 @@
+kind: change-capsule
+schema: 1
+id: CAPS-067
+status: sealed
+intent: >
+  Documentation-only pull requests currently execute every module integration
+  test and Dagger smoke, including the container, commit, and DAST composites.
+  That uses the same costly product-validation path as an executable change
+  even when the diff is limited to Markdown, HTML, and change capsules. The
+  repository must retain its required `ci` check and its documentation safety
+  checks without treating a skipped workflow as a passing required status.
+impact:
+  visibility: internal
+  benefit: >
+    Documentation-only pull requests run explicit defended-surface and capsule
+    validation without starting Go, Dagger, or composite-smoke jobs. Product changes
+    retain the existing full lint, contract, module, and composite-smoke suite.
+  compatibility: unchanged
+  risk:
+    - >
+      A file classified as documentation-only does not run Go, Dagger, or
+      precommit dogfood validation. The classifier is intentionally narrow and
+      falls back to the full suite for an empty, unknown, workflow, script,
+      template, fixture, or source-code path.
+    - >
+      GitHub path filters can omit a workflow's required status entirely. The
+      required CI workflow is therefore never trigger-filtered; it classifies
+      the PR in a job and always emits the aggregate `ci` result.
+decisions:
+  - id: d01
+    choice: classify documentation scope inside the required CI workflow
+    options:
+      - apply paths-ignore to the complete CI workflow (rejected)
+      - run every CI job for every documentation edit (rejected)
+      - select a documentation suite with a job-level classifier (chosen)
+    because: >
+      The organization requires the `ci` context on protected branches.
+      Skipping the workflow makes that context absent or pending; selecting the
+      suite within the workflow keeps the merge contract while avoiding Dagger
+      work that cannot validate a Markdown, HTML, or capsule-only diff.
+    confidence: high
+  - id: d02
+    choice: run defended-surface and capsule checks for documentation changes
+    options:
+      - accept documentation changes without CI (rejected)
+      - retain only link checking (rejected)
+      - validate active documents, command references, pins, links, and capsules (chosen)
+    because: >
+      Documentation is an active consumer surface in this repository. A stale
+      command, broken local link, invalid pin, or unparsable capsule must still
+      block a merge even though it cannot require a container smoke test.
+    confidence: high
+tags:
+  - github-actions
+  - ci
+  - documentation
+  - path-filtering

@@ -1,0 +1,23 @@
+name: Semgrep embedded Bash regression — command substitution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provenance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compose provenance notes
+        env:
+          BUILD_ID: build_0123456789abcdef
+          APPROVAL_ID: appr_0123456789abcdef
+          SIGNATURE_ID: sig_0123456789abcdef
+          DIGEST: sha256:0123456789abcdef
+        run: |
+          set -Eeuo pipefail
+          provenance_notes="$(printf '### Provenance\n- build: `%s`\n- approval: `%s`\n- signature: `%s`\n- artifact digest: `%s`\n' \
+            "$BUILD_ID" "$APPROVAL_ID" "${SIGNATURE_ID:-none (unsigned build)}" "$DIGEST")"
+          printf '%s\n' "$provenance_notes"

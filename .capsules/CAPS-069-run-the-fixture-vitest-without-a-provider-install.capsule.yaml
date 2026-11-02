@@ -1,0 +1,61 @@
+kind: change-capsule
+schema: 1
+id: CAPS-069
+status: sealed
+intent: >
+  CAPS-035 pinned @vitest/coverage-v8 in testdata/node-app and left the three
+  explicit --test-cmd invocations in ci.yml alone, on the measured claim that
+  their unconditional `npm install --no-save @vitest/coverage-v8` would dedupe
+  to the satisfying 4.1.11. That claim was measured under node:20-alpine and
+  npm 10.8.2 only. When the default node toolchain moved to node 22, the same
+  unversioned install crashed npm's arborist again — `Cannot read properties
+  of null (reading 'edgesOut')` — the provider never landed, no
+  coverage-summary.json was written, and the BYO happy path, the --test-legs
+  case and the ratchet case all failed in the quality module-test cell.
+
+  The fixture already declares the provider at the vitest range beside it, so
+  the extra install had nothing left to do but resolve a second time, unpinned,
+  against whatever npm the toolchain ships. The commands now run
+  `npm ci --ignore-scripts && ./node_modules/.bin/vitest run ...`: the lockfile
+  is the only resolution, and vitest is the one the project installed, never a
+  copy npx fetches. CLAUDE.md and the use-without-dockerfile guide carry the
+  same command and change with it.
+impact:
+  visibility: internal
+  benefit: >
+    Measured locally through `dagger call test` on testdata/node-app with the
+    shipped quality module: the old command reports FAILED, `byo-test: test
+    command failed (exit 1)`, ratchet `skipped:no-coverage-output`; the new one
+    reports CLEAN, node coverage 75, ratchet `skipped:no-baseline`.
+  compatibility: none
+  risk:
+    - >
+      `npm ci` refuses a lockfile that disagrees with package.json, where
+      `npm install` quietly rewrote it. For the fixture that is the point: a
+      drifted lockfile now fails loudly instead of being repaired inside a
+      test. The documented command is an example a consumer copies, so a
+      consumer with a stale lockfile meets the same refusal.
+    - >
+      The documented command now assumes the project declares its coverage
+      provider. A consumer that does not gets vitest's own "missing
+      dependency" error rather than a silent install. The module's
+      auto-detected node leg still installs the provider itself, pinned to the
+      project's vitest version (vitestcoverage.go), so only the copy-paste
+      BYO example carries the assumption.
+decisions:
+  - id: d01
+    choice: drop the provider install from the commands instead of pinning it
+    options:
+      - pin the install to the fixture's vitest version (rejected)
+      - run the fixture's own lockfile and binary with no extra install (chosen)
+    because: >
+      Pinning repeats in a shell string a version the lockfile already holds,
+      and a second resolution is exactly the step that broke twice. The
+      fixture is the well-formed consumer CAPS-035 made it; its test command
+      should look like one.
+    confidence: high
+tags:
+  - testing
+  - fixtures
+  - quality
+  - npm

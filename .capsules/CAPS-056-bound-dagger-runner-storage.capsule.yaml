@@ -1,0 +1,68 @@
+kind: change-capsule
+schema: 1
+id: CAPS-056
+status: sealed
+intent: >
+  Bound the peak disk consumed by the precommit and commit reusable workflows
+  because both v3.8.0 trials on a consumer monorepo filled an ubuntu-latest
+  filesystem inside the Dagger composite, killing the Actions worker before it
+  could preserve a log or upload any evidence.
+impact:
+  visibility: external
+  benefit: >
+    Large consumers can finish the same Stage 2 gates on the standard runner,
+    while a future regression stops at a four-GiB reserve with a retained disk
+    timeline instead of destroying its own diagnostics.
+  compatibility: unchanged
+  risk:
+    - >
+      Sequentially materialising Stage 2 evidence increases wall-clock time
+      because independent gates no longer execute at maximum concurrency. The
+      evidence files, their order and their aggregation contract are unchanged.
+    - >
+      GitHub can move or remove a preinstalled host toolchain path. Every cleanup
+      target is existence-checked, and none is used by the job because quality
+      and scanning tools execute inside Dagger containers.
+decisions:
+  - id: d01
+    choice: materialise each Stage 2 evidence file before starting the next gate
+    options:
+      - keep the fully lazy graph and require a larger runner (rejected)
+      - narrow the gates for large repositories (rejected)
+      - add a sequential Sync barrier in src/stage-2/main.go (chosen)
+    because: >
+      The failure is the simultaneous peak, not a consumer finding. Requiring more
+      infrastructure or scanning less would hide the scaling defect. The Sync
+      barrier preserves every gate and the final evidence shape while preventing
+      evidence.Wrap from forcing the .NET and scanner branches together.
+    confidence: medium
+  - id: d02
+    choice: reclaim only unused host SDKs before the Dagger engine exists
+    options:
+      - use a third-party free-disk-space action (rejected)
+      - prune Docker while Dagger is running (rejected)
+      - remove explicit host SDK paths before engine startup (chosen)
+    because: >
+      The reusable jobs run their .NET, Android-independent, Swift-independent
+      and Haskell-independent work in containers. Removing those known host
+      installations gives the engine storage without adding a supply-chain
+      dependency, while pruning a live engine could invalidate active snapshots.
+    confidence: high
+  - id: d03
+    choice: stop Dagger at a four-GiB reserve and retain a disk timeline
+    options:
+      - let the filesystem reach zero and rely on the runner log (rejected)
+      - report disk only before the run (rejected)
+      - sample during the run and terminate before the reserve is crossed (chosen)
+    because: >
+      In both consumer failures the Actions worker itself could no longer write its
+      diagnostic log, so no Dagger trace survived. A reserved margin preserves
+      the explanation and leaves enough space for GitHub to execute the evidence
+      and diagnostic steps after a controlled non-run.
+    confidence: high
+tags:
+  - dagger
+  - github-actions
+  - runner-storage
+  - precommit
+  - commit

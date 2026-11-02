@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Same reason as the app project: a resolvable NuGet graph is what makes
+         the dependency scan a scan rather than a silence. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.6.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.4" />
+    <!-- Supplies the 'XPlat Code Coverage' data collector. Microsoft.NET.Test.Sdk
+         does not pull it in, and asking dotnet test to collect coverage without
+         it logs "Could not find data collector" and still exits 0 — so the
+         fixture needs it for the .NET coverage path to be proven at all. -->
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../dotnet-app.csproj" />
+  </ItemGroup>
+</Project>

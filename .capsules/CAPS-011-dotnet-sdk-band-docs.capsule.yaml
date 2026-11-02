@@ -1,0 +1,184 @@
+kind: change-capsule
+schema: 1
+id: CAPS-011
+status: sealed
+intent: >
+  Rewrite the .NET SDK guidance a consumer reads first. The migration
+  doc's gotcha bullet prescribed two fixes for the SDK-vs-runtime
+  mismatch and both were inert on the legs that produce the failure.
+  toolchain-image reaches ResolveToolchain only from the BYO test path,
+  so a consumer who set it changed nothing about the lint or unit-test
+  leg that was failing. And with exactly one pinned SDK band,
+  global.json actively degraded the diagnostic — naming another band in
+  it swapped a legible "Restore operation failed" plus a band remedy
+  for a bare exit 145 — so the module's own error message and the
+  migration doc gave opposite advice for the same failure, and the doc
+  is the one read first. Measured cost, from the issue that filed this
+  (found while assessing a consumer monorepo): the doc was the thing
+  that suggested .NET 10 was supported at all.
+  CAPS-006 changed the mechanism underneath, so this is not a
+  deletion of wrong advice. global.json's sdk.version is now the band
+  selector among cicd's pinned SDK images, which makes half the old
+  advice true by a different route, while toolchain-image is still
+  deliberately not wired to those legs. Replacing the bullet without
+  that distinction would have swapped wrong guidance for differently
+  wrong guidance.
+impact:
+  visibility: consumer
+  benefit: >
+    A .NET consumer gets the answer in the order they need it: a net8.0
+    repository needs no migration action at all, a net9.0 repository
+    builds on the 10.0 SDK and should expect that band in warnings[],
+    the band is read from global.json or the project files rather than
+    set by any flag, and toolchain-image is named as the lever that does
+    not apply here so they stop reaching for it. The unpinned-band case
+    now says what is seen (a non-run, failing at every threshold
+    including NONE) and what to do, ranked cheapest first.
+  compatibility: fix
+  risk:
+    - >
+      Docs only. No src/** change, no behaviour change, no new flag —
+      and the text says there is no flag on purpose, because a doc that
+      drafts a knob into existence is how a reader concludes cicd is
+      broken when the knob does not appear in dagger functions.
+    - >
+      The band list (8.0 and 10.0) is now written in prose in
+      docs/reference/runtime-images.md as well as in
+      src/quality/images.go, dotnetSDKBands, dotnetSDKBase and
+      scripts/runtime-images.json. Nothing mechanical ties the prose to
+      the constants, so adding or dropping a band leaves this page
+      stale and no check will say so. The band-adding checklist in the
+      same section names the four code sites; this page is a fifth and
+      is not enforced.
+    - >
+      This is not a claim that a 10.0 restore has been proven. No
+      fixture in the tree targets above net8.0 (CAPS-006 names that as
+      a follow-up), so CI proves the 8.0 path plus unit-tested
+      selection logic. The doc describes the designed behaviour of
+      the CAPS-006 change, verified by reading its code, not by a live net10.0 run.
+    - >
+      Stacked on the CAPS-006 change and meaningless before it. Merged alone the
+      page would describe a two-band world that does not exist yet,
+      which is a worse failure than the bullet it replaces, because it
+      reads as current.
+decisions:
+  - id: d01
+    choice: >
+      the full selection rules go in docs/reference/runtime-images.md
+      and the migration bullet links to them
+    options:
+      - a new docs/reference/dotnet-sdk-bands.md page (rejected)
+      - expand the migration gotcha bullet to carry all of it (rejected)
+      - a section in docs/reference/runtime-images.md (chosen)
+    because: >
+      The question is which of cicd's pinned images runs, which is what
+      runtime-images.md is for — and it already carries the "two kinds
+      of image, one rule each" table that is the exact distinction
+      consumers get wrong here. A new page would need a
+      repo-inventory.json declaration and an index link for content
+      that belongs beside that table. Expanding the bullet was rejected
+      on genre: a precedence table and a remedy ranking are reference
+      material, and migrating-to-cicd.md is explanation, so the bullet
+      would have crowded out the four gotchas beside it.
+    confidence: high
+  - id: d02
+    choice: >
+      state that global.json now selects the band, and separately that
+      it cannot force one
+    options:
+      - delete the global.json advice as simply wrong (rejected)
+      - promote global.json as the fix for the mismatch (rejected)
+      - say it selects among pinned bands, and cannot reach an
+        unpinned one (chosen)
+    because: >
+      Both simpler framings are false in one direction. Deleting it
+      drops the lever that now exists and is the cheap fix for the
+      common case, a TargetFramework behind an MSBuild condition that
+      cicd cannot read. Promoting it flatly re-creates the original
+      defect one band along: sdk.version naming a band cicd pins no
+      image for is still the one way to reach SDK exit 145, which is
+      still classified as a non-run. The rollForward latestFeature
+      recommendation mirrors what dotnetSDKRemedy already tells the
+      consumer at the moment of failure, so the doc and the runtime
+      message now agree instead of contradicting each other.
+    confidence: high
+  - id: d03
+    choice: >
+      name toolchain-image as the lever that does not apply, and say
+      where it does
+    options:
+      - stop mentioning toolchain-image in the .NET context (rejected)
+      - name it as inapplicable and point at the BYO path (chosen)
+    because: >
+      Silence does not stop the reader reaching for it — the input is
+      right there in every template and it is the only image knob cicd
+      exposes, so an absence reads as an omission. Saying it steers
+      only the container the consumer's own build-cmd or test-cmd runs
+      in (ADR-004 level 1) is also the honest reason CAPS-006 rejected
+      routing the native legs through ResolveToolchain: those legs run
+      cicd's own gate commands, and letting the gated party pick the
+      SDK, the analyser set and the linter version behind cicd's
+      verdict is the shape of false pass this repository exists to
+      prevent.
+    confidence: high
+  - id: d04
+    choice: >
+      add a paragraph distinguishing consumer input that selects a
+      pinned image from consumer input that composes an image reference
+    options:
+      - leave the two-kinds table as it stands (rejected)
+      - amend ADR-004 to describe the third pattern (rejected)
+      - add a clarifying paragraph under the table (chosen)
+    because: >
+      The table's first row reads as "chosen by this repository's own
+      code" versus "chosen by the consumer: --toolchain-image, or
+      .nvmrc / global.json", and after CAPS-006 global.json appears on
+      both sides. Left alone, the page implies the .NET band is
+      consumer-resolved and therefore unpinned, which is the opposite
+      of the truth and would make check-runtime-image-pins.py look
+      wrong to a reader auditing it. Amending the ADR was rejected as
+      out of lane for a docs issue and because the ADR is not stale —
+      its amendment already places the language images quality.Check
+      selects inside the pin gate. It is only incomplete about how a
+      consumer file can drive that selection, which is reported as a
+      follow-up rather than edited here.
+    confidence: medium
+  - id: d05
+    choice: point at warnings[] as the source of truth for the band
+    options:
+      - describe the precedence rules only (rejected)
+      - quote the two real warning lines and say to read them (chosen)
+    because: >
+      Band selection is automatic and invisible, and the surprising
+      case — net9.0 resolving to the 10.0 SDK — is exactly the one a
+      reader will not predict from the rules. Every .NET run already
+      states the band and the reason in warnings[], so the doc's job is
+      to send the reader there rather than to make the rules memorable.
+      That also keeps the page honest as bands change: the envelope
+      cannot go stale, this page can.
+    confidence: high
+  - id: d06
+    choice: >
+      keep the --include stopgap but carry its caveat, and rank it last
+    options:
+      - drop the include workaround now that bands mostly remove the
+        need (rejected)
+      - offer include without the precommit caveat (rejected)
+      - keep it, ranked last, with the caveat stated (chosen)
+    because: >
+      Verified on this branch: include is a commit.yml passthrough and
+      precommit.yml exposes no such input, so offering it unqualified
+      hands the pre-commit gate a fix it cannot apply. It stays because
+      an unpinned band is still reachable and a consumer needs
+      something to do about it today, but it is ranked below setting
+      sdk.version and below raising the pin, because dropping dotnet
+      from the scan means the .NET legs stop running — which is a
+      reduction in coverage, not a fix, and the doc should not let it
+      read as one.
+    confidence: high
+tags:
+  - documentation
+  - dotnet
+  - toolchain
+  - adr-004
+  - depends-on-caps-006

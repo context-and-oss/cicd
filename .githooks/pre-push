@@ -1,0 +1,15 @@
+#!/bin/sh
+# cicd's own hook, and the one place this repo's local scoping lives.
+#
+# This repository carries deliberately broken fixtures under testdata/ for the
+# node, python and dotnet legs. Auto-detection finds them and audits them, which
+# is why a local full run reports seven errors that have nothing to do with the
+# change being pushed. .github/workflows/dogfood-precommit.yml solves this with
+# `--include go`; CICD_INCLUDE is the same instruction to the local runner.
+#
+# It lives here rather than in scripts/cicd-prepush because that script ships to
+# consumers verbatim as templates/local/scripts/cicd-prepush — a repo's language
+# scoping is not a property of the shared runner. Consumers replace this adapter.
+CICD_INCLUDE=go
+export CICD_INCLUDE
+exec ./scripts/cicd-prepush

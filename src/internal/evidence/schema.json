@@ -1,0 +1,484 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/context-and-oss/cicd/internal/evidence/schema.json",
+  "description": "Canonical evidence envelope schemas for CD pipeline modules. Module contracts declare `outputSchema: evidence-1`, naming the major family rather than this exact version, because a static contract cannot keep a claim about a minor that moves with the payload \u2014 the precise version travels in the envelope's own schemaVersion field. Contracts do not $ref this file, and nothing validates a runtime envelope against it. `schemaVersion` here carries a const: a pinned copy of this document therefore rejects an envelope from a newer minor, which is the signal to fetch the schema for the version the envelope names. What keeps it honest is schema_json_test.go, which fails when the property or required sets here disagree with the struct tags in schema.go. That test pins structure only: the enums, ranges and formats below are hand-authored and unenforced.",
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": [
+        "CRITICAL",
+        "HIGH",
+        "MEDIUM",
+        "LOW",
+        "NONE"
+      ]
+    },
+    "outcome": {
+      "description": "What a tool found, before any gate. `passed` answers a different question \u2014 \"should this block?\" \u2014 and under `fail-on: NONE` it answers it the same way whatever the tool saw. CLEAN: ran, found nothing. SKIPPED: did not run, legitimately \u2014 an opt-in gate left off, a selector asking for no artifact, a scanner with nothing in scope. FINDINGS: ran, reported findings at any severity. FAILED: ran, and the subject failed. ERROR: did not produce a usable result. Rolled up, SKIPPED outranks CLEAN so incomplete coverage cannot report a clean headline, and ranks below FINDINGS so a real finding still wins it. Absent means the producer has not been converted, which is a different claim from any of these.",
+      "type": "string",
+      "enum": [
+        "CLEAN",
+        "SKIPPED",
+        "FINDINGS",
+        "FAILED",
+        "ERROR"
+      ]
+    },
+    "concern": {
+      "description": "The question a tool answers, phrased the way the reader of a report asks it. The bundle is indexed by producing module because that is how the pipeline is built; nobody receiving a report asks it that way, and neither axis is derivable from the other \u2014 one module answers several concerns and one concern arrives from several modules. Declared by the producer, never mapped from the tool name by the aggregator: a lookup table's failure mode is silent, filing a newly added tool under whatever a fuzzy match returns while the report still reads as complete. Absent means the producer did not say, and such a row is reported as unclassified rather than dropped or guessed at.",
+      "type": "string",
+      "enum": [
+        "sast",
+        "sca",
+        "secrets",
+        "licenses",
+        "sbom",
+        "lint",
+        "tests",
+        "coverage",
+        "iac",
+        "dast"
+      ]
+    },
+    "examined": {
+      "description": "How much a tool actually looked at, in whatever unit it counts in \u2014 the denominator a zero finding count needs. \"0 vulnerabilities\" reads the same whether the scanner reached three thousand components or none. Absent means the producer did not say, which is different from count 0: a present count of 0 is the claim that the tool looked and found nothing in scope.",
+      "type": "object",
+      "required": [
+        "unit",
+        "count"
+      ],
+      "properties": {
+        "unit": {
+          "type": "string",
+          "description": "What is being counted, in the producer's own words."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many units the tool processed."
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many units existed in scope, when the tool knows. Absent when it cannot see its own denominator."
+        }
+      },
+      "additionalProperties": false
+    },
+    "ruleSet": {
+      "description": "Which rules a pattern scanner applied \u2014 the second denominator a zero finding count needs. Examined says what the tool read; this says what it read it with. A pinned set that loaded fewer rules than it declares is a non-run, never a smaller clean result.",
+      "type": "object",
+      "required": [
+        "count"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many distinct rules the tool reported as loaded."
+        },
+        "byLanguage": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "count split by the language directory each rule id names."
+        },
+        "pinned": {
+          "type": "string",
+          "description": "The fixed source the rules were held to, when there is one."
+        },
+        "unpinned": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Rule sources fetched at run time that nothing pins; their rules are counted but cannot be verified."
+        }
+      },
+      "additionalProperties": false
+    },
+    "toolInfo": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "repoContext": {
+      "type": "object",
+      "required": [
+        "repoUrl",
+        "commitSha",
+        "branch"
+      ],
+      "properties": {
+        "appId": { "type": "string" },
+        "sourcePaths": { "type": "array", "items": { "type": "string" } },
+        "repoUrl": {
+          "type": "string"
+        },
+        "commitSha": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "finding": {
+      "description": "One normalised, human-readable diagnostic behind the findingsBySeverity counts. Best-effort detail: the counts stay authoritative for the gate decision. `line` is part of a finding's identity, not decoration \u2014 without it two distinct findings in one file are byte-identical rows that deduplication collapses into one.",
+      "type": "object",
+      "required": [
+        "severity",
+        "message"
+      ],
+      "properties": {
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "rule": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "testCounts": {
+      "description": "Executed-test accounting for one suite. passed + failed + skipped need not equal total: a tool that lost a result to a crash should show the gap rather than have cicd balance the books for it. durationMs is absent whenever the runner had no figure it could trust.",
+      "type": "object",
+      "required": [
+        "total",
+        "passed",
+        "failed",
+        "skipped"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceStatus": {
+      "description": "One source verdict behind a combined `passed`, which is an AND across sources. The counts carry no default because an absent count and a zero count are different claims. `scope` names the fused envelope a per-tool row came from (\"security-source\"), and is empty in the ordinary case where the row IS the envelope.",
+      "type": "object",
+      "required": [
+        "moduleName",
+        "stage",
+        "passed",
+        "findingsCount",
+        "errorsCount",
+        "warningsCount"
+      ],
+      "properties": {
+        "moduleName": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "concern": {
+          "$ref": "#/$defs/concern"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "examined": {
+          "$ref": "#/$defs/examined"
+        },
+        "rules": {
+          "$ref": "#/$defs/ruleSet"
+        },
+        "findingsCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errorsCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "warningsCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "concernRollup": {
+      "description": "One concern's whole answer, folded from the rows that declared it. Carries counts and a verdict, never the rows themselves: they are already in `sources`, and a second copy can disagree with the first. `tools` says how many rows stand behind the verdict without restating them. `passed` is the AND over those rows and `outcome` the worst of them, the same two folds the combined envelope uses. `examined` is summed only when every row counts in the same unit and every row states one, and is absent otherwise, because a denominator summed over the tools that answered understates the concern by whatever the silent ones looked at. `concern` is absent on the rollup covering rows whose producer declared none; those are reported, not dropped.",
+      "type": "object",
+      "required": [
+        "passed",
+        "findingsCount",
+        "errorsCount",
+        "warningsCount",
+        "tools"
+      ],
+      "properties": {
+        "concern": {
+          "$ref": "#/$defs/concern"
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "examined": {
+          "$ref": "#/$defs/examined"
+        },
+        "findingsCount": {
+          "type": "integer"
+        },
+        "errorsCount": {
+          "type": "integer"
+        },
+        "warningsCount": {
+          "type": "integer"
+        },
+        "tools": {
+          "type": "integer"
+        }
+      }
+    },
+    "concernReport": {
+      "description": "The run seen by question rather than by module, so a consumer holding only this document can report \"SAST clean, SCA failed\" without knowing which module runs which scanner. Written by the aggregator only; absent on an individual module envelope, which means nobody folded it rather than no concern was answered. `notAnswered` names the concerns this run produced no rows for, and is the field that stops the list from misleading: a reader shown seven concerns cannot see that ten exist, so an absent SAST rollup would read identically to a clean one. It is not a verdict \u2014 nothing here knows which concerns a given pipeline ought to answer, and a repository with no infrastructure has no IaC leg and is not missing one.",
+      "type": "object",
+      "required": [
+        "answered",
+        "notAnswered"
+      ],
+      "properties": {
+        "answered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/concernRollup"
+          }
+        },
+        "notAnswered": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/concern"
+          }
+        }
+      }
+    },
+    "evidence-envelope-v1": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "moduleName",
+        "stage",
+        "tool",
+        "repo",
+        "timestampUtc",
+        "durationMs",
+        "passed",
+        "findingsCount"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "1.6.0"
+        },
+        "moduleName": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/toolInfo"
+        },
+        "repo": {
+          "$ref": "#/$defs/repoContext"
+        },
+        "timestampUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "$ref": "#/$defs/outcome"
+        },
+        "concern": {
+          "$ref": "#/$defs/concern"
+        },
+        "examined": {
+          "$ref": "#/$defs/examined"
+        },
+        "failOnSeverity": {
+          "$ref": "#/$defs/severity"
+        },
+        "findingsCount": {
+          "type": "integer"
+        },
+        "findingsBySeverity": {
+          "type": "object"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sourceStatus"
+          }
+        },
+        "concerns": {
+          "$ref": "#/$defs/concernReport"
+        },
+        "tests": {
+          "$ref": "#/$defs/testCounts"
+        },
+        "testsByLanguage": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/testCounts"
+          }
+        },
+        "coveragePercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "coverageLines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "coverageByLanguage": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "coverageLinesByLanguage": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "coverageBaselineByLanguage": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "coverageRatchet": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "skipped:no-baseline",
+            "skipped:no-coverage-output",
+            "skipped:warn-mode"
+          ]
+        },
+        "sarifReport": {
+          "type": "object"
+        },
+        "cyclonedxReport": {
+          "type": "object"
+        },
+        "genericReport": {},
+        "genericFormat": {
+          "type": "string"
+        },
+        "rawOutputRef": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

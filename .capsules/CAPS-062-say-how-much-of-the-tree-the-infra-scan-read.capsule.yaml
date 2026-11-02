@@ -1,0 +1,128 @@
+kind: change-capsule
+schema: 1
+id: CAPS-062
+status: sealed
+intent: >
+  risk.Validate reported `examined: {count: 0}` and outcome SKIPPED on a
+  repository holding parseable infrastructure files, which is byte-for-byte
+  what a repository with no infrastructure at all reports. Two defects, one door.
+
+  The commit stage passed its diff to risk.Validate, and opa.go *inferred* the
+  scope from it: a non-empty diff meant "judge only what this change touched".
+  Change-scoped scans left the tree's unchanged parseable infrastructure files
+  unread. For example, a changed Dockerfile is eligible for examination while
+  an unchanged one is not; a file that becomes a misconfiguration because a
+  *rule* was added can therefore remain unexamined. Every other concern on that
+  stage — sast, licenses, sca — already read the whole tree; iac was the only one
+  that also took the diff. Precommit keeps the change scope, where a pull request
+  owning the infra it changes is the right answer.
+
+  The worse half was the zero. The candidate count existed nowhere, because the
+  loop filtered by the change set *before* it classified — a file the scan
+  skipped was never classified either, so no denominator could be produced at
+  any point. planInfraScan classifies first, Examined.Total carries the
+  denominator in the same unit, and infraScopeWarnings puts the sentence in
+  warnings[] — the one channel cross-cutting/evidence propagates into the pull
+  request comment, which is where this was misread.
+
+  The scope is now a named parameter (--infra-scope changed|tree), resolved by a
+  switch with no default: arm. Both rules live in the untagged validate.go,
+  because opa.go is //go:build !unit_test and the scoping decision was
+  unreachable from any test for as long as it was wrong.
+impact:
+  visibility: consumer
+  benefit: >
+    A consumer running the commit stage gets their whole infrastructure tree
+    judged on every push rather than the handful of files that push happened to
+    touch, and a scan that read nothing stops being indistinguishable from a
+    repository with nothing to read: the envelope states both numbers and the
+    pull request comment says in words how many parseable files were left
+    unexamined.
+  compatibility: breaking
+  risk:
+    - >
+      Breaking for anyone calling risk.Validate directly: the function takes an
+      additional infraScope argument, so a typed call against the old signature
+      will not compile. stage-2 gained the same parameter and forwards it; the
+      commit composite pins "tree" and precommit exposes it, defaulting to
+      "changed". The contract declares it optional with default "changed".
+      precommit has to expose it rather than pin the default:
+      scripts/smoke/stage-orchestrators.sh requires every non-positional
+      stage-2.Run option to be a precommit.Run parameter and to be forwarded,
+      so an orchestrator knob cannot be reachable from one composite and
+      invisible from the other. All three precommit starter surfaces name
+      --infra-scope, guarded so an unset input transmits nothing.
+    - >
+      The commit stage now hands conftest every parseable infrastructure file in
+      the checkout rather than the few in one push, so consumers with
+      pre-existing misconfigurations will see findings appear on a commit that
+      changed nothing related. That is the defect being fixed presenting itself
+      as new noise, and there is no ratchet: the smallest change that fixes the
+      issue was chosen deliberately over a warn-only release.
+    - >
+      Bicep is not counted as a candidate, because conftest has no Bicep parser.
+      On a Bicep-only repository the denominator is honestly zero and the
+      warning is silent — the blind spot is unchanged by this work and is
+      recorded as residue in the spec, not closed by it.
+decisions:
+  - id: d01
+    choice: name the scope as a parameter instead of inferring it from the diff
+    options:
+      - keep inferring, and stop passing the diff from the commit composite (rejected)
+      - infer, but special-case the composite that is calling (rejected)
+      - an explicit --infra-scope changed|tree, refused when unrecognised (chosen)
+    because: >
+      stage-2 is shared by precommit and commit and the two stages want opposite
+      answers, so an inference cannot be right for both. Dropping the diff at the
+      commit composite would also silence the intent gate's coupling checks,
+      which still need the change set. A module that reads its caller's identity
+      out of a side channel is the same bug one layer up. The switch has no
+      default: arm because both silent fallbacks are wrong — tree turns a typo
+      into a scan nobody asked for, changed turns it into the scan this fix
+      exists to end.
+    confidence: high
+  - id: d02
+    choice: count candidates before scoping, and carry the denominator in Examined.Total
+    options:
+      - report the scope in genericReport (rejected)
+      - leave the count as it was and disclose the scope in prose only (rejected)
+      - classify first, count parseable files, then filter (chosen)
+    because: >
+      A zero with no denominator is the whole defect: SKIPPED with count 0 is
+      what a repository holding no infrastructure reports, so a reader cannot
+      distinguish an empty scope from an empty tree. The old loop could not produce a
+      denominator at any price, because it filtered before it classified — the
+      reorder is the minimum change that makes the number exist.
+      cross-cutting/evidence propagates Examined verbatim and drops
+      genericReport, so a structured-only record would not reach the comment
+      where the misreading happened.
+    confidence: high
+  - id: d03
+    choice: a candidate is a file conftest has a parser for, so Bicep is excluded
+    options:
+      - count every infrastructure-shaped file including .bicep (rejected)
+      - count only what the scanner can parse (chosen)
+    because: >
+      Counting Bicep would put a denominator on the envelope that no change to
+      the repository can ever move: a coverage ratio would include files that
+      are unscannable by construction. A total that cannot be
+      closed is a worse lie than a bare zero. The Bicep gap is real and is stated
+      as residue in the spec rather than papered over with a number.
+    confidence: high
+  - id: d04
+    choice: the warning is silent when the scope excluded nothing
+    options:
+      - state the scope on every run (rejected)
+      - warn only when candidates exceed the files scanned (chosen)
+    because: >
+      A disclosure on every run is noise, and noise is what gets a warning
+      ignored on the run that mattered — the same rule build.NoArtifact's smoke
+      test asserts for the other two artifact shapes. Nothing excluded means the
+      scan read everything it could parse, and examined already says so in
+      numbers for anything folding the run.
+    confidence: high
+tags:
+  - risk
+  - evidence
+  - stage-2
+  - commit

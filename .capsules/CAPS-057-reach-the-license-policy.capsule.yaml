@@ -1,0 +1,85 @@
+kind: change-capsule
+schema: 1
+id: CAPS-057
+status: sealed
+intent: >
+  Make the dependency licence policy reachable from every starter surface, and
+  make it expressible at the granularity the findings actually arrive in,
+  because a consumer received licence findings through commit.yml
+  and had no input on that workflow capable of acting on them.
+impact:
+  visibility: external
+  benefit: >
+    A consumer can set licence gate mode, allow a specific declared licence and
+    exclude a subtree from the GitHub reusable workflows and the Azure DevOps
+    starters alike, and a future composite parameter that reaches no starter
+    surface fails the repository surface check instead of shipping unreachable.
+  compatibility: breaking
+  risk:
+    - >
+      The category unknown is no longer accepted by --license-allow. A consumer
+      who had allowed it receives a hard error naming the by-name route that
+      replaces it, rather than a silent reinterpretation, because a pipeline
+      reporting a policy nobody wrote is the defect being repaired.
+    - >
+      Accepting licence names in the same list as categories could have turned a
+      misspelled category into a silent global allowance for a licence nobody
+      declares. Any unscoped all-lowercase word is refused outright, at the
+      documented cost that a genuinely lowercase SPDX identifier must be scoped
+      to its package.
+    - >
+      The reachability check parses Go signatures rather than querying Dagger,
+      so a signature shape it cannot read is reported as its own blindness and
+      never as agreement. Twenty-seven reasoned exemptions record every
+      parameter that stays unreachable on purpose, and an exemption for a
+      parameter now reached is itself reported.
+decisions:
+  - id: d01
+    choice: assert composite parameter reachability in the repository surface check
+    options:
+      - wire the missing licence inputs and document the convention (rejected)
+      - compare precommit and commit input lists against each other (rejected)
+      - grade every composite parameter against every starter surface (chosen)
+    because: >
+      A knob nobody can reach and a knob nobody needs are indistinguishable from
+      outside, which is how commit.yml shipped for five releases with no licence
+      input while precommit.yml had carried three since an earlier change. Wiring alone
+      repairs the instance and not the class. Comparing the two workflows would
+      have missed the Azure DevOps starters, which forwarded no licence flag
+      either and which the issue never mentioned.
+    confidence: high
+  - id: d02
+    choice: pin Trivy's licence taxonomy against a captured fixture
+    options:
+      - correct the wrong rationale comment in place (rejected)
+      - restate the taxonomy in prose in the documentation (rejected)
+      - capture the upstream category table and assert against it (chosen)
+    because: >
+      The comment claimed LGPL is reciprocal. Trivy files LGPL beside GPL under
+      restricted and AGPL under forbidden, so the sentence made the one real
+      cliff invisible, and the issue reporting it made the mirror-image mistake
+      in the same paragraph. A prose correction is the same artefact that was
+      already wrong. The fixture carries the upstream version, which must equal
+      the pinned scanner version, so a scanner bump without a re-read fails.
+    confidence: high
+  - id: d03
+    choice: allow an unclassifiable declaration by name, never by category
+    options:
+      - keep unknown allowable and document its reach (rejected)
+      - ship an SPDX identifier table inside cicd (rejected)
+      - match the whole declared string, scoping an ambiguous one (chosen)
+    because: >
+      Both declarations behind the consumer's findings land in unknown, so the
+      category is an off switch and the path exclusion is a second one. A licence
+      table inside cicd would be a quieter second policy answering the same
+      question as Trivy's. Matching the whole declared string narrows by exactly
+      one declaration, and requiring a package scope for anything not shaped like
+      an SPDX expression keeps a sentence such as the npm SEE LICENSE marker from
+      silencing unrelated packages that repeat it verbatim.
+    confidence: medium
+tags:
+  - security
+  - licence-policy
+  - github-actions
+  - azure-devops
+  - repo-surface

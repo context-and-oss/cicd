@@ -1,0 +1,117 @@
+name: Release drift
+
+# Asks, from outside the release pipeline, whether main carries releasable
+# commits that no release has tagged.
+#
+# It is deliberately not a failure notification inside cd.yml. A step that runs
+# on CD's failure cannot fire when CD never starts. A selected Actions policy
+# can reject a disallowed action at startup, publishing neither a job nor a
+# check run. Source-era outages exposed both missing workflows and an ongoing
+# release backlog without a durable signal. Destination policy is a separate
+# bootstrap prerequisite, not a setting established by copying this workflow.
+#
+# Same doctrine as every gate in this repository, one level up: a release
+# pipeline that could not run must never read as "nothing to release".
+#
+# See specs/report-release-drift.md.
+
+on:
+  schedule:
+    # 06:10 UTC daily. Deliberately not on push or workflow_run: this must keep
+    # reporting when nothing is pushing and when CD is not running at all.
+    - cron: "10 6 * * *"
+  workflow_dispatch:
+    inputs:
+      threshold-days:
+        description: "Days of unreleased history before an issue is opened"
+        required: false
+        default: "2"
+      dry-run:
+        description: "Measure and report without touching any issue"
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: release-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  # scripts/check-release-drift.py reads the most recent CD run for the issue
+  # body. That summary is context, not a verdict, so it degrades to a note.
+  actions: read
+
+jobs:
+  drift:
+    name: Check for unreleased commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history and tags. A shallow clone reports no tags, a truncated
+          # commit count and a false "oldest" commit — every error in the
+          # direction that hides drift. The script refuses to run on one rather
+          # than under-report, so this is load-bearing, not hygiene.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Pinned, checksum-verified local install. A third-party action here
+      # can fail the run at startup under a restrictive Actions policy — see
+      # .github/actions/install-git-cliff/action.yml.
+      - name: Install git-cliff
+        uses: ./.github/actions/install-git-cliff
+
+      - name: Check release drift
+        env:
+          # gh reads this; nothing else in this job needs a token.
+          GH_TOKEN: ${{ github.token }}
+          THRESHOLD: ${{ github.event.inputs.threshold-days || '2' }}
+          DRY_RUN: ${{ github.event.inputs.dry-run || 'false' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          args=(--threshold-days "$THRESHOLD" --run-url "$RUN_URL")
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          # Exits 0 with or without drift — the issue is the durable signal, and
+          # a permanently red scheduled workflow is noise people learn to ignore.
+          # A non-zero exit here means a command the verdict depends on could not
+          # run, which must never be reported as "nothing to release".
+          python3 scripts/check-release-drift.py "${args[@]}"
+
+      # A different question from drift, asked here because this is the only
+      # place that keeps asking when CD never starts at all. Drift is a matter
+      # of degree -- commits piling up behind a release -- and it is reported
+      # through an issue after a threshold. A pin on main naming a tag that does
+      # not exist is not a matter of degree: main is broken for anyone following
+      # it, right now, and no threshold applies.
+      #
+      # Runs even when the drift check above reported nothing, because the two
+      # can disagree: a stranded release leaves main pinned to an uncut version
+      # while git-cliff, asked about the same history, may compute no new
+      # releasable commits at all.
+      #
+      # This one is allowed to fail the run. The argument against a permanently
+      # red scheduled workflow does not apply: the state it reports repairs
+      # itself as soon as a release lands, so it cannot be permanent without
+      # being true.
+      - name: Check main is not pinned to an uncut version
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # See the same setting in cd.yml: this checkout carries no credential,
+          # so the check's tag re-read is a no-op here, and git must fail rather
+          # than wait on a prompt until the job times out.
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          rc=0
+          python3 scripts/check-release-handoff.py || rc=$?
+          if [ "$rc" = "2" ]; then
+            echo "::warning::could not establish whether main's pins resolve — see above. This is not a clean answer; the next scheduled run asks again."
+            exit 0
+          fi
+          exit "$rc"

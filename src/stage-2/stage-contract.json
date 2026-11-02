@@ -1,0 +1,8 @@
+{
+  "stage": "stage-2",
+  "steps": [
+    { "step": "quality",  "required": true },
+    { "step": "security", "required": true },
+    { "step": "risk",     "required": true }
+  ]
+}

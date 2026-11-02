@@ -1,0 +1,170 @@
+kind: change-capsule
+schema: 1
+id: CAPS-038
+status: sealed
+intent: >
+  scripts/cicd-prepush ran every check and then blocked nothing. Its last
+  command was the dagger call, and the precommit composite is a producer: its
+  run returns a non-nil error only when the pipeline could not be executed at
+  all, because a gate trip has to leave the comment, the SARIF and the artifact
+  published before anything turns red. The verdict therefore lives in
+  combined-evidence.json's passed field and nowhere else. Nothing in the script
+  read it, so every push was waved through no matter what the run found.
+
+  The visible consequence is that CICD_PREPUSH_MODE=blocking, the default, and
+  CICD_PREPUSH_MODE=advisory were the same program. Advisory swapped --fail-on
+  HIGH for NONE, which changes a field in a file nobody opened. Two documentation
+  pages stated that the runner blocks on HIGH, and the shift-left diagram labels
+  the whole local half "blocking, every developer" while its policy box warns
+  that quietly moving a check from blocking to advisory is how gates die. That
+  is what had happened to cicd's own hook.
+
+  Both CI callers already do this correctly and neither shares the code:
+  .github/workflows/precommit.yml and .github/workflows/dogfood-precommit.yml
+  each carry a Gate on evidence step that reads passed, prints findings and
+  errors as annotations, and exits 1. So does a consumer-owned verdict
+  adapter. cicd held its consumers and its own CI to a
+  standard its local runner did not meet.
+
+  A second, smaller defect sat next to it. cleanup_change_diff was written as a
+  single && chain, so when change_diff was empty the test returned 1, the chain
+  short-circuited, and the function returned 1 — and an EXIT trap's status
+  becomes the script's status. That could invent a failure out of a wholly green
+  run and downgrade a specific exit code to a generic 1. It could never mask a
+  real failure, which is why it was not the reason the gate let things through,
+  but it made the exit code unreliable in the other direction and had to go
+  before adding a gate that depends on exit codes meaning something.
+impact:
+  visibility: external
+  benefit: >
+    The local pre-push runner now blocks. It reads passed, prints the findings
+    and the errors behind a false verdict, and exits non-zero — so blocking mode
+    blocks and advisory mode is, for the first time, a different thing from it.
+    Developers see the same verdict locally that CI will reach, before the push
+    rather than after it.
+  compatibility: breaking
+  risk:
+    - >
+      This is a breaking change for every consumer that copied
+      templates/local/scripts/cicd-prepush, and it breaks them at exactly the
+      moment they upgrade: their pushes begin failing on findings they have been
+      shipping past, possibly for months, with no relationship to the change in
+      hand. That is the intended behaviour and it is still a bad surprise. The
+      escape hatches are CICD_PREPUSH_MODE=advisory for a repository not ready
+      to gate and SKIP_CICD_PREPUSH=1 for one push, and both belong in the
+      release note rather than only in the documentation.
+    - >
+      jq is now a hard prerequisite of the runner, so a machine without it fails
+      at require_command with an install hint instead of running. Making it
+      optional was rejected: a gate that skips its own verdict check when a tool
+      is missing is the defect this capsule closes, wearing a different hat. The
+      cost is a new install step for every developer on every consuming repo,
+      surfaced as a loud failure on their next push.
+    - >
+      Advisory mode exits 0 even when passed is false, including when the
+      verdict is false because a step could not run rather than because it found
+      something. A repository parked in advisory therefore has a runner that
+      reports and never blocks, which is the previous behaviour under an honest
+      name. Nothing warns that a repository has been sitting in advisory mode.
+    - >
+      The gate reads passed and does not re-derive it. If a composite ever
+      writes a verdict inconsistent with its own findings, the runner will
+      faithfully repeat it. That is the correct division — the threshold logic
+      belongs to the composite — but it means the local gate is exactly as
+      trustworthy as the field, with no independent check.
+    - >
+      CICD_INCLUDE=go now lives in .githooks/pre-push, so a developer who runs
+      ./scripts/cicd-prepush directly rather than through git push gets the
+      unscoped auto-detecting run and sees this repository's deliberately broken
+      testdata fixtures fail. The two paths disagree by construction, and only
+      the hook path matches CI.
+decisions:
+  - id: d01
+    choice: read the verdict from the evidence rather than from the composite's exit status
+    options:
+      - make the composite's run exit non-zero on a gate trip (rejected)
+      - have the caller read combined-evidence.json's passed field (chosen)
+    because: >
+      The producer split is deliberate and load-bearing: precommit.yml relies on
+      the composite completing so the PR comment, the SARIF upload and the
+      evidence artifact are published before the job turns red. Changing the
+      composite to exit non-zero would fix the local script by breaking the
+      diagnostics every CI consumer depends on. The caller gating is also the
+      pattern already proven in three places, so this makes the local runner
+      consistent with them rather than inventing a fourth arrangement.
+    confidence: high
+  - id: d02
+    choice: make advisory mode genuinely non-blocking instead of merely lowering the threshold
+    options:
+      - let advisory exit non-zero when a step could not run (rejected)
+      - branch on the mode at the gate and always exit 0 in advisory (chosen)
+    because: >
+      --fail-on NONE suppresses findings but does not suppress a step that could
+      not run, so a threshold change alone leaves advisory able to block on
+      exactly the failures a repository adopting the gate is least equipped to
+      fix. Advisory is the documented escape hatch for a repository not yet
+      ready to gate, and an escape hatch that sometimes blocks is not one. The
+      mode is now a variable read at the gate, which also makes the two modes
+      distinguishable in the code rather than only in a threshold string.
+    confidence: high
+  - id: d03
+    choice: require jq rather than degrading gracefully without it
+    options:
+      - skip the verdict check when jq is absent (rejected)
+      - fall back to a second parser such as python3 (rejected)
+      - require it alongside git, dagger and docker (chosen)
+    because: >
+      Skipping the check reintroduces the defect silently on any machine missing
+      a tool, which is worse than the defect itself because it looks like it
+      worked. A fallback parser means two code paths through the only logic that
+      decides whether a push proceeds, one of which would be exercised on
+      machines that cannot be tested here. A missing prerequisite is a loud,
+      actionable, one-line failure; a silently skipped gate is not.
+    confidence: medium
+  - id: d04
+    choice: put this repository's language scoping in .githooks/pre-push, not in the runner
+    options:
+      - default CICD_INCLUDE=go inside scripts/cicd-prepush (rejected)
+      - teach the runner to ignore a testdata-style path list (rejected)
+      - export CICD_INCLUDE from the hook adapter cicd owns (chosen)
+    because: >
+      scripts/cicd-prepush ships to consumers verbatim as
+      templates/local/scripts/cicd-prepush — the two differ only in the module
+      pin — so a default naming this repository's languages would ship one
+      repository's policy to every other one. An ignore list is worse: it invents
+      audit policy inside a shared runner, where every consumer inherits a
+      judgement about which directories do not count. The hook is the adapter
+      cicd owns and consumers replace, which is where a repository's own scoping
+      belongs. It also matches what dogfood-precommit.yml already passes as
+      --include go, so the local and CI scopes now come from one decision.
+    confidence: medium
+  - id: d05
+    choice: fail closed on unreadable or absent evidence
+    options:
+      - treat a missing or unparseable envelope as nothing to report (rejected)
+      - exit non-zero and say why (chosen)
+    because: >
+      A run that produced no readable verdict has not passed, and the only
+      alternative reading — that no news is good news — is the assumption that
+      made the original defect invisible. Both cases are given their own message
+      because they have different causes: no file means the composite finished
+      without emitting, unparseable means it emitted something broken.
+    confidence: high
+  - id: d06
+    choice: keep the trap's guard and add return 0, rather than rewriting it
+    options:
+      - drop the guard and rely on rm -f tolerating an empty argument (rejected)
+      - keep the && chain and terminate the function explicitly (chosen)
+    because: >
+      rm -f "" does return 0 on the platforms checked, but it depends on a shell
+      and coreutils behaviour a reader has to know to verify, in a function whose
+      whole problem was a subtle status. An explicit return states the intent
+      that the cleanup must not influence the exit status, and it is the smaller
+      diff. The accompanying comment names the mechanism so the line is not
+      simplified away later.
+    confidence: high
+tags:
+  - local-gate
+  - evidence
+  - developer-experience
+  - breaking-change

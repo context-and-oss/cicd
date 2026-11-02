@@ -1,0 +1,603 @@
+# ============================================================
+# Starter template: Running-app DAST (Azure DevOps)
+#
+# Copy this file to your repository at .pipelines/dast.yml and adjust the
+# variables below. You own this file once copied.
+#
+# No GitHub credential is needed: the cicd modules are fetched from the
+# public repository. Optional secrets and troubleshooting:
+#   docs/how-to-guides/set-up-azure-devops-auth.md
+#
+# ─── Stay up to date (Renovate) ─────────────────────────────────────
+# The `dagger -m ...@vX.Y.Z` pin in the run step below is this template's
+# version handle. Renovate tracks it via a regex manager. To enable:
+#   { "extends": ["config:recommended", "github>context-and-oss/cicd"] }
+# ─────────────────────────────────────────────────────────────────────
+#
+# DAST attacks your application while it RUNS. It is not a merge gate and is
+# wired into no other pipeline: an active scan is minutes-to-hours of traffic,
+# which is the wrong thing to put in front of a merge. The cadence below is
+# the one this template exists to set up:
+#
+#   CI on main         baseline — the cheap passive pass, on every mainline commit
+#   nightly  02:00 UTC baseline — catches drift in a dependency or a config
+#   weekly   Sun 03:00 full     — the active attack, where the real findings are
+#   manual run         your pick, from the `mode` parameter on the Run dialog
+#
+# ─── One decision: who starts the app? ──────────────────────────────
+#   APP=container  (W2) cicd builds your Dockerfile and starts it. Single
+#                       container only — no database, no sidecar. The ONLY
+#                       shape whose evidence may say the scanned code is the
+#                       code this commit produced.
+#   APP=service    (W1) YOU start it on the agent with START_CMD (compose,
+#                       dotnet run, npm start). Works with any shape at all.
+#                       No provenance — the evidence says so on every run.
+#   APP=url        (W1) you already run it somewhere the agent can reach.
+#                       Same provenance caveat. NOTE: a localhost URL does not
+#                       work here; that is what APP=service is for.
+#
+# If you can do both, do W2 — but a scan of a real running app with no
+# provenance line beats no scan. Full guide:
+#   docs/how-to-guides/scan-a-running-app.md
+#
+# ─── Agent capacity is a real constraint on APP=service ─────────────
+# A Microsoft-hosted agent is 2 vCPU / 7 GB / 75 GB, and an APP=service run
+# holds your whole stack, the Dagger engine and the ZAP container at once.
+# If your stack starts a database or an emulator, assess the combined resource
+# budget and consider a self-hosted agent before scheduling scans: an
+# agent that dies mid-scan reports "We stopped hearing from agent" and produces
+# no evidence, which is a non-run wearing a plumbing failure's clothes.
+#
+# Produces:
+#   - Build Summary page renders the findings markdown
+#   - Pipeline artifact: dast-evidence (combined-evidence.json, findings.sarif,
+#     sbom.cdx.json, comment.md). sbom.cdx.json is present but EMPTY — a DAST
+#     run produces no component inventory; do not read it as one.
+#
+# ─── !! THIS PIPELINE DOES NOT GATE !! ──────────────────────────
+# The DAST composite is a PRODUCER, not a gate. It exits 0 on a tripped gate
+# exactly as it does on a clean run — the verdict is `passed` inside
+# combined-evidence.json and nowhere else. Nothing below reads it, so as
+# written this pipeline attacks the application and then goes green whatever
+# it finds. That is worse than not scanning, because the green is believed.
+#
+# It is worse here than on the commit lane in one specific way: DAST's
+# `passed: false` also covers a target that was never reached. A scan that
+# hit nothing produces a report of zero alerts, which is byte-identical to a
+# scan of a genuinely clean application — so a pipeline that ignores `passed`
+# cannot tell "we found nothing" from "we looked at nothing".
+#
+# The gate is the caller's job, and this template has not done it. Paste the
+# step marked "GATE GOES HERE" further down, or accept that these checks are
+# advisory only and say so to whoever reads the build.
+#
+# The GitHub reusable workflow (.github/workflows/dast.yml) reads the verdict;
+# use it as the reference.
+# ─────────────────────────────────────────────────────────────────
+#
+# Optional: install the "SARIF SAST Scans Tab" extension from the Marketplace
+# to render findings.sarif natively in the build summary.
+# ============================================================
+
+# Rendered as a dropdown on the Run pipeline dialog, and ignored on every
+# triggered run — which is why the mode resolution below reads Build.Reason
+# first. A parameter default is not a signal that anybody chose it.
+parameters:
+  - name: mode
+    displayName: 'Scan mode (manual runs only)'
+    type: string
+    default: baseline
+    values:
+      - baseline
+      - api
+      - full
+
+trigger:
+  branches:
+    include:
+      - main
+
+# The crons live HERE and nowhere else, and the mode resolution below is the
+# only place that knows which schedule means what. Edit the two together — a
+# weekly schedule whose name no longer matches quietly buys you a second
+# nightly baseline. You would still see it: a baseline run says
+# `dast: BASELINE ONLY` in the evidence and in the build summary, every run.
+#
+# `always: true` is deliberate. The default is to skip a scheduled run when the
+# branch has not changed since the last one, and a DAST scan is not a function
+# of the source alone — a new CVE in a base image, an expired certificate or a
+# config drift all change the answer with the tree untouched.
+schedules:
+  - cron: '0 2 * * *'
+    displayName: nightly-baseline
+    branches:
+      include:
+        - main
+    always: true
+  - cron: '0 3 * * 0'
+    displayName: weekly-full
+    branches:
+      include:
+        - main
+    always: true
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  DAGGER_VERSION: "0.20.8"
+
+  # Who starts the application — url | service | container. Always explicit,
+  # never auto-detected (ADR-005).
+  APP: "container"
+
+  # The port the application answers on. Required for service and container;
+  # the url shape carries its port inside TARGET instead. Never leave this
+  # empty for a bound shape: an empty value is dropped before it reaches the
+  # scanner and the scan silently addresses 8080.
+  PORT: "8080"
+
+  # Readiness. HEALTH_PATH is what both waits request — the agent-side wait
+  # below and cicd's own probe inside the engine — so the two agree about what
+  # "up" means. SCHEME and BASE_PATH are usually left alone.
+  HEALTH_PATH: "/health"
+  SCHEME: ""
+  BASE_PATH: ""
+
+  # APP=url only. Point this ONLY at an environment you are authorised to
+  # attack: a full scan submits forms, follows every link and sends real
+  # attack payloads.
+  TARGET: ""
+
+  # APP=service only. START_CMD runs from the repository root and must RETURN
+  # once the application is starting — this pipeline does the waiting.
+  # A dev server that does not daemonise needs backgrounding and a log:
+  #   nohup dotnet run --project src/Api > /tmp/api.log 2>&1 &
+  START_CMD: ""
+  STOP_CMD: ""
+  # How long this pipeline waits on the agent for START_CMD's application to
+  # answer. This is NOT READY_TIMEOUT_SECONDS, which is how long the SCANNER
+  # waits once cicd is running — the two exist to tell "my app never started"
+  # apart from "the scanner could not reach it".
+  START_TIMEOUT_SECONDS: "180"
+
+  # APP=container only (ignored by url/service, which build nothing):
+  # DOCKERFILE is the Dockerfile path relative to the repo root, PLATFORM the
+  # OCI platform to build for. Leave both empty to keep the module defaults —
+  # Dockerfile at the root, linux/amd64 — because an empty flag would reach the
+  # same default by accident rather than by contract.
+  DOCKERFILE: ""
+  PLATFORM: ""
+
+  # Cap every scan. An uncapped active scan against a slow target runs for
+  # hours; capped, ZAP stops and cicd still writes a report.
+  MAX_DURATION_MINUTES: "45"
+
+  # HIGH is the default. Do not use CRITICAL: ZAP's maximum risk rating is
+  # High, so CRITICAL can never fail over findings. The evidence warns
+  # (`dast: THRESHOLD UNREACHABLE`) rather than reporting a green run that
+  # could not have been anything else.
+  FAIL_ON: "HIGH"
+
+  # Name the configuration the application ran under. Recorded verbatim and
+  # never interpreted — it is how a reader knows which surface these findings
+  # describe, and "dev mode with mock data" is a very different surface from
+  # production.
+  PROFILE: "dev-mock-data"
+
+  # Optional plain variables:
+  #   READY_TIMEOUT_SECONDS — how long cicd's own probe waits (module default 120)
+  #   API_SPEC_PATH         — mode=api: path to the API document ON THE RUNNING
+  #                           APP, e.g. /swagger/v1/swagger.json. cicd fetches it.
+  #   API_SPEC_FILE         — mode=api: a document committed in this repo
+  #                           (mutually exclusive with API_SPEC_PATH)
+  #   API_FORMAT            — openapi | soap | graphql
+  #   RULE_CONFIG           — a ZAP rule config (-c). Every rule it names is
+  #                           reported in the evidence, including any that
+  #                           raised no alert.
+  #   AUTHENTICATED         — "true" only if the scan really is authenticated.
+  #                           Anything else leaves the NOT AUTHENTICATED
+  #                           disclosure in place, which is the honest default.
+  # Secret pipeline variables:
+  #   TEAMS_WEBHOOK — Teams incoming webhook URL (optional)
+
+steps:
+  - checkout: self
+
+  # Resolve the cadence to exactly one mode, and say which input decided it.
+  # Build.Reason is read BEFORE the parameter because a parameter carries its
+  # default on every triggered run: reading the parameter first would make a
+  # nightly run look like somebody asked for a baseline.
+  - bash: |
+      set -euo pipefail
+      case "$BUILD_REASON" in
+        Manual|ResourceTrigger)
+          mode="$PARAM_MODE"
+          why="manual run, mode parameter"
+          ;;
+        Schedule)
+          case "$SCHEDULE_NAME" in
+            weekly-full)      mode=full;     why="schedule $SCHEDULE_NAME" ;;
+            nightly-baseline) mode=baseline; why="schedule $SCHEDULE_NAME" ;;
+            *)
+              # A schedule this template does not know about must not silently
+              # become the weakest scan under a name that implies otherwise.
+              echo "##vso[task.logissue type=error]Scheduled run from an unrecognised schedule '${SCHEDULE_NAME:-<unnamed>}'. Name every schedule in the schedules: block and map it here, or the cadence this file documents is not the cadence that runs."
+              exit 1
+              ;;
+          esac
+          ;;
+        *)
+          mode=baseline
+          why="CI on a mainline push"
+          ;;
+      esac
+      echo "DAST mode: $mode ($why)"
+      echo "##vso[task.setvariable variable=ResolvedMode]$mode"
+    displayName: Resolve the scan mode
+    env:
+      BUILD_REASON: $(Build.Reason)
+      SCHEDULE_NAME: $(Build.CronSchedule.DisplayName)
+      PARAM_MODE: ${{ parameters.mode }}
+
+  # Refuse the combinations that would scan something other than what was
+  # asked for, here rather than 200 lines later inside Dagger. START_CMD and
+  # STOP_CMD never reach the composite, so it cannot refuse them itself: a
+  # START_CMD under APP=container starts a process on the agent that nothing
+  # ever looks at, while the run reports on a different application entirely.
+  - bash: |
+      set -euo pipefail
+      case "${APP:-}" in
+        url|service|container) ;;
+        *)
+          echo "##vso[task.logissue type=error]APP is '${APP:-<empty>}' — set it to url, service or container. The shape is always explicit, never auto-detected."
+          exit 1
+          ;;
+      esac
+      case "${APP:-}" in
+        service)
+          case "${START_CMD:-}" in
+            ''|'$('*)
+              echo "##vso[task.logissue type=error]APP=service needs START_CMD: nothing on this agent starts your application, so the scan would tunnel to a port nothing is listening on. Use APP=url for an environment that is already running somewhere else."
+              exit 1
+              ;;
+          esac
+          ;;
+        *)
+          case "${START_CMD:-}" in
+            ''|'$('*) ;;
+            *)
+              echo "##vso[task.logissue type=error]START_CMD is only valid with APP=service (got APP=${APP})."
+              exit 1
+              ;;
+          esac
+          case "${STOP_CMD:-}" in
+            ''|'$('*) ;;
+            *)
+              echo "##vso[task.logissue type=error]STOP_CMD is only valid with APP=service (got APP=${APP})."
+              exit 1
+              ;;
+          esac
+          ;;
+      esac
+      echo "shape: ${APP}"
+    displayName: Check the shape and its inputs agree
+    env:
+      APP: $(APP)
+      START_CMD: $(START_CMD)
+      STOP_CMD: $(STOP_CMD)
+
+  - bash: |
+      # The same checksum-verified install as .github/actions/install-dagger, whose
+      # header says why: piping a run-time install.sh into sh executes a script
+      # nobody read before any checksum is consulted. The install-and-verify block
+      # below is byte-identical to that action's (scripts/tests/test_install_dagger.py).
+      # It installs into the agent's temp directory rather than /usr/local/bin, so
+      # neither sudo nor a writable system path is assumed on a self-hosted agent.
+      set -euo pipefail
+      mkdir -p "$DAGGER_INSTALL_DIR"
+      asset="dagger_v${VERSION}_linux_amd64.tar.gz"
+      base="https://dl.dagger.io/dagger/releases/${VERSION}"
+      tmp="$(mktemp -d)"
+      curl -fsSL --retry 3 -o "${tmp}/${asset}" "${base}/${asset}"
+      curl -fsSL --retry 3 -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+      # Keep only the line naming this asset, so a checksums.txt that lists
+      # every platform cannot match on a different file, and a checksums.txt
+      # that omits ours fails here rather than verifying nothing.
+      grep -E "^[0-9a-f]{64}  ${asset}\$" "${tmp}/checksums.txt" > "${tmp}/expected.sum"
+      (cd "$tmp" && sha256sum -c expected.sum)
+      tar -xzf "${tmp}/${asset}" -C "$tmp" dagger
+      install -m 0755 "${tmp}/dagger" "${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger"
+      rm -rf "$tmp"
+      # Prove the binary that landed is the one that will run, and fail the
+      # step if it is not — an install that silently produced nothing would
+      # otherwise surface later as a confusing "dagger: command not found".
+      installed="$("${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger" version)"
+      echo "$installed"
+      case "$installed" in
+        *"v${VERSION} "*) ;;
+        *) echo "installed dagger is not v${VERSION}: ${installed}" >&2; exit 1 ;;
+      esac
+      echo "##vso[task.prependpath]$DAGGER_INSTALL_DIR"
+      # Provision the Dagger engine from ghcr.io/dagger/engine (Dagger's official
+      # mirror) instead of registry.dagger.io, whose path intermittently times
+      # out during engine provisioning (dagger/dagger #7548/#7593). Identical
+      # image + digest. Pre-pull with backoff to warm the cache and fail loud if
+      # ghcr is unreachable; _EXPERIMENTAL_DAGGER_RUNNER_HOST makes the CLI
+      # provision from the ghcr image directly in the dagger steps that follow.
+      engine="ghcr.io/dagger/engine:v${VERSION}"
+      ok=
+      for delay in 0 5 10 15 20 30 45 60; do
+        [ "$delay" = 0 ] || sleep "$delay"
+        if docker pull "$engine"; then ok=1; break; fi
+        echo "engine image pull failed; retrying"
+      done
+      if [ -z "$ok" ]; then
+        echo "##vso[task.logissue type=error]Failed to pull $engine after 8 attempts"
+        exit 1
+      fi
+      echo "##vso[task.setvariable variable=_EXPERIMENTAL_DAGGER_RUNNER_HOST]docker-image://$engine"
+    displayName: Install Dagger CLI
+    env:
+      VERSION: $(DAGGER_VERSION)
+      DAGGER_INSTALL_DIR: $(Agent.TempDirectory)/dagger-cli
+
+  # ─── W1/service: start the consumer's application on this agent ───────
+  # Two distinct failures live here and they have different remedies, so they
+  # are separated rather than both surfacing as an unreachable target:
+  # START_CMD exiting non-zero (your command is wrong) and the application
+  # never answering (your command ran and the app did not come up). Both are
+  # loud, and the captured log is printed by the step below on either path — a
+  # start that failed with its output swallowed is the same unexplainable
+  # non-run this pipeline exists to refuse.
+  #
+  # The wait accepts 2xx and 3xx and nothing else, because that is exactly what
+  # cicd's own readiness probe accepts inside the engine. A probe stricter than
+  # cicd's would redden a scannable application; a looser one would let a dead
+  # one through to a confusing Dagger-side timeout that names the wrong layer.
+  # -k for the same reason the engine probe ignores certificates: a dev-mode
+  # app behind a self-signed certificate is the normal case here, ZAP scans it
+  # regardless, and refusing to probe what the scanner will happily scan turns
+  # a TLS detail into an unexplained non-run.
+  - bash: |
+      set -uo pipefail
+      log="$(Agent.TempDirectory)/app-start.log"
+      echo "##vso[task.setvariable variable=AppStartLog]$log"
+      echo "##[group]START_CMD"
+      # Status captured on its own line, not from inside `if ! cmd`: the `!`
+      # inverts $? before the branch body can read it, so the exit code
+      # reported there is always 0 — a diagnostic that is wrong precisely when
+      # it is being read.
+      bash -c "$START_CMD" > "$log" 2>&1
+      code=$?
+      echo "##[endgroup]"
+      if [ "$code" -ne 0 ]; then
+        echo "##vso[task.logissue type=error]START_CMD exited $code — the application was never started. This is your command failing, not the scanner failing to reach anything."
+        exit "$code"
+      fi
+      # The same address cicd will compose, minus the internal alias: scheme,
+      # the port, and HEALTH_PATH falling back to BASE_PATH falling back to "/".
+      path="${HEALTH_PATH:-${BASE_PATH:-/}}"
+      case "$path" in /*) ;; *) path="/$path" ;; esac
+      url="${SCHEME:-http}://localhost:${PORT}${path}"
+      echo "waiting up to ${START_TIMEOUT_SECONDS}s for $url"
+      started=$(date +%s)
+      status=0
+      while :; do
+        status=$(curl -sS -k -o /dev/null -w '%{http_code}' --max-time 10 "$url") || status=000
+        case "$status" in 2??|3??) break ;; esac
+        now=$(date +%s)
+        if [ $((now - started)) -ge "$START_TIMEOUT_SECONDS" ]; then
+          echo "##vso[task.logissue type=error]$url never answered 2xx/3xx within ${START_TIMEOUT_SECONDS}s (last status: $status). START_CMD ran successfully, so the application started and did not become ready — check the log printed below, and check that PORT and HEALTH_PATH name what your app actually serves."
+          exit 1
+        fi
+        sleep 2
+      done
+      echo "$url answered $status after $(( $(date +%s) - started ))s"
+    displayName: Start the application
+    condition: and(succeeded(), eq(variables['APP'], 'service'))
+    env:
+      START_CMD: $(START_CMD)
+      PORT: $(PORT)
+      SCHEME: $(SCHEME)
+      BASE_PATH: $(BASE_PATH)
+      HEALTH_PATH: $(HEALTH_PATH)
+      START_TIMEOUT_SECONDS: $(START_TIMEOUT_SECONDS)
+
+  - bash: |
+      # Optional flags are appended only when set. An empty flag is not a
+      # no-op here: Dagger's generated client drops any optional argument
+      # holding its zero value, so `--mode ""` and `--port 0` never reach the
+      # scanner — they arrive as its defaults instead, buying the weakest scan
+      # or a scan of a port nobody named, with nothing in the evidence saying
+      # so. The composite refuses both itself; not sending them at all is how
+      # an unset variable stays "the module default" rather than becoming a
+      # value somebody meant. Each variable is also guarded against an
+      # unexpanded ADO macro ('$('*) for when it is not defined at all.
+      extra=()
+      case "$APP" in
+        url)
+          extra+=(--app url --target "$TARGET")
+          ;;
+        service)
+          # The host tunnel. The Dagger CLI maps a tcp:// argument for a
+          # Service parameter onto the agent's loopback, and the composite
+          # binds it under a fixed internal alias — so the URL ZAP is handed
+          # never contains a host string a consumer typed.
+          extra+=(--app service --service "tcp://localhost:${PORT}")
+          ;;
+        container)
+          extra+=(--app container --src .)
+          case "${DOCKERFILE:-}" in
+            ''|'$('*) ;;
+            *) extra+=(--dockerfile "$DOCKERFILE") ;;
+          esac
+          case "${PLATFORM:-}" in
+            ''|'$('*) ;;
+            *) extra+=(--platform "$PLATFORM") ;;
+          esac
+          ;;
+      esac
+      for pair in \
+        "--port:${PORT:-}" \
+        "--scheme:${SCHEME:-}" \
+        "--base-path:${BASE_PATH:-}" \
+        "--health-path:${HEALTH_PATH:-}" \
+        "--ready-timeout-seconds:${READY_TIMEOUT_SECONDS:-}" \
+        "--api-spec-path:${API_SPEC_PATH:-}" \
+        "--api-spec:${API_SPEC_FILE:-}" \
+        "--api-format:${API_FORMAT:-}" \
+        "--rule-config:${RULE_CONFIG:-}" \
+        "--max-duration-minutes:${MAX_DURATION_MINUTES:-}" \
+        "--profile:${PROFILE:-}" ; do
+        flag="${pair%%:*}"
+        value="${pair#*:}"
+        case "$value" in
+          ''|'$('*) continue ;;
+        esac
+        extra+=("$flag" "$value")
+      done
+      # Only ever sent as true. `--authenticated=false` is the default, and the
+      # evidence's NOT AUTHENTICATED disclosure is what a reader needs in that
+      # case; sending it would be a claim nobody made.
+      if [ "${AUTHENTICATED:-}" = "true" ]; then extra+=(--authenticated=true); fi
+      # --progress=plain so module warnings (BASELINE ONLY, PROVENANCE NOT
+      # ATTESTED, NOT AUTHENTICATED, THRESHOLD UNREACHABLE) reach the pipeline
+      # log — default non-TTY progress hides stderr.
+      evidence="${AGENT_TEMPDIRECTORY}/dast-evidence.json"
+      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.2 call scan \
+        --mode "$MODE" \
+        --fail-on "$FAIL_ON" \
+        --commit-sha "$(Build.SourceVersion)" \
+        --branch "$BUILD_SOURCEBRANCHNAME" \
+        --repo-url "$(Build.Repository.Uri)" \
+        "${extra[@]}" \
+        export --path "$evidence"
+
+      delivery=()
+      case "${TEAMS_WEBHOOK:-}" in
+        ''|'$('*) ;;
+        *) delivery+=(--teams-webhook env:TEAMS_WEBHOOK) ;;
+      esac
+      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.2 call package \
+        --evidence "$evidence" \
+        --commit-sha "$(Build.SourceVersion)" \
+        --branch "$BUILD_SOURCEBRANCHNAME" \
+        --repo-url "$(Build.Repository.Uri)" \
+        --run-url "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)" \
+        "${delivery[@]}" \
+        export --path ./dast-evidence
+    displayName: Run DAST composite
+    env:
+      APP: $(APP)
+      MODE: $(ResolvedMode)
+      TARGET: $(TARGET)
+      DOCKERFILE: $(DOCKERFILE)
+      PLATFORM: $(PLATFORM)
+      PORT: $(PORT)
+      SCHEME: $(SCHEME)
+      BASE_PATH: $(BASE_PATH)
+      HEALTH_PATH: $(HEALTH_PATH)
+      READY_TIMEOUT_SECONDS: $(READY_TIMEOUT_SECONDS)
+      API_SPEC_PATH: $(API_SPEC_PATH)
+      API_SPEC_FILE: $(API_SPEC_FILE)
+      API_FORMAT: $(API_FORMAT)
+      RULE_CONFIG: $(RULE_CONFIG)
+      MAX_DURATION_MINUTES: $(MAX_DURATION_MINUTES)
+      PROFILE: $(PROFILE)
+      AUTHENTICATED: $(AUTHENTICATED)
+      FAIL_ON: $(FAIL_ON)
+      TEAMS_WEBHOOK: $(TEAMS_WEBHOOK)
+
+  # Printed on every path, pass included. A start log is the only place a
+  # warning from the application under test appears, and reading it only after
+  # a failure means never reading the run where it first appeared.
+  - bash: |
+      set -uo pipefail
+      echo "##[group]START_CMD output"
+      if [ -s "$LOG" ]; then cat "$LOG"; else echo "(START_CMD wrote nothing)"; fi
+      echo "##[endgroup]"
+    displayName: Application start log
+    condition: and(always(), ne(variables['AppStartLog'], ''))
+    env:
+      LOG: $(AppStartLog)
+
+  - bash: |
+      set -uo pipefail
+      # A teardown that fails must not turn a real verdict into a red run about
+      # a disposable agent — but it must not be silent either, or a STOP_CMD
+      # that has been broken for months looks exactly like one that works.
+      if ! bash -c "$STOP_CMD"; then
+        echo "##vso[task.logissue type=warning]STOP_CMD exited non-zero. The agent is disposable so this does not change the DAST verdict, but the command is not doing what it claims."
+      fi
+    displayName: Stop the application
+    condition: and(always(), eq(variables['APP'], 'service'), ne(variables['STOP_CMD'], ''))
+    env:
+      STOP_CMD: $(STOP_CMD)
+
+  # ─── GATE GOES HERE ─────────────────────────────────────────────
+  # The step above produced evidence and exited 0 regardless of what it found.
+  # Uncomment this step to turn the run into an actual gate. It is commented
+  # out rather than absent so that switching it on is a decision someone makes
+  # knowingly: pipelines that are green today will start going red, which is
+  # the point, but it is not a change to spring on a team mid-sprint.
+  #
+  # Read the verdict defensively. A missing or unparseable combined-evidence.json
+  # means the composite died before reaching a verdict, and no verdict is not a
+  # pass — both must fail, or jq returns null and the comparison falls through to
+  # green, which is the exact failure this step exists to prevent.
+  #
+  # - bash: |
+  #     set -uo pipefail
+  #     evidence=./dast-evidence/combined-evidence.json
+  #     if [ ! -s "$evidence" ] || ! jq . "$evidence" >/dev/null 2>&1; then
+  #       echo "##vso[task.logissue type=error]No readable verdict at $evidence"
+  #       echo "A gate that cannot read a verdict has not passed."
+  #       exit 1
+  #     fi
+  #     passed="$(jq -r '.passed' "$evidence")"
+  #     if [ "$passed" != "true" ]; then
+  #       jq -r '(.findings // [])[:25][] | "[" + (.severity // "?") + "] " + (.tool // "") + ": " + (.message // "")' "$evidence" \
+  #         | while IFS= read -r line; do echo "##vso[task.logissue type=error]$line"; done
+  #       # A scan that could not reach its target leaves no finding, only an
+  #       # errors[] entry — and that is the case FAIL_ON=NONE cannot clear.
+  #       jq -r '(.errors // [])[]' "$evidence" \
+  #         | while IFS= read -r line; do echo "##vso[task.logissue type=error]$line"; done
+  #       echo "##vso[task.logissue type=error]dast gate tripped - see the errors above, the build summary, or the evidence artifact"
+  #       exit 1
+  #     fi
+  #     echo "dast gate: passed"
+  #   displayName: Gate on the evidence verdict
+  # ─────────────────────────────────────────────────────────────────
+
+  - bash: |
+      summary="$(System.DefaultWorkingDirectory)/dast-evidence/comment.md"
+      if [ -f "$summary" ]; then
+        echo "##vso[task.uploadsummary]$summary"
+      else
+        echo "No comment.md produced — the composite aborted before writing evidence."
+      fi
+    displayName: Publish build summary
+    condition: always()
+
+  # Guarded on the directory existing, and named by BuildId rather than by the
+  # resolved mode: this step runs on always(), and a mode variable the resolve
+  # step never set would survive unexpanded into an artifact name containing
+  # '$()', which ADO rejects — losing the evidence on exactly the runs where it
+  # matters most. The mode is recorded inside combined-evidence.json.
+  - bash: |
+      d="./dast-evidence"
+      if [ -d "$d" ] && [ -n "$(ls -A "$d")" ]; then
+        echo "##vso[task.setvariable variable=HaveEvidence]true"
+        echo "Evidence present:"; ls -la "$d"
+      else
+        echo "##vso[task.setvariable variable=HaveEvidence]false"
+        echo "##vso[task.logissue type=warning]No evidence to publish — the composite aborted before exporting. The scan rendered no verdict; read the log for the cause, and do not read this run's status as one."
+      fi
+    displayName: Check for evidence
+    condition: always()
+
+  - publish: ./dast-evidence
+    artifact: dast-evidence-$(Build.BuildId)
+    displayName: Upload evidence
+    condition: and(always(), eq(variables['HaveEvidence'], 'true'))

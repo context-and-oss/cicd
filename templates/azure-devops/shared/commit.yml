@@ -1,0 +1,496 @@
+# ============================================================
+# Shared template: Stage 4 — Commit pipeline (Azure DevOps)
+#
+# Reference this file from a small application-owned pipeline with extends.
+# Keep trigger settings in the application repository, with
+# `trigger: batch: false` as templates/azure-devops/commit.yml states it:
+# a batched build gives the commits it folded no evidence of their own.
+#
+# No GitHub credential is needed: the cicd modules are fetched from the
+# public repository. Optional secrets and troubleshooting:
+#   docs/how-to-guides/set-up-azure-devops-auth.md
+#
+# One authoritative gate for any repo shape. Runs the full source gate
+# (lint, unit-test, sast, secrets, vuln-scan, risk) on the code,
+# then a shape-specific artifact scan selected by ARTIFACT:
+#   container (default) — build the Dockerfile, SBOM + scan the image
+#   archive             — run BUILD_CMD in a toolchain container, scan OUTPUT_PATH
+#   none                — no build; SBOM comes from the source lockfiles
+# The artifact is built and scanned but never published — each consumer repo
+# owns its own deployment.
+# Produces:
+#   - Build Summary page renders the findings markdown
+#   - Pipeline artifact: audit-evidence (combined-evidence.json, findings.sarif,
+#     sbom.cdx.json, comment.md)
+#
+# A missing, unreadable or failing verdict fails this job. Audit evidence is
+# retained on failure; only a passing run uploads a deployable candidate.
+#
+# Optional: install the "SARIF SAST Scans Tab" extension from the Marketplace
+# to render findings.sarif natively in the build summary.
+# ============================================================
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  DAGGER_VERSION: "0.20.8"
+  # Total independent Node projects, separate from check concurrency.
+  NODE_PROJECT_LIMIT: "4"
+  # Source check groups, and declared test legs, in flight (1–4); 1 suits small runners.
+  PARALLELISM: "1"
+  # Optional shared install/restore+compile; requires explicit TOOLCHAIN_IMAGE.
+  PREPARE_CMD: ""
+  PREPARE_LANGUAGE: ""
+  PREPARE_TEST_LABEL: ""
+  # One witnessed command, or a JSON array of labelled test legs (not both).
+  TEST_CMD: ""
+  TEST_LEGS: ""
+  COVERAGE_PATH: ""
+  # Artifact shape — container | archive | none. Always explicit, never
+  # auto-detected (ADR-001). BUILD_CMD/OUTPUT_PATH apply only to archive.
+  ARTIFACT: "container"
+  # Archive build definition (used only when ARTIFACT=archive). The build
+  # command runs via `sh -c` in the toolchain container; always explicit.
+  BUILD_CMD: ""
+  # Where the archive build writes its output, relative to the repo root.
+  OUTPUT_PATH: ""
+  # Toolchain image override for archive builds — the only digest-pinnable
+  # level (ADR-004). Empty resolves from .nvmrc / global.json, falling back
+  # to pinned defaults.
+  TOOLCHAIN_IMAGE: ""
+  # Container shape only (ignored by archive/none, which build no image):
+  # DOCKERFILE is the Dockerfile path relative to the repo root, PLATFORM the
+  # OCI platform to build for. Leave both empty to keep the module defaults —
+  # Dockerfile at the root, linux/amd64 — because an empty flag would reach the
+  # same default by accident rather than by contract.
+  DOCKERFILE: ""
+  PLATFORM: ""
+  # Optional plain variables:
+  #   SAST_RULESETS             — Semgrep rulesets (comma-separated, NO spaces).
+  #                               Defaults to the heavy commit pack below. Never
+  #                               set this empty — an empty ruleset is a Semgrep
+  #                               false-pass (see src/security/CLAUDE.md).
+  #   NPM_FEED_URL              — Internal npm registry URL (dependency-vuln scan)
+  #   NPM_FEED_ROUTING          — "npmrc" when the feed has no public upstream:
+  #                               only the token is set, the project .npmrc routes
+  #                               its scopes. Default "registry".
+  #   NUGET_FEED_URL            — Internal NuGet feed URL (dependency-vuln scan)
+  #   BEFORE_SHA                — Optional prior commit for the incremental diff.
+  #                               Left unset, the diff falls back to HEAD~1..HEAD.
+  SAST_RULESETS: "p/security-audit,p/owasp-top-ten,p/secrets"
+  # Licence policy (Trivy licence classification). Leave every one empty to
+  # keep cicd's defaults: gate mode "warn", the permissive/notice/unencumbered
+  # allowlist, and no exclusions.
+  #   LICENSE_GATE    — "warn" (default) reports licences outside the policy,
+  #                     "gate" fails the envelope over them. There is no "off":
+  #                     a licence leg that did not run must never read clean.
+  #   LICENSE_ALLOW   — comma-separated categories (permissive, notice,
+  #                     unencumbered, reciprocal, restricted, forbidden) and/or
+  #                     declared licence names — "BlueOak-1.0.0" globally, or
+  #                     "example-sdk=SEE LICENSE IN LICENSE" for one package.
+  #                     "unknown" is NOT a category you can allow; allow the
+  #                     specific unrecognised name instead. A declared name
+  #                     containing a comma cannot be passed through this
+  #                     variable — call the module directly with repeated
+  #                     --license-allow for that one.
+  #   LICENSE_EXCLUDE — comma-separated globs whose declarations are reported
+  #                     but not judged, e.g. "docs/**". It narrows scope, never
+  #                     findings: there is no way to exclude a licence by name.
+  #   VULN_ACCEPT     — vulnerability findings to accept, ONE PER LINE, each as
+  #                     "<id>=<reason>". Newline-separated, not comma-separated
+  #                     like LICENSE_ALLOW: a reason is prose and prose contains
+  #                     commas. Set it from a YAML block scalar:
+  #                       VULN_ACCEPT: |
+  #                         CVE-2026-81871=the otel log exporter only reaches
+  #                     An accepted identifier leaves the counts, findings[] and
+  #                     the gate, and is disclosed in warnings[] with its reason,
+  #                     so it reaches the PR comment; the row stays in the
+  #                     CycloneDX report. A reason is mandatory, a pattern is
+  #                     refused, and an acceptance matching nothing warns, so a
+  #                     stale entry cannot pass for a clean tree.
+  LICENSE_GATE: ""
+  LICENSE_ALLOW: ""
+  LICENSE_EXCLUDE: ""
+  VULN_ACCEPT: ""
+  # Secret pipeline variables:
+  #   TEAMS_WEBHOOK            — Teams incoming webhook URL (optional)
+  #   NPM_FEED_TOKEN           — Internal npm feed token (optional)
+  #   NUGET_FEED_TOKEN         — Internal NuGet feed token (optional)
+
+steps:
+  - checkout: self
+    fetchDepth: 0  # full history so the incremental diff can resolve a base commit
+
+  # Incremental diff for the intent gate (the commit composite runs the risk
+  # infra scan over the whole tree). Commit runs on push to main, so we scope
+  # to what this push changed. Mirrors scripts/commit-diff.sh on GitHub
+  # Actions: before..after for a normal push whose before resolves,
+  # HEAD~1..HEAD when there is no real base (all-zeros or unresolvable before /
+  # first/force push), none when no base resolves — never origin/main...HEAD
+  # (empty on main post-merge). ADO exposes no native before-ref for CI
+  # pushes, so set the optional BEFORE_SHA variable to use the before..after
+  # path; otherwise the HEAD~1..HEAD fallback scopes to the pushed commit.
+  #
+  # No range or an empty diff leaves no file, so no diff file is passed and the
+  # gate audits the whole tree. A range that resolved but could not be diffed
+  # fails the build: an empty file in its place read as a push that changed
+  # nothing. specs/a-diff-the-workflow-could-not-compute-is-not-an-empty-diff.md
+  - bash: |
+      set -uo pipefail
+      zeros="0000000000000000000000000000000000000000"
+      after="$(Build.SourceVersion)"
+      [ -n "$after" ] || after="$(git rev-parse HEAD)"
+      before=""
+      case "${BEFORE_SHA:-}" in
+        ''|'$('*) ;;
+        *) before="$BEFORE_SHA" ;;
+      esac
+      range=""
+      if [ -n "$before" ] && [ "$before" != "$zeros" ] \
+        && git rev-parse --verify --quiet "${before}^{commit}" >/dev/null 2>&1; then
+        range="$before..$after"
+      elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null 2>&1; then
+        range="HEAD~1..HEAD"
+      fi
+      out="$(Agent.TempDirectory)/change.diff"
+      rm -f -- "$out"
+      if [ -z "$range" ]; then
+        echo "Commit diff scope: no base commit resolves, so no diff file is passed and the intent gate audits the whole tree"
+        exit 0
+      fi
+      shown=$(printf '%s' "$range" | tr -c 'A-Za-z0-9._/~^-' '_')
+      if ! git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "$range" -- > "$out"; then
+        rm -f -- "$out"
+        echo "##vso[task.logissue type=error]Could not diff $shown. Without the push's change set the intent gate would audit the whole tree. Check out with fetchDepth: 0."
+        exit 1
+      fi
+      if [ ! -s "$out" ]; then
+        rm -f -- "$out"
+        echo "Commit diff scope: range=$shown, empty diff, so no diff file is passed and the intent gate audits the whole tree"
+        exit 0
+      fi
+      echo "Commit diff scope: range=$shown, $(grep -c '^+++ ' "$out") changed-file headers"
+    displayName: Compute before..after diff (scopes the intent gate)
+    env:
+      BEFORE_SHA: $(BEFORE_SHA)
+
+  - bash: |
+      # The same checksum-verified install as .github/actions/install-dagger, whose
+      # header says why: piping a run-time install.sh into sh executes a script
+      # nobody read before any checksum is consulted. The install-and-verify block
+      # below is byte-identical to that action's (scripts/tests/test_install_dagger.py).
+      # It installs into the agent's temp directory rather than /usr/local/bin, so
+      # neither sudo nor a writable system path is assumed on a self-hosted agent.
+      set -euo pipefail
+      mkdir -p "$DAGGER_INSTALL_DIR"
+      asset="dagger_v${VERSION}_linux_amd64.tar.gz"
+      base="https://dl.dagger.io/dagger/releases/${VERSION}"
+      tmp="$(mktemp -d)"
+      curl -fsSL --retry 3 -o "${tmp}/${asset}" "${base}/${asset}"
+      curl -fsSL --retry 3 -o "${tmp}/checksums.txt" "${base}/checksums.txt"
+      # Keep only the line naming this asset, so a checksums.txt that lists
+      # every platform cannot match on a different file, and a checksums.txt
+      # that omits ours fails here rather than verifying nothing.
+      grep -E "^[0-9a-f]{64}  ${asset}\$" "${tmp}/checksums.txt" > "${tmp}/expected.sum"
+      (cd "$tmp" && sha256sum -c expected.sum)
+      tar -xzf "${tmp}/${asset}" -C "$tmp" dagger
+      install -m 0755 "${tmp}/dagger" "${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger"
+      rm -rf "$tmp"
+      # Prove the binary that landed is the one that will run, and fail the
+      # step if it is not — an install that silently produced nothing would
+      # otherwise surface later as a confusing "dagger: command not found".
+      installed="$("${DAGGER_INSTALL_DIR:-/usr/local/bin}/dagger" version)"
+      echo "$installed"
+      case "$installed" in
+        *"v${VERSION} "*) ;;
+        *) echo "installed dagger is not v${VERSION}: ${installed}" >&2; exit 1 ;;
+      esac
+      echo "##vso[task.prependpath]$DAGGER_INSTALL_DIR"
+      # Provision the Dagger engine from ghcr.io/dagger/engine (Dagger's official
+      # mirror) instead of registry.dagger.io, whose path intermittently times
+      # out during engine provisioning (dagger/dagger #7548/#7593). Identical
+      # image + digest. Pre-pull with backoff to warm the cache and fail loud if
+      # ghcr is unreachable; _EXPERIMENTAL_DAGGER_RUNNER_HOST makes the CLI
+      # provision from the ghcr image directly in the dagger steps that follow.
+      engine="ghcr.io/dagger/engine:v${VERSION}"
+      ok=
+      for delay in 0 5 10 15 20 30 45 60; do
+        [ "$delay" = 0 ] || sleep "$delay"
+        if docker pull "$engine"; then ok=1; break; fi
+        echo "engine image pull failed; retrying"
+      done
+      if [ -z "$ok" ]; then
+        echo "##vso[task.logissue type=error]Failed to pull $engine after 8 attempts"
+        exit 1
+      fi
+      echo "##vso[task.setvariable variable=_EXPERIMENTAL_DAGGER_RUNNER_HOST]docker-image://$engine"
+    displayName: Install Dagger CLI
+    env:
+      VERSION: $(DAGGER_VERSION)
+      DAGGER_INSTALL_DIR: $(Agent.TempDirectory)/dagger-cli
+
+  - bash: |
+      # Shape- and config-dependent flags. Each variable is guarded against an
+      # unexpanded ADO macro ('$('*) for when it is not defined at all.
+      #   - --sast-rulesets is omitted when unset (never pass empty — that is a
+      #     Semgrep false-pass; see src/security/CLAUDE.md).
+      #   - archive shape adds --build-cmd/--output-path (+ optional
+      #     --toolchain-image); other shapes must not pass them.
+      #   - container shape adds the optional --dockerfile/--platform overrides;
+      #     the other shapes build no image, so they must not pass them either.
+      extra=(--node-project-limit "$NODE_PROJECT_LIMIT")
+      case "${TOOLCHAIN_IMAGE:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--toolchain-image "$TOOLCHAIN_IMAGE") ;;
+      esac
+      extra+=(--parallelism "$PARALLELISM")
+      case "${PREPARE_CMD:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--prepare-cmd "$PREPARE_CMD") ;;
+      esac
+      case "${PREPARE_LANGUAGE:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--prepare-language "$PREPARE_LANGUAGE") ;;
+      esac
+      case "${PREPARE_TEST_LABEL:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--prepare-test-label "$PREPARE_TEST_LABEL") ;;
+      esac
+      case "${TEST_CMD:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--test-cmd "$TEST_CMD") ;;
+      esac
+      case "${TEST_LEGS:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--test-legs "$TEST_LEGS") ;;
+      esac
+      case "${COVERAGE_PATH:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--coverage-path "$COVERAGE_PATH") ;;
+      esac
+      case "${SAST_RULESETS:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--sast-rulesets "$SAST_RULESETS") ;;
+      esac
+      # Private package feeds — pass only when actually set. An undefined ADO
+      # macro stays literal ('$('*), which would feed a bogus URL to the
+      # dependency-vuln scan, so omit the flags entirely when unset.
+      case "${NPM_FEED_URL:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--npm-feed-url "$NPM_FEED_URL" --npm-token env:NPM_FEED_TOKEN) ;;
+      esac
+      case "${NPM_FEED_ROUTING:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--npm-feed-routing "$NPM_FEED_ROUTING") ;;
+      esac
+      case "${NUGET_FEED_URL:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--nuget-feed-url "$NUGET_FEED_URL" --nuget-token env:NUGET_FEED_TOKEN) ;;
+      esac
+      # Container-shape build overrides. Only this shape builds an image, so the
+      # flags are gated on it instead of passed and ignored. Each is omitted when
+      # empty because the module owns the defaults (Dockerfile at the source
+      # root, linux/amd64), and an ADO variable that is not defined at all
+      # arrives as its own literal macro text, which docker build would take for
+      # a Dockerfile path or a platform name.
+      if [ "${ARTIFACT:-container}" = "container" ]; then
+        case "${DOCKERFILE:-}" in
+          ''|'$('*) ;;
+          *) extra+=(--dockerfile "$DOCKERFILE") ;;
+        esac
+        case "${PLATFORM:-}" in
+          ''|'$('*) ;;
+          *) extra+=(--platform "$PLATFORM") ;;
+        esac
+      fi
+      if [ "${ARTIFACT:-container}" = "archive" ]; then
+        extra+=(--build-cmd "$BUILD_CMD" --output-path "$OUTPUT_PATH")
+      fi
+      # --progress=plain so module warnings reach the pipeline log — default non-TTY progress hides stderr.
+      # Licence policy. Unconditional, unlike the shape-specific flags: the
+      # licence leg reads the dependency manifests, so it has something to say
+      # on every repository. Values reach this script through the env: block
+      # below rather than as ADO macros — ADO expands a macro before bash parses
+      # the line, so a spliced value is not contained by the quotes around it.
+      #
+      # Surrounding whitespace is trimmed with parameter expansion rather than
+      # `xargs`, which also interprets quotes and backslashes: a declared
+      # licence name may legally contain an apostrophe, and xargs answers an
+      # unmatched quote by failing the whole step rather than by trimming.
+      _trim() {
+        local _s="$1"
+        _s="${_s#"${_s%%[![:space:]]*}"}"
+        _s="${_s%"${_s##*[![:space:]]}"}"
+        printf '%s' "$_s"
+      }
+      case "${LICENSE_GATE:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--license-gate "$LICENSE_GATE") ;;
+      esac
+      case "${LICENSE_ALLOW:-}" in
+        ''|'$('*) ;;
+        *)
+          # One flag per entry, like --include: relying on the CLI to split a
+          # comma-separated value would make the policy depend on argument
+          # parsing we do not own. The module rejects an entry that is neither a
+          # category nor an acceptably shaped licence name, so a typo fails the
+          # run instead of quietly narrowing the allowlist. Case is NOT folded
+          # here — an entry may be an SPDX identifier, where case is part of the
+          # name, and the module folds it for matching itself.
+          _lc=0
+          IFS=',' read -ra _cats <<< "$LICENSE_ALLOW"
+          for _c in "${_cats[@]}"; do
+            _c="$(_trim "$_c")"
+            [ -n "$_c" ] || continue
+            extra+=(--license-allow "$_c")
+            _lc=$((_lc + 1))
+          done
+          if [ "$_lc" -eq 0 ]; then
+            echo "##vso[task.logissue type=error]LICENSE_ALLOW is set but names no category or licence; clear it to use the default policy."
+            exit 1
+          fi
+          ;;
+      esac
+      case "${LICENSE_EXCLUDE:-}" in
+        ''|'$('*) ;;
+        *)
+          # Same shape as above. Case is significant in a path, so nothing is
+          # folded here either. A pattern that matches no declaration is a
+          # warning in the evidence, not a silent no-op.
+          _pc=0
+          IFS=',' read -ra _pats <<< "$LICENSE_EXCLUDE"
+          for _p in "${_pats[@]}"; do
+            _p="$(_trim "$_p")"
+            [ -n "$_p" ] || continue
+            extra+=(--license-exclude "$_p")
+            _pc=$((_pc + 1))
+          done
+          if [ "$_pc" -eq 0 ]; then
+            echo "##vso[task.logissue type=error]LICENSE_EXCLUDE is set but names no pattern; clear it to use the default policy."
+            exit 1
+          fi
+          ;;
+      esac
+      case "${VULN_ACCEPT:-}" in
+        ''|'$('*) ;;
+        *)
+          # ONE flag carrying every acceptance, newline-separated, split by the
+          # module (src/security/vulnallow.go). Splitting it here is what this
+          # template shipped with and it did not work: Dagger exposes a []string
+          # parameter as a pflag StringSlice, which CSV-parses every value — so
+          # one --vuln-accept per line arrived as one acceptance per COMMA, and a
+          # reason cut at its first comma still reads as a decision somebody
+          # wrote down. A String parameter round-trips commas and newlines.
+          #
+          # No count check either: a value holding no acceptance is refused by
+          # the module, which quotes it and states the form.
+          extra+=(--vuln-accept "$VULN_ACCEPT")
+          ;;
+      esac
+      # Only pass a webhook that exists. ADO expands an undefined variable to
+      # its own literal macro text and an empty one to nothing, so both forms
+      # are excluded below: either would reach the composite as a non-nil
+      # Secret holding no webhook, and cicd would POST a card to it on every
+      # run, report success, and write the transport error into a log nobody
+      # reads. dast.yml has always carried this guard; commit and precommit
+      # drifted without it. See src/notify/teamsdelivery.go.
+      case "${TEAMS_WEBHOOK:-}" in
+        ''|'$('*) ;;
+        *) extra+=(--teams-webhook env:TEAMS_WEBHOOK) ;;
+      esac
+      # Only pass a diff that holds a change set: the change-diff step leaves
+      # no file when there is nothing to scope, and fails a pull request it
+      # could not scope. An empty --diff used to stand in for both.
+      CHANGE_DIFF_FILE="$(Agent.TempDirectory)/change.diff"
+      if [ -s "$CHANGE_DIFF_FILE" ]; then extra+=(--diff "$CHANGE_DIFF_FILE"); fi
+      # Export into a clean destination on hosted and reused agents alike.
+      rm -rf -- ./audit-evidence ./commit-build
+      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.2 call run \
+        --src . \
+        --artifact "${ARTIFACT:-container}" \
+        --fail-on HIGH \
+        --commit-sha "$(Build.SourceVersion)" \
+        --branch "$BUILD_SOURCEBRANCHNAME" \
+        --repo-url "$(Build.Repository.Uri)" \
+        --run-url "$(System.TeamFoundationCollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)" \
+        "${extra[@]}" \
+        export --path ./audit-evidence
+    displayName: Run commit composite
+    env:
+      NODE_PROJECT_LIMIT: $(NODE_PROJECT_LIMIT)
+      PARALLELISM: $(PARALLELISM)
+      PREPARE_CMD: $(PREPARE_CMD)
+      PREPARE_LANGUAGE: $(PREPARE_LANGUAGE)
+      PREPARE_TEST_LABEL: $(PREPARE_TEST_LABEL)
+      TEST_CMD: $(TEST_CMD)
+      TEST_LEGS: $(TEST_LEGS)
+      COVERAGE_PATH: $(COVERAGE_PATH)
+      ARTIFACT: $(ARTIFACT)
+      BUILD_CMD: $(BUILD_CMD)
+      OUTPUT_PATH: $(OUTPUT_PATH)
+      TOOLCHAIN_IMAGE: $(TOOLCHAIN_IMAGE)
+      DOCKERFILE: $(DOCKERFILE)
+      PLATFORM: $(PLATFORM)
+      SAST_RULESETS: $(SAST_RULESETS)
+      LICENSE_GATE: $(LICENSE_GATE)
+      LICENSE_ALLOW: $(LICENSE_ALLOW)
+      LICENSE_EXCLUDE: $(LICENSE_EXCLUDE)
+      VULN_ACCEPT: $(VULN_ACCEPT)
+      TEAMS_WEBHOOK: $(TEAMS_WEBHOOK)
+      NPM_FEED_URL: $(NPM_FEED_URL)
+      NPM_FEED_ROUTING: $(NPM_FEED_ROUTING)
+      NPM_FEED_TOKEN: $(NPM_FEED_TOKEN)
+      NUGET_FEED_URL: $(NUGET_FEED_URL)
+      NUGET_FEED_TOKEN: $(NUGET_FEED_TOKEN)
+
+  - bash: |
+      set -uo pipefail
+      evidence=./audit-evidence/combined-evidence.json
+      if [ ! -s "$evidence" ] || ! jq . "$evidence" >/dev/null 2>&1; then
+        echo "##vso[task.logissue type=error]No readable verdict at $evidence"
+        echo "A gate that cannot read a verdict has not passed."
+        exit 1
+      fi
+      passed="$(jq -r '.passed' "$evidence")"
+      if [ "$passed" != "true" ]; then
+        jq -r '(.findings // [])[:25][] | "[" + (.severity // "?") + "] " + (.tool // "") + ": " + (.message // "")' "$evidence" \
+          | while IFS= read -r line; do echo "##vso[task.logissue type=error]$line"; done
+        # A step that could not run leaves no finding, only an errors[] entry.
+        jq -r '(.errors // [])[]' "$evidence" \
+          | while IFS= read -r line; do echo "##vso[task.logissue type=error]$line"; done
+        echo "##vso[task.logissue type=error]commit gate tripped - see the errors above, the build summary, or the evidence artifact"
+        exit 1
+      fi
+      echo "commit gate: passed"
+    displayName: Gate on the evidence verdict
+
+  - bash: |
+      echo "##vso[task.uploadsummary]$(System.DefaultWorkingDirectory)/audit-evidence/comment.md"
+    displayName: Publish build summary
+    condition: always()
+
+  # Retain a deployable only after a passing verdict.
+  # Keep payload bytes outside the audit artifact so they are uploaded once.
+  - bash: |
+      set -euo pipefail
+      if [ -d ./audit-evidence/artifacts ]; then
+        if jq -e '.passed == true' ./audit-evidence/combined-evidence.json >/dev/null; then
+          mv ./audit-evidence/artifacts ./commit-build
+          echo "##vso[task.setvariable variable=buildCandidateReady]true"
+        else
+          rm -rf ./audit-evidence/artifacts
+        fi
+      fi
+    displayName: Select passing deployable candidate
+    condition: always()
+
+  - publish: ./commit-build
+    artifact: commit-build-$(Build.SourceVersion)-$(Build.BuildId)-$(System.JobAttempt)
+    displayName: Upload deployable candidate
+    condition: and(succeeded(), eq(variables['buildCandidateReady'], 'true'))
+
+  - publish: ./audit-evidence
+    artifact: commit-evidence-$(Build.SourceVersion)
+    displayName: Upload evidence
+    condition: always()

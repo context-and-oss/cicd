@@ -1,0 +1,374 @@
+# ============================================================
+# Dogfood — run our own precommit composite against the cicd repo.
+#
+# Unlike consumers, we invoke the composite via a LOCAL module
+# path (`-m ./src/composites/precommit`) so PRs test the in-flight
+# composite code, not whatever is pinned in precommit.yml@vX.Y.Z.
+# That closes the chicken-and-egg gap: composite regressions get
+# caught before the tag is cut.
+#
+# Scope: precommit only. The commit composite needs a Dockerfile
+# and cicd ships no container, so commit-pipeline dogfooding is
+# intentionally skipped.
+# ============================================================
+
+name: Dogfood (precommit)
+
+on:
+  pull_request:
+    # Docs-only PRs retain ci.yml's defended-surface and capsule validation.
+    # This Dagger dogfood run proves the executable precommit composite, so it
+    # is intentionally reserved for a diff that can alter executable behaviour.
+    paths-ignore:
+      - '**.md'
+      - '.capsules/**'
+    # HTML is executable input to SAST, not automatically documentation.
+  push:
+    branches: [main]
+
+# ─── Concurrency (as templates/github-actions/precommit.yml) ───
+# A new push to a pull request cancels that PR's run still in flight: its
+# verdict is for a commit the PR no longer points at. Every other run gets
+# a group of its own (the run id), so nothing else is ever cancelled or
+# queued behind another run. The group starts with the workflow name
+# because concurrency groups are shared across the whole repository.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DAGGER_VERSION: "0.20.8"
+
+# Least-privilege default. Jobs that need to write (SARIF upload, PR comments,
+# Pages deploy, release push) widen scope with their own job-level permissions.
+permissions:
+  contents: read
+jobs:
+  precommit:
+    name: Precommit on self
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false  # workflow doesn't push back to the repo — drop the persisted token
+          fetch-depth: 0              # full history so the diff-scoped gates can reach the PR base
+
+      # The risk and intent gates scope to what this change touches. On a PR the
+      # base commit is already in history (fetch-depth: 0), so we diff against it
+      # with no extra fetch (and no persisted creds), and a diff that fails fails
+      # the step: an empty file in its place made both gates audit the whole
+      # tree. On push to main there is no base.sha, so no diff file is passed and
+      # the modules audit every artifact (correct: a default-branch run is a
+      # full repo audit, not a scoped change).
+      # specs/a-diff-the-workflow-could-not-compute-is-not-an-empty-diff.md
+      - name: Compute change diff (scopes the risk + intent gates)
+        id: change-diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/change.diff"
+          rm -f -- "$out"
+          if [ -z "${BASE_SHA:-}" ]; then
+            echo "Change scope: not a pull request, so no diff file is passed and the gates audit the whole tree"
+            exit 0
+          fi
+          if ! git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "$BASE_SHA...HEAD" -- > "$out"; then
+            rm -f -- "$out"
+            echo "::error title=Change scope unavailable::Could not diff the pull request base against HEAD (no merge base: a shallow checkout?)."
+            exit 1
+          fi
+          if [ ! -s "$out" ]; then
+            rm -f -- "$out"
+            echo "Change scope: empty diff, so no diff file is passed and the gates audit the whole tree"
+            exit 0
+          fi
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+          echo "Change scope: $(grep -c '^+++ ' "$out") changed-file headers"
+
+      # Match the reusable consumer jobs: all tools execute inside Dagger, so
+      # these host SDKs are unused and only reduce the storage budget available
+      # to the engine and its snapshots.
+      - name: Prepare storage for Dagger
+        run: |
+          set -euo pipefail
+          before=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')
+          echo "Runner disk before cleanup:"
+          df -h /
+          for path in \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/share/swift; do
+            if [ -e "$path" ]; then
+              echo "Removing unused host toolchain: $path"
+              sudo rm -rf -- "$path"
+            fi
+          done
+          docker image prune --all --force
+          after=$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')
+          echo "Runner disk after cleanup:"
+          df -h /
+          echo "Reclaimed $(( (after - before) / 1024 / 1024 / 1024 )) GiB for Dagger"
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      # Without this the composite call below generates the precommit module's
+      # SDK itself, and a module-fetch fault arrives as "failed to apply
+      # generated code" with no retry and no classification.
+      - name: dagger develop (generate internal SDK)
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" src/composites/precommit
+
+      - name: Run precommit composite (in-tree)
+        env:
+          TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+          COMMIT_SHA: ${{ github.sha }}
+          # github.ref_name is "<N>/merge" on pull_request events; use head_ref for the actual branch.
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CHANGE_DIFF_FILE: ${{ steps.change-diff.outputs.file }}
+          # Approved machine-origin path (design.md "Approved human decisions"
+          # #1): only ever set for a pull_request whose actor is exactly
+          # dependabot[bot] — never on push to main, where Dependabot origin
+          # cannot be inferred after merge. The intent module independently
+          # re-validates every diff hunk; this flag is never trusted alone.
+          DEPENDABOT_ACTIONS_PIN: ${{ (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]') && 'true' || '' }}
+        # --fail-on raised to MEDIUM. It is a single value
+        # threaded into quality.Check, security.ScanSource, risk.Validate
+        # *and* intent.Check (src/composites/precommit/main.go), so this
+        # tightens all four gates at once. The DOCKER-002 parser fix cleared
+        # the two phantom MEDIUM findings that were the known blocker: a
+        # full-repository infra scan (all 54 files risk.Validate groups,
+        # evaluated with a real OPA engine against the fixed policy) reports
+        # zero findings at any severity, against exactly two MEDIUM
+        # DOCKER-002 findings pre-fix. quality.Check and security.ScanSource
+        # could not be independently re-verified full-repo in the authoring
+        # sandbox (no Docker/Dagger runtime, and testdata/go-app's go.mod
+        # requires go >= 1.26.2 while the sandbox toolchain is capped at
+        # go1.24.13), so this first run at MEDIUM is the real proof for those
+        # two gates. If it trips on a genuine finding, that finding is real
+        # and must be fixed or explicitly risk-accepted — not a reason to
+        # revert this threshold.
+        run: |
+          extra=()
+          if [ -n "$DEPENDABOT_ACTIONS_PIN" ]; then
+            extra+=(--dependabot-actions-pin)
+          fi
+          # This repository requires change intent of itself. The gate became
+          # opt-in for consumers who keep their change rationale elsewhere, but
+          # cicd's own specs/ artifacts are how its behaviour is argued for, and
+          # the release path generates a real intent artifact
+          # (scripts/ci/write-release-intent.py) precisely so a release passes
+          # this gate rather than being exempted from it. Dogfooding it here is
+          # what keeps both of those honest.
+          # The two accepted vulnerabilities below are the whole reason
+          # --vuln-accept exists, and this is the file that has to keep them
+          # honest. Both are otel log exporters at v0.16.0 that Dagger's
+          # codegen writes into every module's go.mod as a `replace` line and
+          # rewrites on every `dagger develop` (measured in CAPS-058: bumping
+          # them to v0.20.0 compiles and vets clean, and the next codegen run
+          # reverted it — so a committed bump would leave go.mod advertising a
+          # version the runtime does not use, which is a green scan over a
+          # dependency that is not in the build).
+          #
+          # Unlike the .trivyignore this replaces, these two rows reach the
+          # evidence: the scan still finds them, they leave the counts with a
+          # warnings[] line quoting the reason, and if a Dagger bump fixes
+          # them the acceptance goes UNUSED and says so in the same place.
+          # That is the removal condition — a DAGGER_VERSION bump whose
+          # codegen emits otel >= 1.43.0 makes these two lines start
+          # complaining, at which point delete them rather than renew them.
+          #
+          # CVE-2026-81872 (GHSA-hjf4-fphr-2h65, published 2026-09-29) is the
+          # third row of the same shape: otel/sdk/log v0.16.0, held there by the
+          # same codegen replace. It has its own removal condition, a codegen
+          # that emits sdk/log >= 0.21.0, because that is where it is fixed.
+          # See CAPS-064.
+          #
+          # ONE --vuln-accept flag holding BOTH acceptances, one per line. Two
+          # flags is what this file shipped with and it did not work: Dagger
+          # exposes a []string parameter as a pflag StringSlice, which CSV-parses
+          # its value, so these two reasons arrived as seven fragments cut at
+          # every comma and the run died on "names no reason". The parameter is
+          # a String now and the newline is the separator; the indentation on the
+          # continuation line is stripped by splitVulnAcceptances.
+          # Only pass a webhook that exists. A secret this repository never
+          # defines still arrives at the composite as a non-nil, empty Secret
+          # under `secrets: inherit`, and cicd used to POST a card to "" on
+          # every run of every repository that had not set Teams up — reporting
+          # success and writing `unsupported protocol scheme ""` into a log
+          # nobody reads. dast.yml has always carried this guard; commit and
+          # precommit drifted without it. See src/notify/teamsdelivery.go.
+          if [ -n "${TEAMS_WEBHOOK:-}" ]; then extra+=(--teams-webhook env:TEAMS_WEBHOOK); fi
+          # Only pass a diff that holds a change set. The change-diff step sets
+          # the file only then, and fails a pull request it could not scope;
+          # an empty --diff used to stand in for both "nothing to scope" and
+          # "could not compute", and the gates cannot tell those apart.
+          if [ -n "${CHANGE_DIFF_FILE:-}" ]; then extra+=(--diff "$CHANGE_DIFF_FILE"); fi
+
+          dagger -m ./src/composites/precommit call run \
+            --src . \
+            --include go \
+            --fail-on MEDIUM \
+            --require-intent \
+            --vuln-accept "CVE-2026-39882=go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.16.0 is written into every module's go.mod by Dagger's codegen and reverted on every dagger develop, so cicd cannot pin the fix; the exporter talks to the Dagger engine's own telemetry endpoint on the runner, never to a peer a consumer controls, so a hostile OTLP endpoint means an already-compromised engine. Remove on a DAGGER_VERSION bump whose codegen emits otel >= 1.43.0.
+            CVE-2026-81871=go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.16.0, same replace line and same codegen ownership as CVE-2026-39882, and the same runner-local telemetry endpoint. Remove on a DAGGER_VERSION bump whose codegen emits otel >= 1.43.0.
+            CVE-2026-81872=go.opentelemetry.io/otel/sdk/log v0.16.0, held by the same codegen replace line as CVE-2026-39882, so cicd cannot pin the fix; the busy-spin needs the export buffer full, and the only exporter is the Dagger engine's own runner-local telemetry endpoint, so the worst case is CPU burned inside one CI run with no data exposed. Remove on a DAGGER_VERSION bump whose codegen emits sdk/log >= 0.21.0." \
+            --commit-sha "$COMMIT_SHA" \
+            --branch "$BRANCH_NAME" \
+            --repo-url "$REPO_URL" \
+            --run-url "$RUN_URL" \
+            "${extra[@]}" \
+            export --path ./audit-evidence
+
+      - name: Probe Code Scanning availability
+        id: code-scanning
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Same probe as the reusable workflows: 403 means Advanced Security
+          # is not enabled (skip, with a notice), 200/404 mean the API is there
+          # (upload, and a rejection fails the job — never continue-on-error,
+          # which read a refused upload as a repo with nothing to report).
+          code=$(curl -sS -o "$RUNNER_TEMP/code-scanning-probe.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/code-scanning/analyses?per_page=1")
+          case "$code" in
+            200|404) echo "enabled=true" >> "$GITHUB_OUTPUT" ;;
+            403)
+              echo "::notice::Code Scanning is not available on this repository (GitHub Advanced Security not enabled) — skipping SARIF upload. Findings remain in the job summary and evidence artifact."
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Code Scanning availability probe returned HTTP $code"
+              cat "$RUNNER_TEMP/code-scanning-probe.json"
+              exit 1
+              ;;
+          esac
+
+      - name: Upload SARIF to Code Scanning
+        if: always() && steps.code-scanning.outputs.enabled == 'true'
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          sarif_file: ./audit-evidence/findings.sarif
+          category: cicd-precommit-dogfood
+
+      - name: Publish job summary
+        if: always()
+        run: cat ./audit-evidence/comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      # One comment per pipeline, updated in place. `gh pr comment` appends
+      # unconditionally, so every push left another verdict on the thread and a
+      # reader had to work out which one was live from the Commit row.
+      #
+      # The marker is read off comment.md rather than spelled here: notify's
+      # PipelineMarker() renders it as line 1, so the format keeps a single
+      # owner in src/notify/render.go and this step cannot drift from it.
+      #
+      # The Bot filter is load-bearing. GITHUB_TOKEN carries issues:write, which
+      # can edit anyone's comment in this repository, so without it a human who
+      # quotes the marker becomes the PATCH target and the person being gated
+      # hosts the gate's verdict. A consumer running this workflow under a user
+      # PAT matches nothing and falls back to appending — visible noise, never a
+      # hijacked report.
+      - name: Post PR comment
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          body=./audit-evidence/comment.md
+          marker="$(head -n 1 "$body")"
+          id=""
+          case "$marker" in
+            '<!-- cicd-pipeline:'*'-->')
+              # Newest match, so an upgrading PR that already carries appended
+              # comments keeps its live verdict at the bottom of the thread
+              # where a reader lands, with the stale ones visibly above it.
+              id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+                    | jq -r --arg m "$marker" \
+                        '.[] | select(.user.type == "Bot")
+                             | select(.body | startswith($m)) | .id' \
+                    | tail -n 1)"
+              ;;
+            *)
+              # No marker means no run can match one either, so this would
+              # silently go back to a comment per push. Say it out loud.
+              echo "::warning::comment.md carries no cicd-pipeline marker on line 1; posting a new comment instead of updating the existing one"
+              ;;
+          esac
+          if [ -n "$id" ]; then
+            jq -Rs '{body: .}' < "$body" \
+              | gh api -X PATCH "repos/$REPO/issues/comments/$id" --input - > /dev/null
+            echo "updated comment $id"
+          else
+            gh pr comment "$PR" --body-file "$body"
+          fi
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: precommit-dogfood-evidence-${{ github.sha }}
+          path: ./audit-evidence/
+          retention-days: 30
+
+      # The precommit composite is a producer: it always emits combined-evidence.json
+      # with .passed reflecting the fail-on threshold (NONE suppresses findings,
+      # HIGH fails on HIGH+ findings, etc.). NONE does NOT suppress a step that
+      # could not run, so passed=false with zero findings is reachable on every
+      # threshold and errors[] is the only thing that explains it — which is why
+      # the gate below prints errors[] as well as findings. The composite itself
+      # does not exit non-zero on a gate trip — that turns CI red here, AFTER
+      # comment / SARIF / artifact are already published so users still get the
+      # diagnostics.
+      - name: Gate on evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f ./audit-evidence/combined-evidence.json ]; then
+            echo "::error::combined-evidence.json missing — composite step failed before producing evidence"
+            exit 1
+          fi
+          passed=$(jq -r '.passed' ./audit-evidence/combined-evidence.json)
+          if [ "$passed" != "true" ]; then
+            total=$(jq '(.findings // []) | length' ./audit-evidence/combined-evidence.json)
+            if [ "$total" -gt 0 ]; then
+              echo "::group::Findings ($total)"
+              jq -r '(.findings // [])[:25][] | "[" + (.severity // "?") + "] " + (.tool // "") + (if (.rule // "") != "" then "/" + .rule else "" end) + ": " + (.message // "") + (if (.artifactPath // "") != "" then " (" + .artifactPath + ")" else "" end)' \
+                ./audit-evidence/combined-evidence.json \
+                | while IFS= read -r line; do echo "::error::$line"; done
+              if [ "$total" -gt 25 ]; then
+                echo "::error::… +$((total - 25)) more — see the evidence artifact (combined-evidence.json)"
+              fi
+              echo "::endgroup::"
+            fi
+            errcount=$(jq '(.errors // []) | length' ./audit-evidence/combined-evidence.json)
+            if [ "$errcount" -gt 0 ]; then
+              # A step that could not run leaves no finding — only an errors[]
+              # entry. Print them or a non-run gate trip is unexplainable.
+              echo "::group::Errors ($errcount)"
+              jq -r '(.errors // [])[]' ./audit-evidence/combined-evidence.json \
+                | while IFS= read -r line; do echo "::error::$line"; done
+              echo "::endgroup::"
+            fi
+            echo "::error::precommit gate tripped — see the annotations above, the PR comment, or the job summary"
+            exit 1
+          fi
+          echo "precommit gate: passed"

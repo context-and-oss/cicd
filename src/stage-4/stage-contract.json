@@ -1,0 +1,7 @@
+{
+  "stage": "stage-4",
+  "steps": [
+    { "step": "build",    "required": true },
+    { "step": "security", "required": true }
+  ]
+}

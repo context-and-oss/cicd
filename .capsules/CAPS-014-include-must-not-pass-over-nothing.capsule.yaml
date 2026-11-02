@@ -1,0 +1,209 @@
+kind: change-capsule
+schema: 1
+id: CAPS-014
+status: sealed
+intent: >
+  The false pass and the disclosure gap are one code path. The branch in detectLanguages
+  (src/quality/lint.go) that handled --include both dropped names it did
+  not recognise and returned before it could learn what it was dropping,
+  so --include golang resolved to an empty language set, the per-language
+  leg loop in quality.Check never iterated, allRan stayed vacuously true
+  because the loop that would have cleared it never ran, and
+  gatedPassed(true, true, threshold) returned passed=true over a
+  repository where nothing was linted and no test ran. A one-character
+  typo produced a green quality gate. Separately, an envelope from
+  --include go on a repository containing package.json was byte-identical
+  to one from a repository that only contains Go, so the single reduction
+  a consumer can apply to this pipeline left no trace anywhere a reviewer
+  looks. This change moves the resolution and diffing logic into a new
+  untagged file src/quality/include.go so a unit test can drive it, makes
+  an unrecognised name an error at the module boundary, probes for markers
+  even when --include was given so that an exclusion can be named in the
+  envelope's warnings, and gives auto-detection finding nothing a
+  deliberate warned-pass verdict instead of a silent one. It also adds
+  check_include_language_set to scripts/repo_surface.py, because the
+  accepted-name set is now held both in src/quality/include.go and in a
+  shell case guard in .github/workflows/precommit.yml.
+impact:
+  visibility: consumer
+  benefit: >
+    A mistyped --include now fails immediately, naming every unrecognised
+    name at once and the accepted set, instead of scanning nothing and
+    reporting a passing quality gate. A deliberate narrowing is disclosed
+    in the audit and in the PR comment, with the marker file that proves
+    the excluded language was present, so a reviewer can see what the gate
+    did not look at without rerunning anything. And a repository cicd
+    cannot classify at all says so rather than rendering as a clean run.
+  compatibility: fix
+  risk:
+    - >
+      This is a breaking change for any consumer currently passing an
+      --include name outside the documented ten spellings, because such a
+      run used to succeed by scanning nothing and now fails at the module
+      boundary. That is the intended direction: the previous behaviour was
+      the false pass being removed, and a run that scanned nothing was
+      never delivering the gate its caller believed they had configured.
+      .github/workflows/precommit.yml has refused these names in shell
+      since CAPS-007, so the newly-failing paths are commit.yml and direct
+      dagger call.
+    - >
+      quality.Check now probes for marker files even when --include names
+      every language explicitly, which is work it previously skipped. The
+      probe is a single find inside the already-provisioned container and
+      its result is used only for the exclusion diff, so it cannot change
+      which legs run. If the probe fails the run reports
+      "quality: EXCLUSION NOT CHECKED" rather than falling back to
+      silence, because a probe that could not look must not imply nothing
+      was excluded.
+    - >
+      The accepted alias set is deliberately not widened. Adding golang,
+      javascript, js, cs and .net was implemented and reverted during this
+      change: the same list is enforced by a shell case guard in
+      .github/workflows/precommit.yml and documented in
+      templates/azure-devops/precommit.yml and docs/reference/index.md, so
+      a name the module accepts and the guard refuses is a contradiction
+      between two gates on one input. Widening means widening all four
+      together, and check_include_language_set now fails CI if only some
+      of them move.
+    - >
+      The exclusion warnings are carried in the envelope's warnings[], not
+      errors[], so they do not affect passed. A consumer whose CI only
+      reads the boolean will not see them. notify renders warnings
+      verbatim into the Teams card and the GitHub/ADO PR comment, which is
+      the surface a reviewer actually reads, and it is the same mechanism
+      intent.Check relies on for "intent-gate: NOT REQUIRED".
+    - >
+      Nothing here proves a leg that did run did its work honestly. The
+      change closes the case where no leg ran at all and the case where a
+      leg was skipped without disclosure. A scanner reporting a dishonest
+      success is a different question, answered by the run-error
+      classification in each tool wrapper.
+decisions:
+  - id: d01
+    choice: an unrecognised --include name is a hard error, not passed=false
+    options:
+      - keep dropping it and rely on the per-workflow shell guard (rejected)
+      - resolve to an empty set and report passed=false with an errors[] entry (rejected)
+      - fail resolveIncludeNames, producing no envelope at all (chosen)
+    because: >
+      The issue proposed passed=false for an empty explicit include, and
+      a hard error closes the same hole strictly harder: no envelope is
+      produced, so there is nothing for a downstream consumer to read as a
+      gate result, no combined-evidence entry to be aggregated and no
+      artifact to be misfiled as a scan that happened. The condition is
+      also unambiguously a caller mistake rather than a repository state,
+      which is the one case where refusing to run is cheaper for everyone
+      than running and reporting. Every unrecognised name is reported in
+      one message rather than the first, because a caller who mistyped two
+      entries of a four-entry list should learn both from one run.
+    confidence: high
+  - id: d02
+    choice: zero languages from auto-detection is a warned pass
+    options:
+      - report passed=false with an errors[] entry, consistent with the non-run doctrine (rejected)
+      - distinguish nothing, treating it exactly like the caller mistake (rejected)
+      - report passed=true with a mandatory NO LANGUAGE DETECTED warning (chosen)
+    because: >
+      After d01 a non-empty --include can no longer resolve to zero
+      languages, so the only remaining route here is auto-detection on a
+      tree carrying no marker file within markerSearchDepth levels. That
+      is a documentation-only repository, or one written in a language this
+      module does not lint, and both are legitimate states that still
+      consume the composites for the security scan, the SBOM and the
+      intent gate. Failing them would be a permanent red with no remedy
+      available: --fail-on NONE deliberately does not suppress a non-run,
+      so the one knob a consumer reaches for cannot clear it either, and
+      there would exist no configuration in which such a repository goes
+      green. The property the doctrine demands is that the envelope must
+      not render identically to a repository where every leg ran and
+      passed, and it does not — the warning names the depth searched, the
+      marker filenames looked for, and the --include values that would
+      reach deeper. The precedent is intent.Check, which runs when it was
+      not required and returns "intent-gate: NOT REQUIRED" rather than
+      either failing or staying silent.
+    confidence: medium
+  - id: d03
+    choice: quote the marker file path in every exclusion warning
+    options:
+      - name only the excluded language (rejected)
+      - name the language and the marker file that proves it was present (chosen)
+    because: >
+      "node detected" is a claim a reader has to take on trust, while
+      "node detected (web/package.json)" is a claim a reader can check
+      against their own tree in one command. The case that matters is a
+      marker several directories down, which is precisely where a
+      consumer's model of their own repository is wrong and where a bare
+      language name would read as cicd being confused rather than as a
+      real second project. autoDetectLanguages already had the path in
+      hand from the find it runs, so carrying it costs a map return value
+      and no extra work.
+    confidence: high
+  - id: d04
+    choice: put the resolution logic in a new untagged file rather than in lint.go
+    options:
+      - extend detectLanguages in src/quality/lint.go where it already lives (rejected)
+      - add src/quality/include.go with no build tag, returning plain strings (chosen)
+    because: >
+      lint.go carries //go:build !unit_test, so nothing in it can be
+      driven by the unit suite — which is why a switch with no default arm
+      survived in it. Logic that decides whether a gate scans anything
+      must be testable without a Dagger session, and the precedent for
+      untagged pure logic in this module is markers.go and nodeproject.go.
+      The functions therefore return plain strings rather than the module's
+      language type, because that type is declared in lint.go and would
+      drag the tag back in; toLanguages in lint.go converts at the
+      boundary. Sixteen tests in src/quality/include_test.go now cover
+      resolution, aliasing, the error text, deduplication, canonical
+      ordering and every warning.
+    confidence: high
+  - id: d05
+    choice: add a repo-surface check tying the module alias map to the shell guard
+    options:
+      - drop the shell guard now that the module refuses bad names (rejected)
+      - keep both copies and rely on review to keep them aligned (rejected)
+      - keep both and fail CI when they disagree, in either direction (chosen)
+    because: >
+      Both copies earn their place: the guard fails in a second and names
+      the accepted set without provisioning a Dagger engine, while the
+      module error is the only thing covering commit.yml and direct
+      dagger call. That makes it one set held in two files, which is the
+      drift class this repository has already been bitten by, and it fails
+      nastily in both directions — a name the module takes and the guard
+      refuses makes the reusable workflow reject an input that works
+      everywhere else, and the reverse turns a valid-looking input into a
+      hard error part-way through a provisioned run. check_include_language_set
+      in scripts/repo_surface.py compares the two, normalising the guard's
+      lowercasing and its quoting of 'c#' since # starts a shell comment.
+      A missing include.go, a renamed languageAliases map, an empty map or
+      an absent case arm are refusals rather than passes, because each
+      would otherwise compare against an empty set and report agreement
+      with nothing — the same false pass this whole change removes, in the
+      checker built to prevent it. Proven by negative controls in
+      scripts/tests/test_repo_surface.py in both directions and for every
+      refusal case, against a baseline fixture that carries a coherent
+      include.go and guard.
+    confidence: high
+  - id: d06
+    choice: lift the find depth into markerSearchDepth in both markers.go copies
+    options:
+      - hard-code 4 in the warning string as well as in the find (rejected)
+      - add markerSearchDepth and markerFindArgs to both copies and rewire all call sites (chosen)
+    because: >
+      The NO LANGUAGE DETECTED warning has to tell a consumer how deep
+      cicd looked, or the advice to pass --include for a deeper marker is
+      unactionable. A second literal 4 in a Go string would drift from the
+      find flag silently and produce a warning that lies about what was
+      searched, which is a small instance of the same failure the change
+      is about. src/quality/markers.go and src/build/markers.go stay
+      byte-identical as they already had to, the three call sites in
+      src/quality/lint.go and src/build/archive.go build their arguments
+      from markerFindArgs, and TestMarkerFindArgs_CarriesTheSearchDepth
+      asserts the warning and the command cannot disagree.
+    confidence: high
+tags:
+  - quality
+  - include
+  - false-pass
+  - disclosure
+  - doctrine
+  - repo-surface

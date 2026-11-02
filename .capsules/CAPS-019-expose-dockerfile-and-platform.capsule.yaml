@@ -1,0 +1,128 @@
+kind: change-capsule
+schema: 1
+id: CAPS-019
+status: sealed
+intent: >
+  Make the commit composite's --dockerfile and --platform reachable from the two
+  harnesses that actually run it. src/composites/commit/main.go has accepted both
+  since ADR-005 and forwards them to build.Build, which honours them with
+  defaults of Dockerfile and linux/amd64 — but .github/workflows/commit.yml
+  declared neither input and templates/azure-devops/commit.yml and
+  templates/azure-devops/shared/commit.yml declared neither variable, so a
+  consumer on either harness could build exactly ./Dockerfile for exactly
+  linux/amd64. A repository whose Dockerfile sits under docker/, or one that
+  ships arm images, had no setting to reach, and the shape of the gap is why it
+  survived — the module signature reads complete, the pipeline runs green, and
+  the container leg genuinely built and scanned the image it was told about.
+  Nothing was misreported. A capability that exists and cannot be used just
+  leaves no trace at either end.
+impact:
+  visibility: consumer
+  benefit: >
+    An Actions consumer sets the dockerfile and platform inputs on
+    .github/workflows/commit.yml; an Azure DevOps consumer sets the DOCKERFILE
+    and PLATFORM variables in the copied template. A monorepo that keeps its
+    Dockerfile beside the service it builds no longer has to move the file to be
+    scanned, and an arm image no longer needs a second pipeline outside cicd.
+    Both inputs are optional and empty by default, so every existing caller
+    keeps the module defaults it already had.
+  compatibility: additive
+  risk:
+    - >
+      No dagger run in this change builds a Dockerfile from a non-root path or
+      an image for a platform other than linux/amd64. The proof is the flag
+      threading plus the forwarding that already existed in
+      src/composites/commit/main.go and the defaults in src/build/main.go, not a
+      measured arm image, so the first consumer to set platform is the first
+      real exercise of that path through a harness.
+    - >
+      Neither harness validates the platform string. A value Dagger cannot
+      resolve fails inside the image build, where the message belongs to Dagger
+      rather than to cicd. An allowlist held in a workflow input would drift
+      from what the engine supports, so none was added — the cost is that a typo
+      surfaces as a build failure rather than as a rejected input.
+    - >
+      scripts/ado_templates.py now asks whether the Azure DevOps templates pass
+      both flags, and scripts/tests/test_ado_templates.py proves that check
+      fails on the state that shipped. Nothing asks the same question of
+      .github/workflows/commit.yml, so the two inputs could be dropped there
+      again and only review would notice. The check covers one harness, and it
+      says so by name.
+    - >
+      Setting dockerfile or platform alongside --artifact archive or
+      --artifact none is accepted and ignored, exactly as build-cmd already is
+      under the container shape. That asymmetry is the pre-existing contract in
+      these files rather than something this change introduced, but a consumer
+      who pairs the wrong knob with the wrong shape still gets no warning about
+      it.
+decisions:
+  - id: d01
+    choice: append each flag only when the consumer set a value, never as an empty string
+    options:
+      - pass the input value unconditionally on every run (rejected)
+      - append the flag only when the value is non-empty (chosen)
+    because: >
+      The module owns the two defaults, and Dagger's generated Go client drops an
+      optional argument holding its zero value, so --dockerfile "" would land
+      back on Dockerfile by accident rather than by contract. Relying on that
+      accident would also make the templates read as though an empty path were
+      meaningful. Conditional appending is additionally the pattern
+      toolchain-image, build-cmd and output-path already use in both harnesses,
+      so there is one threading shape to learn rather than two.
+    confidence: high
+  - id: d02
+    choice: gate the Azure DevOps flags on ARTIFACT=container, leave the Actions flags ungated
+    options:
+      - gate the shape in both harnesses (rejected)
+      - gate in neither (rejected)
+      - follow each file's own existing structure (chosen)
+    because: >
+      .github/workflows/commit.yml already appends build-cmd whenever it is set
+      and documents that the other shapes ignore it, while
+      templates/azure-devops/commit.yml already wraps its archive flags in a
+      shape test. Each file is read on its own, so breaking a file's local
+      pattern costs a reader more than a difference between two files nobody
+      diffs. The composite ignores both flags outside the container shape either
+      way, so no behaviour rides on the choice — only legibility does.
+    confidence: medium
+  - id: d03
+    choice: add one behavioural check for the two flags, not a general exposure check
+    options:
+      - fix the templates and add no check at all (rejected)
+      - check that every commit.Run parameter is exposed by commit.yml (rejected)
+      - check the two container-shape flags in the Azure DevOps templates (chosen)
+    because: >
+      The state that shipped was green under all nine existing checks in
+      scripts/ado_templates.py, so nothing would notice the flags being dropped
+      again — and a check nobody wrote is how this gap lasted. The general
+      question is the one worth asking, but it fails today on minCoverage,
+      coverageMinLines, coveragePath, baseline, tolerance, coverageGate and
+      verifySecrets, which commit.yml also does not expose. That is a separate
+      and larger gap, and wiring it in here would either block this change or
+      force seven more inputs into it under cover of a plumbing fix. The narrow
+      check is named for exactly what it proves, and its negative control was
+      run against the templates on origin/main, where it reports four problems
+      and leaves both precommit templates alone.
+    confidence: medium
+  - id: d04
+    choice: no document under specs/ and no doctrine paragraph in CLAUDE.md
+    options:
+      - write a measured spec under specs/ (rejected)
+      - add a doctrine paragraph to CLAUDE.md (rejected)
+      - this capsule plus rows in the existing reference and guide pages (chosen)
+    because: >
+      Every spec in specs/ records a measured false pass, where a gate reported
+      clean over work it had not done. This gap produced no wrong verdict of any
+      kind, so filing it beside those would dilute the paragraphs that do carry
+      a measurement, and CLAUDE.md states that a doctrine paragraph is for a new
+      class of failure. The reachable surface is what a consumer needs, so the
+      change lands as two rows in docs/reference/index.md, a note in
+      docs/how-to-guides/use-complete-pipeline.md, a widened cell in
+      docs/explanation/migrating-to-cicd.md, and commented examples in
+      templates/github-actions/commit.yml.
+    confidence: high
+tags:
+  - commit
+  - reusable-workflow
+  - templates
+  - container-shape

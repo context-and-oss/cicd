@@ -1,0 +1,136 @@
+kind: change-capsule
+schema: 1
+id: CAPS-023
+status: sealed
+intent: >
+  Two coverage harvests deduped their documents on raw bytes, and byte-identity
+  was true only by accident of how Microsoft.Testing.Platform publishes an
+  attachment. buildCoverageSet in src/quality/coverageglob.go and
+  parseCoberturaSet in src/quality/dotnetreport.go both keyed a map on the
+  document text, dropping repeats. That is correct today and it is correct for a
+  reason neither function controls.
+
+  Observed attachment pairs match byte for byte because MTP copies the file
+  into the trx attachment directory rather than serialising it a second time.
+  Timestamps vary across reports, so the attribute is live. For a hypothetical
+  two-project illustration, each project contributes a report and an attachment
+  copy: four files represent two measurements. If only a copy's timestamp
+  changes, raw-byte dedup stops recognising that pair. Nothing in cicd asked
+  for the copy semantics and nothing in cicd would notice them changing.
+
+  What a missed pair costs is the point. Every project's reading enters
+  mergeNodeCoverage or mergeDotnetCoverage twice, the coverable-line weighting
+  stays internally consistent, the percentage stays entirely plausible, and the
+  Duplicates figure reads 0 — so the evidence positively asserts that no
+  duplicate was found. Nothing errors and no count looks wrong. The identity is
+  now coverageIdentity, the document with its root timestamp attribute removed,
+  and duplicateNote no longer describes the rule as byte-identical because it no
+  longer is.
+impact:
+  visibility: internal
+  benefit: >
+    It removes a coverage figure that could be silently double-weighted while
+    reporting that it was not. Coverage is the one number in this repository
+    that is wrong in the direction which survives a ratchet, and this is the
+    failure mode where the evidence actively vouches for the wrong answer rather
+    than merely omitting a caveat.
+  compatibility: fix
+  risk:
+    - >
+      Applied in both places, and the second one matters more than the first.
+      parseCoberturaSet serves cicd's own .NET test leg, which every .NET
+      consumer runs, while buildCoverageSet serves the opt-in BYO leg. Fixing
+      only the BYO path would have left the defect where more repositories meet
+      it, and the two functions harvest the same MTP layout — a rule that holds
+      in one and not the other is a rule a reader will assume covers both.
+    - >
+      The trade-off is real and bounded. Two genuinely different projects whose
+      documents differ only in the timestamp would now merge into one reading.
+      For a non-empty cobertura that needs identical sources and identical
+      per-class line data, which distinct projects do not have. The case where
+      it is plausible is the empty document, and an empty cobertura already
+      contributes no reading at all because parseCobertura rejects a missing or
+      non-positive lines-valid, so merging two of them changes nothing a figure
+      is derived from. Asserted from the other side too — documents differing in
+      the numbers stay two readings.
+    - >
+      A document carrying no timestamp attribute passes through untouched, so
+      every leg that works today keeps the figure it has. The regex is anchored
+      on the attribute with its leading whitespace and matches nothing else.
+    - >
+      Both directions are covered by a negative control, not just a passing
+      test. Reverting coverageIdentity to return its input makes
+      TestCoverageIdentityIgnoresTheTimestamp report Duplicates 0 want 1 and
+      makes TestParseCoberturaSetSharesTheIdentityRule return two readings where
+      one is wanted. A test that cannot fail proves nothing about the fix beside
+      it.
+    - >
+      This does not close the general question. A future MTP release could differ
+      in a second attribute and the same silent double-weight returns; the
+      Duplicates count in the evidence is what a reviewer has to read, and this
+      change makes that count trustworthy against one known-live field rather
+      than against every possible one.
+decisions:
+  - id: d01
+    choice: strip the timestamp, do not parse and compare measurements
+    options:
+      - keep raw bytes and accept the copy semantics (rejected)
+      - normalise the document by removing the timestamp attribute (chosen)
+      - parse each document and dedup on the parsed numbers (rejected)
+      - dedup on filename, since MTP names the pair identically (rejected)
+    because: >
+      Deduping on the parsed numbers would merge two projects that genuinely
+      measured the same lines and the same rate, which is not rare in a
+      repository of small similar projects, and it would silently drop a real
+      reading. Filename is wrong because the pooled and per-project MTP layouts
+      differ in exactly that, and it would also collapse two projects that
+      happened to write the same name in different directories. Removing the one
+      attribute that is known to vary within a run and is known not to describe a
+      measurement is the narrowest normalisation that survives the failure mode,
+      and it is reversible to read — the key is still the document.
+    confidence: high
+  - id: d02
+    choice: amend CAPS-022 d04 rather than reopen it
+    options:
+      - leave d04 standing and let the two records disagree (rejected)
+      - edit the sealed capsule in place (rejected)
+      - record the supersession here (chosen)
+    because: >
+      CAPS-022 d04 chose content dedup over path or filename and called it
+      byte-identical, which was the right decision on the evidence then
+      available — duplicate attachment copies collapsed into single documents.
+      The timestamp observation is new evidence, and it does not overturn the choice of
+      content as the key, only the claim that raw bytes are the right content. A
+      sealed capsule that is edited stops being a record of what was known when
+      it was decided.
+    confidence: high
+  - id: d03
+    choice: change the warning wording with the rule
+    options:
+      - keep the phrase byte-identical duplicate(s) (rejected)
+      - say duplicate document(s) reporting the same measurement (chosen)
+    because: >
+      The message a consumer reads described the rule more narrowly than the code
+      applies it, which sends a reader looking for a byte difference that need
+      not exist. A message describing a check that is not the check being run is
+      the documentation form of the defect this whole repository is organised
+      against.
+    confidence: high
+  - id: d04
+    choice: no spec under specs/
+    options:
+      - write a spec, as the .NET runner change did (rejected)
+      - the capsule and the function headers carry it (chosen)
+    because: >
+      specs/ is reserved for a measured false pass, and this one was not
+      measurable — the defect is conditional on MTP publishing behaviour that
+      currently does not occur, so there is no captured run in which a wrong
+      figure was produced. Filing a spec on a hazard rather than a measurement
+      would overstate it in the way CAPS-020, CAPS-021 and CAPS-022 all refused.
+      The relevant observation is that attachment copies currently agree while
+      timestamps can vary; regression tests exercise timestamp-only differences.
+    confidence: high
+tags:
+  - quality
+  - dotnet
+  - coverage

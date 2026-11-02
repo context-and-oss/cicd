@@ -1,0 +1,136 @@
+kind: change-capsule
+schema: 1
+id: CAPS-044
+status: sealed
+intent: >
+  The behavioural smokes in scripts/smoke/ call the real composites through
+  Dagger and assert on the evidence produced, so they are the only checks in
+  this repository that catch a pipeline which still compiles and has stopped
+  doing something. No make target ran any of them. They existed solely as
+  ci.yml steps, which means the entire local sweep — make check, make prepush,
+  every check-* target — could be green over a broken fixture assertion.
+
+  That is not hypothetical. The stage-2/stage-4 break repaired earlier reached
+  CI rather than the author's terminal, because the author's terminal had no way
+  to run the thing that caught it.
+
+  So `make smoke` now exists, backed by scripts/smoke-all.sh, and a fourteenth
+  repo-surface check holds both halves of the wiring together — every smoke
+  script must appear in the runner's SMOKES array and be invoked by a run step
+  in a declared workflow. A smoke that runs nowhere reads as coverage and is
+  not.
+impact:
+  visibility: internal
+  benefit: >
+    The check that catches a silently-degraded pipeline can be run before
+    pushing, one script at a time via SMOKE=<script>, instead of only after.
+
+    Neither half of the wiring can rot unnoticed. Adding a script to
+    scripts/smoke/ without listing it in the runner fails make check-surface,
+    and so does dropping a smoke out of CI or listing a script in the runner
+    that no longer exists.
+  compatibility: compatible
+  risk:
+    - >
+      make smoke is deliberately outside prepush and outside the check-*
+      sweep. It needs a running Docker daemon and the dagger CLI, and each
+      smoke is a full pipeline execution, so wiring it into prepush would make
+      the pre-push hook unusable and would be reverted rather than obeyed. The
+      consequence is that running it stays a choice — the target closes the
+      "could not" gap, not the "did not" gap.
+    - >
+      The runner fails its preflight with exit 2, distinct from a smoke failure,
+      when dagger or Docker is absent, so an unrunnable suite does not look like
+      a failing one. The inverse risk is that a reader skims exit 2 as success;
+      the summary table says PREFLIGHT rather than PASS for exactly that reason.
+    - >
+      The new check proves the two lists agree with the directory. It cannot
+      prove a smoke still asserts anything. A smoke gutted to `exit 0` stays
+      listed, stays invoked, and passes both the check and the suite — the same
+      blind spot every wiring check has, and the reason the assertion counts in
+      each smoke's output are worth reading.
+    - >
+      SMOKES is parsed textually out of the shell array rather than by running
+      the script, so a syntax the regex does not model reads as unparseable.
+      The check reports that loudly instead of shrugging, because reporting OK
+      over nothing is the failure this repository refuses everywhere else, but
+      it does mean an exotic edit to that array blocks check-surface until the
+      array is readable again.
+    - >
+      archive-identity.sh is absent from SMOKES on purpose, matching ci.yml.
+      commit-shapes.sh documents at line 392 that assert_unique_identity already
+      runs inside the archive shape, so a standalone run costs a fourth full
+      pipeline execution for a fact already asserted. The check therefore has to
+      tolerate a script that neither list names, which is the one direction it
+      cannot enforce.
+    - >
+      Every assertion in the new check was confirmed by mutation before being
+      trusted — six directions against the real repository and thirteen tests in
+      scripts/tests/test_repo_surface.py. The first version of the check was
+      itself wrong, reporting commit-shapes.sh as never running in CI because it
+      read only block scalars and ci.yml invokes that smoke from three inline
+      run values. That is what _run_inline_commands exists for, and it is why
+      the false-negative direction is pinned by a test rather than remembered.
+decisions:
+  - id: d01
+    choice: keep the smoke list in the runner only, and check it
+    options:
+      - discover scripts/smoke/*.sh dynamically at run time (rejected)
+      - list the smokes in the Makefile as well (rejected)
+      - one literal list in scripts/smoke-all.sh, held to the directory by a check (chosen)
+    because: >
+      Dynamic discovery cannot be checked, because it agrees with the directory
+      by construction — including agreeing that archive-identity should run,
+      which costs a full pipeline execution for nothing, and including agreeing
+      that a half-written script dropped in the directory is part of the suite.
+
+      A second list in the Makefile is the drift the new check exists to stop,
+      one file earlier. The Makefile calls the runner and passes SMOKE through.
+
+      A literal list has the failure mode of going stale, which is precisely
+      what a check can prove. So the list stays literal and check-surface holds
+      it to the directory in both directions.
+    confidence: high
+  - id: d02
+    choice: require CI wiring as well as local wiring
+    options:
+      - check only that make smoke runs every script (rejected)
+      - check both the runner array and invocation by a workflow run step (chosen)
+    because: >
+      Local runnability was the gap that let that break through, but checking only
+      that half would let the opposite happen — a smoke that make smoke runs and
+      CI has quietly stopped running, green on every pull request and asserting
+      nothing there. Both halves fail silently and neither implies the other, so
+      both are asserted.
+    confidence: high
+  - id: d03
+    choice: parse structure, never search text
+    options:
+      - grep whole files for each script name (rejected)
+      - parse the SMOKES array and skip commented run lines (chosen)
+    because: >
+      smoke-all.sh's own header names smoke scripts in prose, and ci.yml names
+      scripts/smoke/commit-shapes.sh in a comment at line 995. A check satisfied
+      by a mention would measure documentation and call it execution — the same
+      hole check_evidence_verdict refuses in the ADO templates. So the array is
+      parsed as an array and a run line whose first character is # counts for
+      nothing. Both directions are pinned by tests, including a fixture runner
+      that mentions a smoke it never runs.
+    confidence: high
+  - id: d04
+    choice: continue after a failing smoke instead of stopping
+    options:
+      - stop at the first failure (rejected)
+      - run all selected smokes and summarise (chosen)
+    because: >
+      Each smoke is minutes of real pipeline execution. Stopping at the first
+      failure hides the rest behind another full run, so a change that broke
+      three shapes reports one and takes three sweeps to find. The runner
+      collects results, prints a summary table, and exits 1 if any failed.
+    confidence: high
+tags:
+  - repo-checks
+  - smoke
+  - testing
+  - drift
+  - developer-experience

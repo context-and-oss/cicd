@@ -1,0 +1,76 @@
+kind: change-capsule
+schema: 1
+id: CAPS-053
+status: sealed
+intent: >
+  CLAUDE.md had grown to 1091 lines, most of it doctrine paragraphs that
+  restate, at full length, what a spec under specs/ already holds. Every entry
+  in the founding-doctrine section already ends in a "See [spec]" link, so the
+  measurements, the rejected alternatives and the traps have a home that is not
+  this file — and the file a reader opens to orient themselves had become the
+  longest document in the repository.
+
+  A trim existed. It sat unapplied in a stash taken earlier, which predates
+  five commits that each added a doctrine paragraph: the semgrep
+  partial-parse disclosure, the dead-ZAP verdict, the two ZAP reach fixes, and
+  the requested-URL routing fix. Applying it as-is would have deleted all five
+  and read as a formatting change. The conflict that surfaced it had already
+  been resolved once by discarding the trim entirely, which is the other way to
+  lose the work.
+impact:
+  visibility: internal
+  benefit: >
+    CLAUDE.md is 338 lines instead of 1091. Every doctrine entry keeps its
+    lead-in sentence, the mechanism that closes the door, the traps that would
+    reopen it, and its spec link; what goes is the second and third retelling
+    of a measurement the spec states once. The reader who opens the file to
+    find out what this repository refuses to do still finds every rule, and the
+    reader who needs the numbers behind one of them follows one link.
+  compatibility: compatible
+  risk:
+    - >
+      Condensing prose can drop a load-bearing clause without anything failing.
+      The guard used is mechanical rather than editorial: the set of spec paths
+      referenced by the file before the change must be a subset of the set
+      after it, checked by comm(1) against both the pre-merge main and the
+      stash base, and scripts/check-repo-surface.py resolves every local link.
+      Both were run and both are clean. What neither can catch is a trap
+      sentence dropped from a paragraph whose spec link survives — so the
+      condensation kept every sentence beginning "Trap" or "Traps" verbatim in
+      substance, and the entries that exist only to record a rejected
+      alternative were kept whole.
+    - >
+      The file is instructions to an agent, not code, so no test executes it
+      and CI cannot tell a helpful edit from a harmful one. The mitigation is
+      that it is now short enough to read end to end before changing, which is
+      the property the 1091-line version had lost and the reason paragraphs
+      were being appended rather than revised.
+decisions:
+  - id: D-1
+    choice: rebase the stashed trim onto main rather than apply or discard it
+    options:
+      - apply the stash as-is
+      - discard the stash and leave CLAUDE.md at 1091 lines
+      - rebase the trim onto main, condensing the newer entries in its style
+    because: >
+      Applying as-is deletes five merged PRs' doctrine while reporting a clean
+      merge, which is this repository's founding failure mode aimed at its own
+      guide. Discarding keeps a file nobody reads to the end. Rebasing costs
+      the condensation of seven entries and loses neither.
+    confidence: high
+  - id: D-2
+    choice: verify by spec-reference set difference, not by reading the diff
+    options:
+      - review the 753-line deletion by eye
+      - assert the referenced-spec set never shrinks, and resolve every link
+    because: >
+      A 753-line deletion reviewed by eye is exactly the review that misses one
+      paragraph. The spec-reference set is the mechanical statement of "every
+      door still has an entry", it is cheap, and it fails loudly. It is a
+      necessary condition rather than a sufficient one, and the capsule says so
+      under risk rather than claiming the check proves more than it does.
+    confidence: medium
+tags:
+  - docs
+  - claude-md
+  - maintenance

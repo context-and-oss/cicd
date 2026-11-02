@@ -1,0 +1,28 @@
+# golangci-lint for the Dagger modules under src/ (every module except
+# src/internal, which carries its own copy of this file one level down and is
+# the only tree `make lint` reached until the lint-modules job existed).
+#
+# A module compiles only once `dagger develop` has generated its SDK, so this
+# configuration is read by `make lint-modules` and by the lint-modules CI job,
+# both of which run develop first. dagger.gen.go carries a generated-code
+# header, which golangci's default `generated: lax` detection skips.
+version: "2"
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+  exclusions:
+    rules:
+      # schema.go is a verbatim copy of src/internal/evidence/schema.go, and
+      # scripts/sync-schema.py appends the same verdict-helper block to every
+      # synced module whatever that module calls (build uses one helper, quality
+      # six, the stage orchestrators none). check_generated_files re-runs the
+      # generator with a fixed invocation and diffs, so per-module helper
+      # selection would be refused as drift. The unused helpers are the price of
+      # one generator; everything else in schema.go is still linted.
+      # Paths are relative to this file's directory, so the module name precedes it.
+      - path: '(^|/)schema\.go$'
+        linters:
+          - unused

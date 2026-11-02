@@ -1,0 +1,76 @@
+kind: change-capsule
+schema: 1
+id: CAPS-054
+status: sealed
+intent: >
+  The three composite smoke jobs in ci.yml declared `needs: module-test`, and
+  nothing about that edge was load-bearing. No artifact passes between the two
+  stages: each composite job does its own checkout, its own `dagger develop`
+  and starts its own engine, and reads nothing module-test wrote. The edge was
+  therefore not an ordering guarantee, it was a serialisation — every pull
+  request paid for module-test's slowest matrix cell before the first composite
+  container was allowed to start.
+
+  The edge is removed and the three jobs now depend on lint-repo, the same as
+  module-test does. A run ends when its slowest single job ends rather than
+  when two stages have run end to end.
+impact:
+  visibility: internal
+  benefit: >
+    A pull request's wall-clock is now bounded by the slowest individual job
+    rather than by the sum of two stages. Nothing about the jobs themselves
+    changes — same checkout, same fixtures, same assertions.
+  compatibility: compatible
+  risk:
+    - >
+      The obvious worry is that this weakens the merge gate, and it does not.
+      The aggregate `ci` job still lists every composite smoke in its `needs:`
+      and still fails on `skipped` and `cancelled` as well as on failure, so
+      the set of jobs that must actually succeed before a merge is byte for
+      byte what it was. What a green `ci` tick means is unchanged; only the
+      order the jobs run in is.
+    - >
+      What does change is compute on a failing run. A pull request whose
+      module-test cell is red used to have the composite jobs skipped; now they
+      run anyway. That is a deliberate trade and not a side effect — the reader
+      of a red run learns about a module failure and a composite failure in the
+      same run instead of fixing one, pushing, and waiting to discover the
+      other. The cost is paid only on runs that are already failing.
+    - >
+      The edge being absent is now the thing that has to stay absent, and
+      nothing enforces it. A future change that adds `needs: module-test` back
+      — or that makes a composite job genuinely consume something module-test
+      produces — would re-serialise the run with no test going red, because a
+      slower pipeline is not a failing one. The comment in ci.yml above
+      `composite-smoke` states why the edge is not there, so the next reader
+      has to decide against a written reason rather than fill in a blank.
+decisions:
+  - id: D-1
+    choice: depend on lint-repo rather than dropping needs entirely
+    options:
+      - keep `needs: module-test`
+      - drop `needs:` so the composites start immediately
+      - depend on lint-repo, as module-test already does
+    because: >
+      lint-repo is the cheap gate that catches an unformatted file, an
+      undeclared surface and an unparseable capsule in well under a minute.
+      Starting three Dagger composites before it has answered spends the most
+      expensive compute in the run on a tree that a cheap check was about to
+      reject. Depending on lint-repo keeps that filter and removes only the
+      edge that bought nothing.
+    confidence: high
+  - id: D-2
+    choice: state the reasoning in ci.yml next to the edge, not only here
+    options:
+      - change the `needs:` line and leave the capsule to explain it
+      - write the reasoning as a comment above the job
+    because: >
+      A capsule is found by someone already asking why. The person who
+      re-serialises this pipeline will be reading ci.yml and wondering why the
+      composites do not wait, and the answer has to be where the question gets
+      asked.
+    confidence: high
+tags:
+  - ci
+  - performance
+  - workflows

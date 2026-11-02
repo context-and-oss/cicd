@@ -1,0 +1,11 @@
+[90m2:32PM[0m DBG using stdlib regex engine
+[90m2:32PM[0m DBG no gitleaks config found in path .gitleaks.toml, using default gitleaks config
+2:32PM DBG skipping file: global allowlist path=data.bin
+2:32PM DBG skipping binary file mime_type=application/x-xz path=blob.dat
+2:32PM DBG skipping file: global allowlist path=logo.png
+2:32PM WRN skipping archive: exceeds max archive depth max_archive_depth=3 path=deep.zip!l3.zip!mid.zip!inner.zip
+2:32PM DBG skipping binary file mime_type=application/zip path=lib/service.jar
+2:32PM DBG skipping binary file mime_type=application/zip path="my app/My Package.1.0.0.nupkg"
+2:32PM DBG skipping binary file mime_type=application/gzip path=static.tgz
+2:32PM INF scanned ~62 bytes (62 bytes) in 25.9ms
+2:32PM WRN leaks found: 2

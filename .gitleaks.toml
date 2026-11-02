@@ -1,0 +1,26 @@
+# gitleaks configuration for scanning this repository itself.
+#
+# [extend] useDefault is what makes this file add to gitleaks' rules rather
+# than replace them. Without it, a .gitleaks.toml that declares no [[rules]]
+# loads none at all, and every scan of this repository searched for nothing
+# and said "no leaks found". security.ScanSource now refuses that as a non-run.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional test credentials: the testdata fixtures, and the synthetic values the redaction tests feed in"
+# Regexes over the file path. testdata/ holds fixtures that carry credentials
+# on purpose (testdata/go-app/secrets.go is the secrets scanner's own positive
+# control).
+paths = [
+    '''testdata/''',
+]
+# Matched against the secret gitleaks extracted. Each one is a synthetic value
+# a redaction test asserts never reaches evidence, logs or a notification, and
+# each also appears in commits that predate this list, so an inline
+# gitleaks:allow could not cover the history leg.
+stopwords = [
+    "SYNTHETIC",
+    "AbCdEf1234567890",
+    "MIIEowIBAAKCAQEAxxxxxxxxx",
+]

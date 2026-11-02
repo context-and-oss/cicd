@@ -1,0 +1,166 @@
+kind: change-capsule
+schema: 1
+id: CAPS-015
+status: sealed
+intent: >
+  refs-infer-coupling in src/cross-cutting/intent/rules.go could only couple
+  an artifact to a diff on a filename pathToken recognised, and its
+  bare-filename alternation required a stem of at least three characters.
+  So ci.yml and cd.yml, the two most frequently changed workflow filenames
+  in this repository, were invisible to it, and an artifact that correctly
+  named the only file it changed contributed no token at all. Combined with
+  the one thing every good artifact carries — a reference to a file it
+  deliberately did not change, a call site it explains, a rejected option —
+  the rule then reported "artifact mentions specific files but none match
+  the changed files in this diff, artifact may describe a different change"
+  about an artifact describing exactly that change. Measured on the real
+  rule code against a real pull request, where CAPS-012's intent
+  block named ci.yml in prose and tripped anyway. This change moves
+  yaml/yml into their own alternation with a two-character minimum, adds
+  changedNameMentioned so the question is also asked the other way round
+  before the rule reports, and rewrites the message to state what the check
+  actually established in both directions.
+impact:
+  visibility: consumer
+  benefit: >
+    An artifact that names the file it changed is coupled to that change,
+    whatever the filename looks like — extensionless like Makefile, an
+    extension pathToken never listed like cliff.toml, a dotfile like
+    .nvmrc, or a two-character stem like ci.yml. Authors are no longer
+    priced one CI failure per sentence that names a file they deliberately
+    left alone, which were the most valuable sentences in an artifact and
+    the cheapest thing to delete to make the rule go quiet. And a reviewer
+    who does see the finding is told both directions were checked and what
+    closes it, instead of being sent to re-read a correct artifact hunting
+    an error that is not in it.
+  compatibility: fix
+  risk:
+    - >
+      The reverse check can only remove findings, never add one, because a
+      verbatim occurrence of a changed file's name is coupling under any
+      reading. That also means it weakens the rule wherever a coincidence
+      puts a changed file's name in an unrelated artifact. The boundary
+      rules narrow that to near-nothing and the length floor closes the
+      degenerate case, but the residual is accepted deliberately: this is a
+      heuristic proxy for "is this artifact about this change", the failure
+      direction being removed is a false failure, and a false failure in a
+      gate that grades prose costs more than a rare missed nudge.
+    - >
+      Widening pathToken for yaml/yml is the half that could introduce a
+      false positive in prose, since a token the pattern invents is a token
+      the rule then demands a match for. It is bounded by requiring the
+      extension: "ci" and "cd" as bare words stay invisible, and the
+      negative controls assert that plus the unchanged three-character
+      minimum for every other extension. The extension-prefix regression suite,
+      which exists because a previous pattern change truncated package.json
+      to package.js, passes unchanged.
+    - >
+      Neither half touches the presence rule, the scoping to changed
+      artifacts, or the machine-origin exemption, so nothing here changes
+      whether a change is required to carry an artifact at all. It changes
+      only how an artifact that exists is graded.
+    - >
+      This does not make the gate able to tell a truthful artifact from a
+      plausible one. An artifact can still name its changed file and say
+      nothing true about it. The rule was always a coupling heuristic, and
+      it remains one.
+decisions:
+  - id: d01
+    choice: give yaml/yml their own alternation with a two-character minimum stem
+    options:
+      - lower the general minimum from three to two (rejected)
+      - add an explicit allowlist of short repository filenames (rejected)
+      - move yaml/yml to a separate alternation requiring two stem characters (chosen)
+    because: >
+      The three-character minimum is load-bearing and documented: it keeps
+      pathToken from matching bare extension words in prose, and "go", "md"
+      and "ts" appear as ordinary English-adjacent tokens constantly.
+      Lowering it globally would admit them. An allowlist of ci.yml and
+      cd.yml would work and would need maintaining by whoever adds the next
+      short filename, which is a list that goes stale silently. The
+      extension alone is sufficient disambiguation for this case and only
+      this case: nobody writes ci.yml meaning anything other than that
+      file, while "ci" and "cd" as bare words are common and stay
+      invisible. It is deliberately not lowered to one character, because
+      nothing here is named a.yml and a shorter stem buys no real filename.
+      Negative-controlled: restoring the minimum to three fails exactly the
+      four ci.yml/cd.yml token cases and nothing else.
+    confidence: high
+  - id: d02
+    choice: ask the coupling question in reverse before reporting, rather than widening the pattern further
+    options:
+      - keep extending pathToken's extension list as new filenames trip the rule (rejected)
+      - scan the artifact text for each changed path and basename literally (chosen)
+    because: >
+      The token loop can only couple on names pathToken recognised, so it
+      punishes an artifact for the pattern's blind spots rather than for
+      anything the author did. ci.yml was one instance; the pattern is also
+      blind to every extensionless name such as Makefile, every extension
+      absent from its list such as cliff.toml, and every dotfile such as
+      .nvmrc. Widening the list fixes one filename at a time forever, and
+      each of those would have been the next issue. A literal occurrence of
+      a changed file's name is coupling under any reading, so the reverse
+      check can only remove findings and never add one, which is why it can
+      be trusted without a matching widening of the pattern.
+      Negative-controlled: short-circuiting changedNameMentioned to never
+      couple fails exactly the Makefile, cliff.toml and .nvmrc cases,
+      proving the pattern half does not cover them.
+    confidence: high
+  - id: d03
+    choice: keep the severity at error instead of softening it to warn
+    options:
+      - drop to warn when the artifact's mentions resolve to real files in the tree (rejected)
+      - keep error, now that a false failure needs both directions to miss (chosen)
+    because: >
+      After d02 a remaining error means the artifact named paths, none of
+      them is in this diff, and none of this diff's filenames appears
+      anywhere in the artifact — which is precisely the "describes a
+      different change" signal the rule exists for, so softening it there
+      would cost real bite with no remaining false failure to buy. The
+      rejected option also needs the rule to read the source tree, which is
+      a new Dagger call and therefore a new failure mode inside a gate, in
+      service of a weaker discriminator: an artifact copy-pasted from
+      another pull request in this same repository mentions real files too,
+      so it would drop nearly every finding to warn.
+    confidence: high
+  - id: d04
+    choice: make the boundary rules asymmetric, and floor the bare-basename search at four characters
+    options:
+      - plain strings.Contains with no boundary conditions (rejected)
+      - require a non-word character on both sides, symmetrically (rejected)
+      - reject a preceding word byte, reject a following word byte or - or /, allow a following . (chosen)
+    because: >
+      A bare strings.Contains couples a changed main.go to an artifact
+      mentioning domain.gov, which suppresses a finding the rule got right,
+      so boundaries are mandatory. Full symmetry is wrong in the other
+      direction: a filename at the end of a sentence is followed by a full
+      stop far more often than by another extension, so rejecting a
+      trailing dot would lose the commonest legitimate mention. A preceding
+      slash, dot or hyphen must be allowed because src/quality/include.go
+      and vite.config.tsx are mentions of include.go and config.tsx, which
+      is the same relation the existing suffix match already accepts. The
+      four-character floor on a bare basename closes the degenerate case of
+      a root file literally named ci coupling to the word "ci" in prose;
+      paths carrying a directory separator are searched at any length,
+      since they cannot collide with prose. Each rule has its own test case
+      naming the collision it prevents.
+    confidence: high
+  - id: d05
+    choice: rewrite the message rather than leave it and rely on the spec
+    options:
+      - keep the wording, since the false failures it described are now gone (rejected)
+      - state both directions checked and the action that closes it (chosen)
+    because: >
+      "artifact may describe a different change" was the opposite of the
+      truth whenever the cause was a name pathToken could not see, and even
+      with the false failures removed it never told the author what to do.
+      The check now establishes two things, so it should say two things, and
+      "name a file this change touches" is the whole remedy. The wording is
+      pinned by an assertion in every positive-control case, so a later edit
+      that quietly drops one half fails the suite rather than the reviewer.
+    confidence: high
+tags:
+  - intent
+  - false-failure
+  - refs-infer-coupling
+  - dogfood

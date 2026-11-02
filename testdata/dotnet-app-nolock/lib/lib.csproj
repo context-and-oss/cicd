@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Deliberately referenced by nothing.
+
+         A second project in its own directory, outside the app's reference
+         graph and named by no solution, is what separates a per-project restore
+         sweep from a single `dotnet restore` at the tree root. The root command
+         would resolve one project (or refuse, seeing two) and leave this one
+         without a graph — and a partial restore is the false pass the fallback
+         exists to prevent, because the lockfile the *other* project produced
+         makes the reconciliation go quiet. This project's CVE only appears in
+         the scan if every project was swept. -->
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Another intentionally vulnerable pin; see the app project. -->
+    <PackageReference Include="System.Net.Http" Version="4.3.0" />
+  </ItemGroup>
+</Project>

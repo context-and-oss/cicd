@@ -1,0 +1,362 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+# Keyed on the repository and event as well as the branch, because GitHub keeps
+# one pending run per group and cancels the older: a fork's pull-request run
+# whose branch is also called main would otherwise share this group and could
+# displace a pending release run. The gate below skips such a run; the key keeps
+# it from cancelling one first.
+concurrency:
+  group: cd-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.event }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+env:
+  DAGGER_VERSION: "0.20.8"
+  # Keep helper scripts from writing scripts/__pycache__/*.pyc that git add could stage.
+  PYTHONDONTWRITEBYTECODE: "1"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # Only proceed when CI actually passed. A skipped gate cascades to skips
+  # on all downstream jobs — no noise when CI fails (CI already does that).
+  #
+  # And only for a push to this repository's main. `branches: [main]` above
+  # filters on the *head* branch name, which a fork chooses: a pull request from
+  # a fork's branch called main runs CI with head_branch "main", and that CI run
+  # executes the fork's own ci.yml, so it can conclude success at will. Every job
+  # after this one checks out head_sha and runs scripts from it, and
+  # tag-and-release does so with contents: write and CICD_RELEASE_TOKEN. The
+  # event and repository checks are what make head_sha a commit already on
+  # main, which is the premise those checkouts rely on.
+  gate:
+    name: Gate — CI must pass
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    steps:
+      - env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: echo "CI passed on $HEAD_SHA — proceeding"
+
+  # The counterpart to the gate above, and the reason it can afford to be
+  # silent. A skipped gate says "CI failed, CI already told you" -- true for the
+  # code, and false for the release: a CI failure on main is the exact event
+  # that strands a release handoff. deliver-release-pins.sh declines to tag when
+  # main moves under a release, which leaves main pinned to a version no tag
+  # names, and the run that repairs that is the CD run for the new tip -- which
+  # never starts when CI on the new tip fails.
+  #
+  # That is not hypothetical. On 2026-09-10 CI on the new tip died in
+  # `Install Dagger CLI` on `curl ... exit 35`, this gate skipped every job, and
+  # main sat with thirteen dangling @v3.2.2 pins while every check on every
+  # branch was green. release-drift.yml measures something else (commits ahead
+  # of the newest tag) behind a two-day threshold, so nothing would have said so
+  # for two days.
+  #
+  # Deliberately gated on the failure rather than running always: on the success
+  # path this run IS the successor, so it would have to exclude itself and would
+  # then report "no CD run observed" on every green release. The success path is
+  # covered where the obligation is created -- the stale branch of
+  # deliver-release-pins.sh runs the same check.
+  handoff:
+    name: Guard — main must not be pinned to an uncut version
+    runs-on: ubuntu-latest
+    # The same push-to-this-repository premise as the gate: a fork's failed CI
+    # run says nothing about this repository's main.
+    if: >-
+      github.event.workflow_run.conclusion != 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # main as it is now, not the commit CI ran on: the question is whether
+          # the default branch is currently pinned to something that does not
+          # exist, and full depth because a shallow clone carries no tags and
+          # the check refuses to run on one rather than report every pin broken.
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the release handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The check re-reads tags from the remote before it says anything is
+          # broken. This checkout carries no credential, so that fetch fails and
+          # the check carries on with the tags it already has -- which is the
+          # intent. What must not happen is git sitting on a credential prompt
+          # until the job's timeout, so prompting is off explicitly rather than
+          # left to the runner's defaults.
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          # Exit 2 (a command the verdict depends on could not run) must not
+          # fail this job: the scheduled sweep asks again, and a red run on an
+          # API hiccup is the noise people learn to ignore. Exit 1 -- main is
+          # pinned to a version nothing is going to cut -- is the whole point.
+          rc=0
+          python3 scripts/check-release-handoff.py \
+            --exclude-run-id "${GITHUB_RUN_ID}" || rc=$?
+          if [ "$rc" = "2" ]; then
+            echo "::warning::could not establish whether main's pins resolve; release-drift.yml asks again on its schedule."
+            exit 0
+          fi
+          exit "$rc"
+
+  next-version:
+    name: Determine next version
+    needs: gate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.cliff.outputs.version }}
+      skip: ${{ steps.cliff.outputs.skip }}
+    steps:
+      # nosemgrep: yaml.github-actions.security.workflow-run-target-code-checkout.workflow-run-target-code-checkout
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # head_sha of a push to main, which the gate establishes; see there.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Pinned, checksum-verified local install. A third-party action here
+      # fails the run at startup under this repo's Actions policy — see
+      # .github/actions/install-git-cliff/action.yml.
+      - name: Install git-cliff
+        uses: ./.github/actions/install-git-cliff
+
+      - name: Compute next version
+        id: cliff
+        run: |
+          # A copy of this tree carries pins at some @vX.Y.Z; a clone that has
+          # no tag reachable from HEAD is a copy nobody bootstrapped, not a
+          # repository before its first release. The old `... | sed || echo
+          # 0.0.0` bound the fallback to sed, so CURRENT came out EMPTY here
+          # and the bump below would rewrite every pin. Refuse instead; see
+          # CONTRIBUTING.md, "Bootstrapping a fresh copy".
+          if ! tag=$(git describe --tags --abbrev=0 2>/dev/null) || [ -z "$tag" ]; then
+            echo "::error::no v* tag is reachable from HEAD. A copy carrying pins must be bootstrapped with the tag those pins name before CD can release (CONTRIBUTING.md, 'Bootstrapping a fresh copy')."
+            exit 1
+          fi
+          CURRENT=${tag#v}
+          # --unreleased is load-bearing. Without it cliff partitions history by
+          # commit *date* and files a commit merged from a long-open branch under a
+          # release that already shipped, so a feature comes out as a patch — twice,
+          # permanently. The release-notes step below already passes it;
+          # these two asked the same binary over two different partitions of history.
+          if ! RAW_NEXT=$(git cliff --unreleased --bumped-version); then
+            echo "git-cliff failed (see above for details)"
+            exit 1
+          fi
+          NEXT=$(echo "$RAW_NEXT" | sed 's/^v//')
+
+          if [ "$NEXT" = "$CURRENT" ] || [ -z "$NEXT" ]; then
+            echo "No releasable commits since v${CURRENT} — skipping release."
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "version="   >> "$GITHUB_OUTPUT"
+          else
+            echo "Next version: v${NEXT}  (current: v${CURRENT})"
+            echo "skip=false"       >> "$GITHUB_OUTPUT"
+            echo "version=${NEXT}"  >> "$GITHUB_OUTPUT"
+          fi
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "next=${NEXT}"       >> "$GITHUB_OUTPUT"
+
+      # The flag above closes the known cause; this asks the question the flag
+      # leaves unasked. A feature released as a patch is indistinguishable from a
+      # release that shipped no features: the tag is well-formed, the notes are
+      # complete (they come from --unreleased, which saw it), CI is green, and
+      # release-drift.yml compares the newest tag against the same cliff that
+      # dropped the commit, so both sides of its comparison agree. The bump kind
+      # against its own history is the only thing that separates the two states.
+      # Runs on the skip path too: "nothing to release" over a range holding a
+      # feat is the same silence.
+      - name: Check the bump matches its history
+        env:
+          # Handed over as env, not spliced as ${{ }} into the body. GitHub expands
+          # an expression before the shell parses the line, so "${{ ... }}" is
+          # textual substitution and not quoting — the same rule the ADO templates
+          # are checked for in scripts/check-ado-templates.py.
+          NEXT_VERSION: ${{ steps.cliff.outputs.next }}
+          CURRENT_VERSION: ${{ steps.cliff.outputs.current }}
+        run: |
+          python3 scripts/check-release-bump.py \
+            --next "$NEXT_VERSION" \
+            --current "$CURRENT_VERSION"
+
+  validate-modules:
+    name: Validate all modules
+    needs: next-version
+    if: needs.next-version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # nosemgrep: yaml.github-actions.security.workflow-run-target-code-checkout.workflow-run-target-code-checkout
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # head_sha of a push to main, which the gate establishes; see there.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Dagger CLI
+        uses: ./.github/actions/install-dagger
+        with:
+          version: ${{ env.DAGGER_VERSION }}
+
+      - name: Validate all modules load at HEAD
+        run: |
+          # Defend the manifest before consuming it: a dagger.json discovered
+          # on disk but deliberately omitted from modules must abort release.
+          python3 scripts/check-repo-surface.py --modules
+
+          FAILED=0
+
+          # Drive this from the defended inventory, not a copied list — a
+          # hand-maintained list here previously omitted three modules
+          # (pages and intent among them), so a release could ship with those modules
+          # silently unverified.
+          for MODULE in $(python3 scripts/inventory-query.py modules)
+          do
+            echo "Checking ./$MODULE ..."
+            # Develop through the wrapper first. `dagger functions` generates
+            # the module's SDK exactly as `dagger call` does, so without this
+            # every module here is a module nobody developed: one
+            # sum.golang.org stream reset reads as "$MODULE did not load" and
+            # aborts a release that had nothing wrong with it. The
+            # wrapper retries a fetch fault and reports a real build failure at
+            # once, so a genuine non-loading module still fails this loop.
+            if ! bash "$GITHUB_WORKSPACE/scripts/ci/dagger-develop.sh" "$MODULE"; then
+              echo "FAIL: $MODULE could not be developed"
+              FAILED=1
+              continue
+            fi
+            if ! OUTPUT=$(dagger functions -m "./$MODULE" 2>&1); then
+              echo "FAIL: $MODULE did not load"
+              echo "$OUTPUT"
+              FAILED=1
+            fi
+          done
+
+          if [ $FAILED -ne 0 ]; then
+            echo "One or more modules failed to load — aborting release."
+            exit 1
+          fi
+
+  tag-and-release:
+    name: Tag and release v${{ needs.next-version.outputs.version }}
+    needs: [next-version, validate-modules]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # nosemgrep: yaml.github-actions.security.workflow-run-target-code-checkout.workflow-run-target-code-checkout
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # head_sha of a push to main, which the gate establishes; see there.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          # Leave NO persisted credential behind. checkout persists the default
+          # GITHUB_TOKEN as an http.<host>.extraheader, and an Authorization header
+          # beats URL-embedded creds — so it silently shadows the PAT we set below
+          # and pushes fall back to the default token (a GitHub App with no
+          # `workflows` scope, which cannot touch .github/workflows/). The old
+          # code unset that header by hand; the v4->v6 checkout bump broke
+          # that dance and is what failed the v1.2.0 release. persist-credentials:
+          # false removes the whole class of bug — the PAT we embed via
+          # `git remote set-url` becomes the sole credential for every push here.
+          persist-credentials: false
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Pinned, checksum-verified local install. A third-party action here
+      # fails the run at startup under this repo's Actions policy — see
+      # .github/actions/install-git-cliff/action.yml.
+      - name: Install git-cliff
+        uses: ./.github/actions/install-git-cliff
+
+      # The bump reaches main as a pull request, not as a push. Two branch
+      # rulesets make a push impossible: one requires a pull request, the other
+      # requires the check named `ci` on the commit being pushed, and a commit
+      # created and pushed in one motion can carry neither. This step used to end
+      # in `git push origin HEAD:main` and died there on every release from
+      # 2026-07-30 onward — 64 commits went unreleased and v1.11.0 shipped by
+      # hand. See specs/deliver-release-pins-by-pull-request.md.
+      #
+      # The mechanics live in scripts/ci/deliver-release-pins.sh rather than here,
+      # because release.yml needs the identical delivery and two copies of release
+      # mechanics is a drift this repository has already been bitten by. That also
+      # puts every branch of it under scripts/tests/test_deliver_release_pins.py,
+      # which a `run:` body cannot be.
+      #
+      # .github/workflows/*.yml can only be pushed by a credential carrying the
+      # `workflow` scope — the default GITHUB_TOKEN cannot, regardless of the
+      # `permissions:` map. CICD_RELEASE_TOKEN is a fine-grained PAT scoped to
+      # this repo with Contents and Workflows = read & write. Every release
+      # rewrites workflow pins (the @vX reusable-workflow refs AND the composite
+      # module refs both live under .github/workflows/), so the PAT is mandatory.
+      # It is also what makes the pull request's checks run at all: a pull request
+      # opened by GITHUB_TOKEN triggers no workflow runs, so `ci` would never
+      # report and auto-merge would never fire.
+      - name: Deliver bumped pins by pull request
+        id: push
+        env:
+          RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}
+          VERSION: ${{ needs.next-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # checkout ran with persist-credentials:false, so there is no leftover
+          # default-token extraheader to fight. Embed the PAT as the SOLE origin
+          # credential. Fail loud rather than silently degrade: a release always
+          # rewrites workflow pins, so a missing PAT cannot produce a coherent
+          # release, and a release delivered by the default token would sit as a
+          # pull request no check ever runs against.
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::CICD_RELEASE_TOKEN is required to push workflow pins and to open a pull request whose checks actually run — aborting."
+            exit 1
+          fi
+          git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          GH_TOKEN="$RELEASE_TOKEN" \
+            bash scripts/ci/deliver-release-pins.sh "$VERSION" cd.yml
+
+      # Only `released` may tag, and it means the pins on main already carry the
+      # target — normally because a previous run's pull request has merged, which
+      # started the CI run this one is downstream of. `pr-open` and `superseded`
+      # must not tag: the first would tag a main that does not yet carry the pins,
+      # the second a version main no longer reflects.
+      # After the delivery step, not before it. The delivery resets to the live
+      # tip of main, and `--unreleased` means "since the newest tag" — generating
+      # notes first described the checked-out head_sha while the tag below points
+      # at the tip, so any commit that landed in between was tagged but missing
+      # from its own release notes.
+      - name: Generate release notes
+        if: steps.push.outputs.result == 'released'
+        run: git cliff --unreleased --strip header > /tmp/release-notes.md
+
+      - name: Tag release
+        if: steps.push.outputs.result == 'released'
+        env:
+          VERSION: ${{ needs.next-version.outputs.version }}
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Create GitHub release
+        if: steps.push.outputs.result == 'released'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.next-version.outputs.version }}
+        run: |
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file /tmp/release-notes.md

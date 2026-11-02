@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- THIS FIXTURE MUST NEVER COMMIT A LOCKFILE.
+
+         It is the negative of testdata/dotnet-app, which sets
+         RestorePackagesWithLockFile and commits packages.lock.json so the
+         dependency scan has something to read. Here nothing opts in — which is
+         what NuGet does by default, and therefore what a real consumer's
+         repository looks like.
+
+         On this tree Trivy resolves no .NET graph at all: measured on trivy
+         0.70.0, the report holds no Results array, zero packages and zero
+         vulnerabilities, byte-identical to a genuinely clean repository. That
+         silence is the whole point — it is what the lockfile-free restore
+         fallback (src/security/dotnetrestore.go) exists to turn into a real
+         scan, and what the module-test cell asserts is no longer silent.
+
+         So: do not add RestorePackagesWithLockFile, do not commit a
+         packages.lock.json, and do not commit bin/ or obj/ (a *.deps.json in
+         there is a graph Trivy reads, which would clear the check the fixture
+         is built to trip). -->
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Intentionally old version with a known CVE. Nothing here is built,
+         installed or shipped by this repository; see trivy.yaml, which skips
+         testdata for exactly this reason. -->
+    <PackageReference Include="Newtonsoft.Json" Version="9.0.1" />
+  </ItemGroup>
+</Project>

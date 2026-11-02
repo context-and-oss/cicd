@@ -1,0 +1,56 @@
+# Copy once per app, giving each caller a distinct workflow name and app-id.
+# These scripts belong to the consumer and include their own setup. This
+# template requires a release containing commit-monorepo.yml and app inputs.
+name: Commit evidence — app-a
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# ─── Concurrency: deliberately none ─────────────────────────────────
+# Do not add a `concurrency:` block. GitHub keeps at most one pending run
+# per group and cancels the one already waiting when another arrives, with
+# or without cancel-in-progress, so any grouping of pushes to main skips
+# the commits in between: those shas never get commit-stage evidence.
+# Every merge to main gets its own run.
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    uses: context-and-oss/cicd/.github/workflows/commit-monorepo.yml@v5.1.2
+    secrets:
+      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
+      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+    with:
+      # parallelism: 1  # Source groups and test legs in flight; integer 1–4.
+      # Shared preparation is opt-in; match image, configuration and framework.
+      # prepare-cmd: dotnet restore && dotnet build -c Release --no-restore
+      # prepare-language: dotnet
+      # prepare-test-label: plugin  # Required with test-legs; omit for test-cmd.
+      # toolchain-image: mcr.microsoft.com/dotnet/sdk:10.0
+      # Tests then use --no-build; packaging uses dotnet publish --no-build.
+      # Deploy from outputs.build-artifact-id; see docs/how-to-guides/build-once.md.
+      app-id: app-a
+      source-paths: |
+        apps/app-a
+        packages/shared
+        plugins/app-a
+      lint-legs: >-
+        [
+          {"label":"client","language":"node","cmd":"sh ci/app-a-lint.sh","reportPath":"evidence-out/client-lint.json","format":"eslint"},
+          {"label":"plugin","language":"dotnet","cmd":"sh ci/app-a-plugin-lint.sh","reportPath":"evidence-out/plugin-lint.json","format":"dotnet-format"}
+        ]
+      test-legs: >-
+        [
+          {"label":"client","language":"node","cmd":"sh ci/app-a-test.sh","coveragePath":"evidence-out/client-coverage.json"},
+          {"label":"plugin","language":"dotnet","cmd":"sh ci/app-a-plugin-test.sh","coveragePath":"evidence-out/plugin-coverage.xml"}
+        ]
+      # SBOM, dependency vulnerability and dependency licence assessments are
+      # intentionally skipped for now; the evidence explicitly records this.
+      artifact: archive
+      build-cmd: sh ci/app-a-build.sh
+      output-path: dist/app-a
+      # Set toolchain-image to the consumer's combined build image if this
+      # command builds both Node and .NET. Each check leg can select its own.

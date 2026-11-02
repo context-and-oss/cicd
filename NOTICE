@@ -1,0 +1,32 @@
+cicd
+Copyright 2026 Context& and contributors
+
+This product includes software developed under the Apache License, Version 2.0.
+See LICENSE for the full text.
+
+This product includes data captured from Trivy
+(https://github.com/aquasecurity/trivy, v0.70.0), licensed under the Apache
+License, Version 2.0, whose NOTICE reads:
+
+  Trivy
+  Copyright 2019-2020 Aqua Security Software Ltd.
+
+  This product includes software developed by Aqua Security (https://aquasec.com).
+
+This product includes short excerpts and option strings from ZAP v2.17.0
+(https://github.com/zaproxy/zaproxy), licensed under the Apache License,
+Version 2.0:
+
+  docker/zap_common.py, docker/zap-api-scan.py, docker/zap-full-scan.py
+  Copyright 2017 ZAP Development Team
+
+  docker/zap-baseline.py
+  Copyright 2016 ZAP Development Team
+
+The excerpts are shortened and integrated into cicd source and documentation;
+the complete upstream scripts are not bundled here. See LICENSE for the
+Apache License, Version 2.0 and its warranty disclaimer.
+
+See THIRD_PARTY_NOTICES.md for what was copied, from where, and for content
+cicd fetches at run time under its own terms (including the default Semgrep
+rules, which are licensed under the Semgrep Rules License v1.0, not Apache-2.0).

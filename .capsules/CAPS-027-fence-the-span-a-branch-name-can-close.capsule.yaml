@@ -1,0 +1,133 @@
+kind: change-capsule
+schema: 1
+id: CAPS-027
+status: sealed
+intent: >
+  notify wrapped six strings that arrive from outside the module in a markdown
+  code span built by a bare format verb between two literal backticks. A
+  backtick in the value closes the span, after which the rest of the value is
+  parsed as markdown inside a comment posted under cicd's name beside a
+  pass/fail verdict. The person being gated writes part of the gate's own
+  report.
+
+  The vector is a branch name and it needs no misconfiguration. Measured with
+  git check-ref-format, a refname may contain a backtick, a pipe, an angle
+  bracket and an ampersand; it may not contain a bracket, an asterisk, a tilde,
+  a caret, a colon, a question mark or a space. A branch name reaches two of the
+  sinks on every single run.
+
+  The same two lines carried three defects rather than one, because the Commit
+  and Branch rows never called escapeCell at all. A branch name holding a pipe
+  opened a third table column and shifted every cell after it. A commit value
+  holding a newline cut the row mid-cell and left the remainder as a paragraph.
+  Neither needs a hostile author, only a value containing those bytes.
+
+  The fix lives in render.go and does not strip. Removing a backtick from a path
+  changes a finding's
+  location, and this package renders locations as a path and line so a reviewer
+  can jump to one, so a silently edited path lands them somewhere else. That is
+  the unlocated-finding-that-looks-located lie, only harder to notice. Instead
+  codeSpan uses CommonMark's own rule that a span may be delimited by any number
+  of backticks and contain any shorter run, fencing with the longest internal run
+  plus one, and the content can never terminate it.
+
+  Severity is stated rather than dramatised. The shipped template triggers on
+  pull_request and not on pull_request_target, which appears nowhere in this
+  repository, so on a fork the token is read-only, the comment post fails and the
+  webhook is absent. The fork drive-by does not reach the sink under the shipped
+  configuration. What does reach it is a same-repo branch pull request from a
+  contributor who can push a branch but not merge, and any consumer who has moved
+  to pull_request_target — which is where a team lands after hitting the
+  read-only-token wall trying to make fork comments work.
+impact:
+  visibility: internal
+  benefit: >
+    Every string notify renders inside backticks now goes through one helper that
+    cannot be escaped and does not edit its input, so a branch name, a commit
+    value, a scanner-reported path and a warning all render byte for byte inside
+    a span whose fence is longer than anything in them. The warning and error
+    lists gain the newline flattening they never had, and a table row can no
+    longer be truncated or shifted by a legal refname.
+  compatibility: fix
+  risk:
+    - >
+      The padding rule is the part most easily broken by a later edit.
+      CommonMark strips one space from each end of a span's content only when it
+      both begins and ends with a space and is not all spaces, so padding one end
+      leaves that space in the output, and a path rendered with a leading space is
+      the quieter version of the mutation stripping was rejected for. It is pinned
+      by a test asserting the pad decision for seven inputs and by a round trip on
+      every one of them.
+    - >
+      escapeCell ends in a trim, so cellCode must trim before it pads. The other
+      order removes the pad silently and only on the inputs the pad exists for,
+      which is a failure that shows up on hostile content and nowhere else.
+    - >
+      The Teams card in card.go is deliberately not changed, which leaves a
+      reader to believe the fix covers it unless the code says otherwise. The reason it
+      needs no change is measured rather than assumed, and it is written where the
+      backticks are.
+decisions:
+  - id: d01
+    choice: fence with a longer run rather than strip or escape the backtick
+    options:
+      - strip backticks from the value (rejected)
+      - HTML-escape the value (rejected)
+      - fence with the longest internal run plus one (chosen)
+    because: >
+      Stripping changes a finding's location, and this package renders locations
+      so a reviewer can follow them; an edited path sends them somewhere else,
+      which is the lie about precision this repository already refuses one layer
+      down. HTML escaping does not help, because the problem is the delimiter and
+      not the character set. Fencing is CommonMark's own answer, preserves the
+      content byte for byte, and cannot be defeated by any content.
+    confidence: high
+  - id: d02
+    choice: pad both ends of the content or neither
+    options:
+      - pad only the end that carries a backtick (rejected)
+      - pad both ends whenever either end needs it (chosen)
+    because: >
+      CommonMark strips one space from each end of a span's content, and only
+      when it both begins and ends with a space and is not all spaces. Padding a
+      single end therefore survives into the rendered output, so a path acquires
+      a leading space and a reviewer sees a location that is not the location.
+      Padding both ends is removed again by the parser, so the content renders
+      exactly.
+    confidence: high
+  - id: d03
+    choice: assert a round trip through a decoder, not that the output looks safe
+    options:
+      - assert the output contains no bare backtick run (rejected)
+      - decode the emitted span by CommonMark's rules and compare to the input (chosen)
+    because: >
+      A test asserting only safety passes a version that strips, which is the
+      option rejected in d01, so the test would have licensed the defect it was
+      written to prevent. Decoding proves both halves at once — the content could
+      not terminate the span, and the content was not edited to fit. The negative
+      controls show it working in both directions. The decoder lives beside the
+      cases in codespan_test.go, and reverting to the naive sink
+      fails eleven of thirteen cases, and the two survivors are the two inputs
+      with no backtick in them.
+    confidence: high
+  - id: d04
+    choice: leave the Teams card unescaped, and say why in the card
+    options:
+      - escape link syntax in the card (rejected)
+      - post to a real Teams webhook from a test to establish the subset (rejected)
+      - measure what a refname may contain and bound the exposure (chosen)
+    because: >
+      An Adaptive Cards TextBlock renders a markdown subset that excludes code
+      spans and includes links, so a backtick there fences nothing and an injected
+      link would be the real question. It is not one. Every field the card renders
+      is produced by cicd or is a git refname, and git rejects a bracket in a
+      refname, so no field on the card can render a link. The residue is emphasis
+      from an underscore, which is cosmetic and carries no destination. Escaping
+      it would be an untested claim about someone else's parser, since no job here
+      may contact Teams, and a half-fix that reads as whole is this repository's
+      founding doctrine turned on its own remedy.
+    confidence: medium
+tags:
+  - notify
+  - security
+  - cross-cutting

@@ -1,0 +1,83 @@
+kind: change-capsule
+schema: 1
+id: CAPS-066
+status: sealed
+intent: >
+  The repository implements a 12-stage delivery model, but its shipped modules,
+  roadmap, artifact shapes, and platform boundaries were distributed across
+  several documents. A reader could see Stage 2 and Stage 4 as complete without
+  seeing that delivery, live monitoring, Power Platform support, CDN delivery,
+  and Azure environment deployment remain planned adapter work.
+
+  This change adds cicd-stages.html as a local, self-contained implementation
+  dashboard. It makes the distinction between stage-flow completeness and
+  solution coverage explicit, maps the current container/archive/none support
+  to .NET Azure Web Apps, Azure infrastructure, CDN packages, and Power Apps,
+  and records the evidence behind each maturity score.
+
+  ROADMAP.md gains the design decisions the dashboard presents: deployment is
+  a selectable target plan rather than one hard-coded deploy command; a release
+  may choose CDN publish, a test environment, a production environment, or a
+  permitted combination. Stage 11 treats Log Analytics Workspace as the Azure
+  log hub while accepting Azure Monitor, Sentry, CDN, HTTP/SLO, and custom
+  sources through one normalized evidence contract. Authentication is a
+  cross-cutting control plane with separate least-privilege identities for
+  deployment, runtime, and read-only observation.
+impact:
+  visibility: internal
+  benefit: >
+    Teams can now tell what cicd supports today for their real deployable shape
+    and what remains roadmap design before adopting a pipeline. The roadmap no
+    longer assumes that every delivery is an Azure ARM deployment, every live
+    signal is Application Insights, or every pipeline credential is a reusable
+    client secret.
+  compatibility: compatible
+  risk:
+    - >
+      The dashboard contains assessed maturity percentages. They are explicitly
+      a repository implementation rubric, not an assertion that every consumer
+      has the same delivery maturity or that a planned adapter is already safe
+      to call.
+    - >
+      The expanded ROADMAP.md is design-only. It does not add a deployment,
+      Power Platform, CDN, Sentry, or Log Analytics module and must not be read
+      as a released API.
+decisions:
+  - id: d01
+    choice: model deployment as independently selectable targets
+    options:
+      - one fixed production deployment command (rejected)
+      - a target plan with CDN, test-environment, and production-environment adapters (chosen)
+    because: >
+      The fleet delivers different artifact types. A CDN package publication
+      and an environment deployment can both be valid release outcomes, and a
+      single combined verdict would hide which target failed. Independent
+      envelopes preserve the evidence-first convention already used by cicd.
+    confidence: high
+  - id: d02
+    choice: use Log Analytics Workspace as the Azure log hub, not as the only source
+    options:
+      - require every provider to publish telemetry into one workspace (rejected)
+      - query workspace and provider-native sources through normalized adapters (chosen)
+    because: >
+      Workspace-based Application Insights and Azure diagnostics belong in Log
+      Analytics, but Sentry remains valuable as a native release and issue
+      source. Requiring a copy of all Sentry data into Azure adds coupling and
+      cost before there is a measured need.
+    confidence: high
+  - id: d03
+    choice: make identity references the default adapter input
+    options:
+      - pass shared secrets directly to every deployment command (rejected)
+      - use federation or managed identity, with a vault-backed secret fallback (chosen)
+    because: >
+      Test, production, publish, runtime, and observation have different trust
+      boundaries. Separate short-lived identities and read/write roles prevent
+      a successful low-risk operation from silently granting a broader one.
+    confidence: high
+tags:
+  - documentation
+  - roadmap
+  - delivery
+  - observability
+  - identity

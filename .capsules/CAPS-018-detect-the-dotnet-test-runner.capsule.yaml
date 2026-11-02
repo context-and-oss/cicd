@@ -1,0 +1,219 @@
+kind: change-capsule
+schema: 1
+id: CAPS-018
+status: sealed
+intent: >
+  `dotnet test` is two mutually exclusive command-line surfaces — VSTest and
+  Microsoft.Testing.Platform — and cicd had one house invocation. On the .NET 10
+  SDK an MTP project cannot be driven through the VSTest target at all, so
+  src/quality/test.go's runDotnetTestOn produced a non-run on every MTP
+  repository, which gatedPassed fails at every threshold including
+  --fail-on NONE. Measured on SDK 10.0.400: an MTP project with no opt-in exits 1
+  ("Testing with VSTest target is no longer supported"), with the opt-in it exits
+  5 (Unknown option '--logger'), and a VSTest project under an MTP opt-in exits 1
+  as well; none of the three writes a .trx. The irony is that
+  Microsoft\.Testing\.Platform was already a dotnetTestMarkers entry, so cicd
+  recognised the project as executable and then sent the other runner's flags.
+  This change adds src/quality/dotnetrunner.go (the global.json runner opt-in,
+  the per-runner argv, the cobertura glob and the MTP exit map), reads the runner
+  in src/quality/dotnetexec.go's existing alpine probe, rewrites the invocation
+  and coverage harvest in src/quality/test.go, extends the run-error and coverage
+  classification in src/quality/dotnetreport.go, fixes an empty cobertura being
+  read as 100% in src/quality/coverage.go, adds the testdata/dotnet-mtp-app
+  fixture, and asserts all of it live in the src/quality cell of
+  .github/workflows/ci.yml.
+impact:
+  visibility: internal
+  benefit: >
+    A .NET repository on the current SDK can pass the source gate again, and the
+    evidence now names which of the two CLIs ran — a warning line beside the SDK
+    band — so the invocation a verdict came from is auditable rather than
+    implied. Coverage is actually harvested from an MTP run: the old glob on
+    coverlet's literal coverage.cobertura.xml matched 0 files over a pooled run
+    holding two reports, so fixing only the invocation would have shipped a green
+    .NET leg measuring nothing. And a real MTP test failure (exit 2) is now
+    reported as a failed test instead of a pipeline that never ran.
+  compatibility: fix
+  risk:
+    - >
+      testdata/dotnet-app and every net8.0 consumer keep the VSTest path
+      byte-identical; the only visible change on that path is the new
+      "runner VSTest (no global.json in the repository root, so the SDK default
+      applies)" warning. Verified by a real run: passed=true, 33.33% over 3
+      lines, no errors.
+    - >
+      The empty-cobertura fix in src/quality/coverage.go can turn a currently
+      green consumer red, and that is intended. Blast radius is narrow: the
+      coverage gate in src/quality/main.go engages only under
+      minCoverage > 0 && !lintOnly, and the default minCoverage is 0, so all
+      three of a non-zero --min-coverage, no --lint-only, and a .NET report with
+      no coverable lines must hold at once. The alternative is worse in the
+      direction that matters — an inflated figure sets a ratchet baseline.
+    - >
+      Two markers were added to dotnetTestMarkers because an MSTest 4 or
+      xunit.v3 project references no adapter and no Microsoft.NET.Test.Sdk and so
+      matched none of the original six. Widening what is handed to `dotnet test`
+      can only produce a loud non-run if it is ever wrong (zero tests matched,
+      exit 8 or a .trx accounting for no test), never a silent pass. The MSTest
+      meta-package is matched with its attribute so it cannot collide with
+      MSTest.Analyzers or MSTest.Sdk.
+    - >
+      MSTest.Sdk — the MSBuild-SDK spelling of an MSTest project — still matches
+      no marker, and no expectation is pinned for it in either direction because
+      nothing here measured a real MSTest.Sdk run. Such a repository gets the
+      loud "not a test project" non-run. Recorded in the spec so an unmeasured
+      case does not read as a ruled-out one.
+    - >
+      The merged .NET coverage percentage remains imprecise where two test
+      projects cover one shared assembly: mergeDotnetCoverage weights an
+      assembly once per report that touched it. That predates MTP, coverlet
+      produces the same overlap, and it needs filing separately. This change
+      fixes coverage that was missing or fabricated, not coverage that is
+      imprecisely weighted.
+    - >
+      The src/quality arm of .github/workflows/ci.yml gains two further dotnet
+      runs, each paying a NuGet restore. The alternative — unit tests only — is
+      what let five VSTest-shaped assumptions survive in a file no unit test
+      could reach. The assertions live in scripts/smoke/dotnet-runner-shapes.sh
+      rather than inline: written inline they took that run: body from 10.2 KB to
+      14.4 KB against the 16 KiB STEP_RUN_BUDGET_BYTES, and that step is the
+      repository's largest, where an overrun makes GitHub refuse the workflow at
+      startup with no check run published at all. As a one-line call the step is
+      11.2 KB. The script was executed for real before landing, not only written.
+decisions:
+  - id: d01
+    choice: read the runner from global.json, not from an MSBuild property
+    options:
+      - dotnet msbuild -getProperty:IsTestingPlatformApplication (rejected)
+      - the repository-root global.json test.runner key (chosen)
+      - synthesise a global.json in the container to force a runner (rejected)
+    because: >
+      The property describes what a project *is*; global.json decides what the
+      CLI *parses*, and those differ exactly in the failure case — an MTP
+      application with no opt-in is a non-run whose cause the property cannot
+      name. Measured, the probe also fails with MSB1063 on a solution, which is
+      the shape most consumers have, and on a cold NuGet cache it returns an
+      empty string rather than an error, because the property arrives with a
+      restored targets file: an empty answer that reads as false is the
+      substitution this repository exists to refuse. Synthesising the file would
+      make cicd choose the consumer's runner for them, against ADR-004.
+    confidence: high
+  - id: d02
+    choice: an unreadable opt-in is an error, not a fallback to VSTest
+    options:
+      - default to VSTest when global.json cannot be read (rejected)
+      - refuse to run, with the cause in errors[] (chosen)
+    because: >
+      A fallback here is a guessed invocation, which is the whole defect. Unlike
+      dotnetBandFromGlobalJSON, which has the project files to fall back on, the
+      runner has no second source. dotnetTestArgs returns nil for an unresolved
+      runner and carries no default: arm, the same reason dotnetSDKBase has none.
+      The SDK agrees: measured, a malformed global.json or an unsupported runner
+      name makes every dotnet command throw, dotnet --version included.
+    confidence: high
+  - id: d03
+    choice: keep --results-directory and never pass --coverage-output
+    options:
+      - drop --results-directory and read each project's build tree (rejected)
+      - pin the report name with --coverage-output (rejected)
+      - pooled results directory, guid-named reports (chosen)
+    because: >
+      MTP pools reports into --results-directory guid-named without collision —
+      measured on a two-project solution: 2 .trx and 2 distinct cobertura at the
+      pool root. Without the flag the reports land in the consumer's source tree
+      under bin/. The guid *is* the collision avoidance: with
+      --coverage-output coverage.cobertura.xml both applications write one path
+      concurrently, and the surviving root document describes whichever finished
+      last. A well-formed cobertura holding one project's numbers is worse than
+      no document, because it reads as a successful measurement. No -maxdepth
+      either: it is correct for the pooled layout and silently wrong for the
+      per-project one, which would make the same code measure everything or
+      nothing depending on a flag.
+    confidence: high
+  - id: d04
+    choice: distinct diagnostics for MTP exits 1, 5 and 8, and exit 2 is a real result
+    options:
+      - treat anything outside {0,1} as "did not run", as the VSTest branch did (rejected)
+      - a measured exit map with per-status remedies (chosen)
+    because: >
+      Under MTP, exit 2 is a test *failure* with a .trx and coverage written, so
+      the old rule reported a broken test as a broken pipeline — a wrong cause on
+      a correctly red build, which sends the reader hunting a pipeline fault.
+      1, 5 and 8 are all non-runs but need different remedies, and a unit test
+      fails if any two collapse to the same wording. Exit 1 deliberately does not
+      assert the runner mismatch: a .csproj MSBuild cannot load exits 1 too
+      (measured, MSB4025 while building this change's own fixture, and it told me
+      to fix global.json for a broken XML comment), so dotnetMTPRunnerMismatch
+      gates that remedy on the SDK having said it. A verdict may never depend on
+      a tool's wording; an explanation may.
+    confidence: high
+  - id: d05
+    choice: never pass --minimum-expected-tests 0
+    options:
+      - silence exit 8 with --minimum-expected-tests 0 (rejected)
+      - report exit 8 as a non-run and say its scope is per run (chosen)
+    because: >
+      The flag is global to the run, so it would not merely tolerate one empty
+      project, it would turn "no test executed anywhere" into a clean pass —
+      the same false pass as the pre-fix `dotnet test`-at-the-source-root bug
+      this module already closed once. A noisy exit 8 costs a consumer one
+      --filter fix; silencing it costs a gate. Its per-run rather than
+      per-project scope is stated in the message, because a reader assuming
+      per-project scope looks for the wrong project.
+    confidence: high
+  - id: d06
+    choice: four coverage states, including one that blames cicd
+    options:
+      - report coverage or report none (rejected)
+      - usable / empty-documents / found-outside-the-results-dir / none, per runner (chosen)
+    because: >
+      Widening a glob is not a proof that the glob is right. If MTP moves its
+      reports again, a cobertura found under */bin/* while the results directory
+      is empty now raises an error naming it a cicd defect, instead of a leg
+      reporting no coverage and implying the consumer's project is at fault —
+      "produced a report cicd failed to find" must stay distinguishable from
+      "produced none". The coverlet.collector remedy is VSTest-only for the same
+      reason: it cannot work under MTP, and a remedy that cannot work costs the
+      reader a wasted change.
+    confidence: high
+  - id: d07
+    choice: fix the empty-cobertura 100% separately and name it separately
+    options:
+      - fold it into the runner work unremarked (rejected)
+      - fix it here, named as its own defect with its own blast radius (chosen)
+      - leave it for a later change (rejected)
+    because: >
+      It is not MTP-specific — coverlet writes the same 178-byte document with
+      <packages />, line-rate="1" and no lines-valid — and mergeDotnetCoverage
+      falls through to an unweighted mean when no report carries a line count, so
+      a repository whose only .NET test project instruments nothing reported 100%
+      over nil lines. Leaving it is not neutral: an inflated figure is wrong in
+      the direction that survives a ratchet, since it *sets* the bar, and it must
+      land before or with any work that makes --min-coverage reachable from the
+      harnesses. Folding it in silently would hide a second defect behind the
+      first, and this is the third visit to the same main.go coverage-gate block
+      for one failure class — absence and zero are the same bytes in every
+      coverage format this module reads.
+    confidence: high
+  - id: d08
+    choice: add MTP markers, and make the fixture stop passing detection by accident
+    options:
+      - declare <IsTestProject>true</IsTestProject> in the fixture only (rejected)
+      - add Include="MSTest" and xunit\.v3 to dotnetTestMarkers (chosen)
+    because: >
+      Every original marker was VSTest vocabulary, so a real MSTest 4 project
+      (measured: only <PackageReference Include="MSTest" Version="4.0.2" />) was
+      reported as "not a test project" and the entire runner path was unreachable
+      from the shapes needing it — a loud false red rather than a false pass,
+      which is how it survived. Fixing only the fixture would have hidden that
+      from every consumer. Worse, testdata/dotnet-mtp-app initially passed
+      discovery because the words Microsoft.Testing.Platform appeared in an XML
+      *comment* in its .csproj; its comments now contain no marker literal, so
+      detection depends on the package reference and nothing else. A fixture that
+      passes for a reason other than the one under test proves nothing.
+    confidence: high
+tags:
+  - quality
+  - dotnet
+  - coverage
+  - false-pass

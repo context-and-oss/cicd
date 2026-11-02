@@ -1,0 +1,194 @@
+kind: change-capsule
+schema: 1
+id: CAPS-051
+status: sealed
+intent: >
+  Two unrelated infrastructure faults took CI red in the same run
+  on a branch that was green on the run before and green again on a re-run with
+  no change at all. Both were genuine non-runs, both were correctly reported as
+  failures — the envelope and the job status were right — and neither told the
+  reader what had actually happened.
+
+  The first was ZAP. zap_common.py's get_free_port() draws randint(32768, 61000),
+  asks connect_ex whether anything answers at that instant, and returns the
+  number without ever binding it. Nothing is reserved, and the range it draws
+  from is the kernel's own ephemeral range — in the pinned image exactly
+  32768-60999, the pool every outbound connection and every bind-to-zero service
+  takes from. ZAP then spends about thirty seconds auto-updating add-ons before
+  the proxy binds, opening dozens of outbound connections, and its own OAST
+  add-on binds an ephemeral port on the way. Lose that race and ZAP does not
+  degrade, it terminates: BindException, then the wrapper spends its entire
+  600-second budget connecting to a corpse and exits 3.
+
+  The second was `dagger develop`, which generates a module's SDK by fetching Go
+  modules — so it fails for two unrelated reasons that are indistinguishable
+  from outside the step. A single HTTP/2 stream reset from sum.golang.org failed
+  a matrix cell with `Error: failed to apply generated code: exit code: 1`, a
+  sentence that reads as "your module does not compile". The real one sat eight
+  hundred lines into a Dagger TUI dump. The engine pre-pull three steps earlier
+  already retries eight times with backoff; this step retried not at all.
+
+  The need is the same in both halves and it is not "make the failure softer". A
+  step that could not run must say which kind of could-not it was, because the
+  remedy for a lost port race and the remedy for a broken scan are nothing alike,
+  and neither is the remedy for a Go checksum database dropping a connection.
+impact:
+  visibility: internal
+  benefit: >
+    src/security/webmode.go pins ZAP's proxy port with -P 8090 on every scan in
+    every mode. `if port == 0: port = get_free_port()` means supplying -P skips
+    the draw entirely, and 8090 is below 32768 so the kernel can never hand it
+    out as an ephemeral port — neither ZAP's add-on downloads nor its OAST
+    callback service can take it first. The fix is structural rather than
+    statistical: there is no longer a race to lose. The constant carries the
+    measurement that justifies it, and
+    TestTheProxyPortCannotBeDrawnFromTheEphemeralRange refuses any value inside
+    the range get_free_port() draws from.
+
+    scripts/ci/classify-dagger-develop-failure.sh answers one question about a
+    captured failure — module chain failing to fetch, or module failing to build
+    — and scripts/ci/dagger-develop.sh retries only the first, on the 0/5/15/30
+    backoff, then names which kind it was. Both ::error:: messages say what to do
+    next and neither says it about the wrong layer. All five `dagger develop`
+    sites in .github/workflows/ci.yml route through the wrapper; the matrix site
+    passes "$MODULE" through the job's env rather than splicing
+    ${{ matrix.module }} into a command line, for the reason
+    check-ado-templates.py enforces one level up.
+
+    scripts/tests/test_dagger_develop.py drives both scripts against real
+    captured output — the sum.golang.org stream reset, a proxy 503, a dial
+    timeout, and an actual `./dagger.gen.go:64:10: undefined: Security` codegen
+    failure — and drives the wrapper itself with a fake `dagger` on PATH to prove
+    the failing case fails, the compile error burns one attempt rather than four,
+    and the fetch fault burns four and then reports.
+  compatibility: compatible
+  risk:
+    - >
+      cicd now owns a port number inside the ZAP container. 8090 is outside the
+      ephemeral range, outside the privileged range, and not a default anything
+      else in that container reaches for — the container runs one scan and
+      exposes no ports — but it is a constant that a future ZAP image could
+      collide with in a way no test here would catch. The mitigation is that the
+      collision would be a loud BindException naming 8090, on every run rather
+      than on the unpredictable fraction of runs the ephemeral-range draw it
+      replaces lost the race on — and the port it names is a constant in
+      `webmode.go` a reader can change, where `get_free_port()` named a number
+      nobody chose.
+    - >
+      The classifier is a regex against wording cicd does not own. A Go toolchain
+      rewording its fetch errors makes a transient fault read as permanent. That
+      is survivable only because neither answer can produce a green: a fetch
+      fault misread as permanent is reported at once, a compile error misread as
+      a fetch fault is retried three times and then reported. The classification
+      chooses the message and the budget, never the verdict — and the fixtures
+      are real captured output rather than invented strings, so the test fails
+      honestly when the wording moves.
+    - >
+      make develop-all still calls `dagger develop` directly. It is a local
+      convenience target where a failure is immediately visible to the person who
+      ran it, so leaving it keeps this change's blast radius on CI — but a
+      developer hitting a sumdb blip locally still gets the cryptic message, and
+      the two paths now differ.
+    - >
+      The ZAP fix is argued rather than observed. The race is lost
+      intermittently, so a green CI run proves nothing a green run before the
+      change did not also prove. What is proven is the mechanism — that -P skips
+      get_free_port() outright, and that the chosen port is outside every range
+      that function and the kernel draw from. A reader looking for "the run that
+      demonstrates this" will not find one.
+    - >
+      Nothing detects a ZAP that died seconds after startup. zapRunError
+      classifies exit 3 as a non-run, which is why this failure was legible at
+      all, but the wrapper still spends its whole -T budget connecting to a
+      daemon that already terminated. That is ZAP's wrapper rather than cicd's
+      and cicd reads the corpse correctly, but the wall-clock cost of a startup
+      failure is identical to a real scan.
+decisions:
+  - id: d01
+    choice: pin the proxy port instead of retrying the scan
+    options:
+      - retry the scan on a BindException and draw again (rejected)
+      - pass -P with a port outside the ephemeral range (chosen)
+    because: >
+      Retrying would work — the race is lost maybe one run in twenty — and it
+      needs no constant of cicd's own. It also pays a ten-minute ZAP startup to
+      re-enter the same lottery, and it leaves the defect in the system to be
+      rediscovered by whoever reads the next BindException. -P removes the draw
+      rather than improving its odds. The cost is that cicd owns a port number,
+      which is answered by making the constant carry its measurement and by a
+      test that refuses any value the lottery could have produced.
+    confidence: high
+  - id: d02
+    choice: 8090 rather than ZAP's documented default of 8080
+    options:
+      - 8080, ZAP's own default and the idiomatic choice (rejected)
+      - 8090 (chosen)
+    because: >
+      8080 would read as idiomatic and would be what a ZAP reader expects. It is
+      also the port most consumer applications listen on, and this module
+      composes target URLs against consumer ports — so the one collision it could
+      still produce would be between two things cicd wrote, surfacing as an error
+      message about a port. 8090 is outside the ephemeral range, outside the
+      privileged range (the image runs non-root), and not a default anything else
+      in this container reaches for.
+    confidence: high
+  - id: d03
+    choice: retry only what is classified retryable, never a compile error
+    options:
+      - retry every failure a fixed number of times (rejected)
+      - classify first, and give a build failure exactly one attempt (chosen)
+    because: >
+      Blind retry is the smaller script and the wrong shape.
+      test_push_rejection.py already records what it costs: a release job that
+      treated every rejection as retryable spent five attempts re-deriving a
+      version bump against a ruleset refusal the remote had explained on the
+      first try. A module that does not compile will not compile on attempt four,
+      and the three extra attempts buy a slower red and a less useful message.
+    confidence: high
+  - id: d04
+    choice: a separate classifier script rather than a condition inside the wrapper
+    options:
+      - inline the grep in dagger-develop.sh (rejected)
+      - scripts/ci/classify-dagger-develop-failure.sh, tested independently (chosen)
+    because: >
+      The same reason classify-push-rejection.sh exists. The pattern is a regex
+      against error wording cicd does not control, so it is the part most likely
+      to rot, and rot inside a workflow condition is invisible until it matters.
+      As its own script it is driven directly by a test holding real captured
+      output — and exit 2 for a missing or unreadable file is a third answer
+      rather than a silent "not retryable".
+    confidence: high
+  - id: d05
+    choice: read PIPESTATUS[0] rather than the pipeline's status
+    options:
+      - rely on `set -o pipefail` carrying the failure through tee (rejected)
+      - capture ${PIPESTATUS[0]} explicitly and assert it in a test (chosen)
+    because: >
+      dagger's output has to reach both a log file and the job console, so it
+      goes through tee — and tee succeeds whatever it is piped. pipefail is set
+      and would in fact carry the failure through today, but a develop that
+      reports success because the tee worked is this repository's founding
+      failure mode, in the one step every later `dagger call` in the job depends
+      on. It must not rest on a single shell option staying set across future
+      edits, so the wrapper reads the status it actually means and a test drives
+      it with a failing fake `dagger` on PATH.
+    confidence: high
+  - id: d06
+    choice: keep a develop that could not fetch red at every budget
+    options:
+      - degrade to a warning when the cause is classified as transient (rejected)
+      - retry, then fail with a message naming the layer (chosen)
+    because: >
+      "Fail gracefully" is the right instinct pointed at the wrong lever. An SDK
+      that was not generated makes every subsequent `dagger call` in the job run
+      against a stale or absent SDK — a step that could not do its work reading
+      as a step that did, which is the exact collapse this repository exists to
+      prevent. Graceful here means the message and the budget, not the verdict.
+      The retry narrows which reds are real; it never turns one green.
+    confidence: high
+tags:
+  - security
+  - dast
+  - ci
+  - non-run-must-not-read-as-clean
+  - workflow

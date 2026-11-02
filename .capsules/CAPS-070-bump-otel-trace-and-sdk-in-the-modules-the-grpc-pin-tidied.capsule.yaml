@@ -1,0 +1,75 @@
+kind: change-capsule
+schema: 1
+id: CAPS-070
+status: sealed
+intent: >
+  The change that pinned google.golang.org/grpc at v1.83.2 in every module ran
+  `go mod tidy` in eleven of them, and tidy wrote out the whole indirect require
+  block the generated Dagger client needs — with the OpenTelemetry trace
+  exporters, the otel SDK and sdk/metric at v1.41.0 and v1.44.0. Those
+  versions carry CVE-2026-81870 (LOW), so the dogfood comment listed it 44
+  times against go.mod, and CVE-2026-39882 picked up 22 more rows than the
+  accepted ones it already had. In src/build, src/composites/commit,
+  src/cross-cutting/{contract,evidence,pages,report}, src/notify, src/quality,
+  src/risk, src/security and src/stage-4 the otlptrace family
+  (otlptrace, otlptracegrpc, otlptracehttp), otlpmetricgrpc, otlpmetrichttp,
+  go.opentelemetry.io/otel/sdk and sdk/metric move to v1.46.0, the version
+  stage-2 already resolves and CAPS-064 holds otel core at. Tidy carried
+  grpc-gateway to v2.30.0, proto/otlp to v1.11.0 and genproto forward with
+  them; grpc stays at v1.83.2.
+impact:
+  visibility: internal
+  benefit: >
+    Measured with the pinned Trivy over src/: CVE-2026-81870 goes from 44 rows
+    to none, and CVE-2026-39882 from 37 to 15. The 15 left, with the 15 each of
+    CVE-2026-81871 and CVE-2026-81872, sit on the `replace … v0.16.0` log lines
+    dagger develop owns and are already accepted in the open in
+    dogfood-precommit.yml.
+  compatibility: additive
+  risk:
+    - >
+      The bump is indirect: the modules import none of these packages; the
+      generated client does. The unit suites (every module, run after the bump)
+      prove the tree still compiles under -tags unit_test, and `GOWORK=off go
+      vet .` after `dagger develop` proves the generated client compiles against
+      the new versions. The scanner on this change's dogfood run is the evidence
+      for the rows.
+    - >
+      otel/log and sdk/log stay at the v0.17.0 tidy picked in these eleven
+      modules, against v0.20.0 in stage-2. That difference is inert: the
+      `replace` lines pin both to v0.16.0, and replace wins.
+decisions:
+  - id: d01
+    choice: bump the require lines rather than accept CVE-2026-81870
+    options:
+      - --vuln-accept it beside the three otel acceptances (rejected)
+      - raise the require lines to a fixed release (chosen)
+    because: >
+      An acceptance is for a fix cicd cannot pin (CAPS-068 d01). These rows sit
+      in the `require` block, which dagger develop leaves alone: a second
+      develop on each of the eleven modules left go.mod and go.sum
+      byte-identical.
+    confidence: high
+  - id: d02
+    choice: v1.46.0, not the newest otel release
+    options:
+      - the newest release (rejected)
+      - v1.46.0, matching stage-2 and the CAPS-064 hold (chosen)
+    because: >
+      v1.46.0 clears the advisory, and a newer sdk than the otel core CAPS-064
+      holds at v1.46.0 reopens the log import cycle that capsule records. One
+      version across every module is also one fewer thing to read.
+    confidence: high
+  - id: d03
+    choice: touch only the eleven modules the grpc pin's tidy dragged in
+    options:
+      - all fifteen modules for uniformity (rejected)
+      - the eleven whose go.mod names the stale versions (chosen)
+    because: >
+      The other four already required v1.46.0,
+      so churning them changes nothing. CAPS-058 d01, again.
+    confidence: high
+tags:
+  - dependencies
+  - security
+  - dogfood

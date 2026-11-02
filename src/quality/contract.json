@@ -1,0 +1,44 @@
+[
+  {
+    "stage": "domain",
+    "step": "quality",
+    "function": "Check",
+    "params": [
+      { "name": "src",       "type": "Directory", "required": true },
+      { "name": "commitSha", "type": "String",    "required": true },
+      { "name": "branch",    "type": "String",    "required": true },
+      { "name": "repoUrl",   "type": "String",    "required": true },
+      { "name": "failOn",    "type": "String",    "required": false, "default": "HIGH" },
+      { "name": "lintOnly",  "type": "Boolean",   "required": false },
+      {"name": "prepared", "type": "Container", "required": false},
+      {"name": "preparedLanguage", "type": "String", "required": false},
+      {"name": "nodeProjectLimit", "type": "Integer", "required": false, "default": "4"}
+    ],
+    "outputSchema": "evidence-1"
+  },
+  {
+    "stage": "domain",
+    "step": "quality",
+    "function": "Test",
+    "params": [
+      { "name": "src",            "type": "Directory", "required": true },
+      { "name": "commitSha",      "type": "String",    "required": true },
+      { "name": "branch",         "type": "String",    "required": true },
+      { "name": "repoUrl",        "type": "String",    "required": true },
+      { "name": "testCmd",        "type": "String",    "required": false },
+      { "name": "testLegs",       "type": "String",    "required": false },
+      { "name": "coveragePath",   "type": "String",    "required": false },
+      { "name": "baseline",       "type": "File",      "required": false },
+      { "name": "tolerance",      "type": "Float",     "required": false, "default": "1.0" },
+      { "name": "coverageGate",   "type": "String",    "required": false, "default": "gate" },
+      { "name": "toolchainImage", "type": "String",    "required": false },
+      { "name": "include",        "type": "String[]",  "required": false },
+      {"name": "prepared", "type": "Container", "required": false},
+      {"name": "preparedTestLabel", "type": "String", "required": false},
+      {"name": "preparedImage", "type": "String", "required": false},
+      {"name": "preparedLanguage", "type": "String", "required": false},
+      {"name": "parallelism", "type": "Integer", "required": false, "default": "1"}
+    ],
+    "outputSchema": "evidence-1"
+  }
+]

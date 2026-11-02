@@ -1,0 +1,145 @@
+kind: change-capsule
+schema: 1
+id: CAPS-049
+status: sealed
+intent: >
+  deliver-release-pins.sh fetches origin/main and resets hard to FETCH_HEAD,
+  which is right for the job it does there — pins have to be re-derived against
+  the live tip or they are stale before they are pushed. The reset also moves
+  HEAD, and both callers tag whatever HEAD is once the script returns
+  result=released. Nothing connected those two facts, so the tag went wherever
+  main happened to be rather than onto the commit the version was computed for.
+
+  While main is quiet those are the same commit and the bug is invisible. Under
+  a drained merge queue they are not. Measured on this repository: v2.2.2 was
+  computed for the merge of chore/release-v2.2.2 and landed on
+  a feat that deserved a minor. v2.2.3 was computed for the merge of
+  chore/release-v2.2.3 and landed on the commit after it — the
+  `refactor(precommit)!` from the next pull request, which merged fourteen seconds later. A
+  breaking change shipped inside a patch version.
+
+  The swallowing is what makes this worse than a mislabelled tag. next-version
+  runs git-cliff --unreleased, which means "since the newest tag". Once v2.2.3
+  sat on the breaking commit there were no unreleased commits at all, so every
+  subsequent cd run reported "No releasable commits since v2.2.3 — skipping
+  release" and the major that commit earned could never be computed again. The
+  tag did not merely point at the wrong place; it erased the evidence that
+  anything was owed.
+
+  This is the same defect this repository keeps finding in itself: an absent or
+  unrelated signal read as a verdict. HEAD after a reset is not a statement
+  about which commit the release was built for. It was read as one.
+impact:
+  visibility: external
+  benefit: >
+    The delivery script now remembers the commit it was checked out at before
+    the reset and, on the released path, compares it against the live tip. When
+    they differ it emits a fourth result, `stale`, and does not tag. cd.yml
+    already gates every tagging step on `== 'released'`, so stale skips them by
+    construction; release.yml gained an explicit refusal step and its four
+    `!= 'superseded'` conditions became `== 'pr-open' || == 'released'`.
+    release.yml's pr-open path additionally asserts that main's tip is the merge
+    commit of its own release pull request, which the delivery script cannot
+    check for it because on that path the script returns before the merge exists.
+  compatibility: compatible
+  risk:
+    - >
+      A refused release costs that version its number: nothing is tagged, and
+      the run for the new tip re-derives the bump over the full history and
+      releases a version accounting for all of it. The sequence gains a gap.
+      That is the intended trade — a gap is a cosmetic defect in a list, a tag
+      on the wrong commit is a defect in the published record and, as v2.2.3
+      showed, one that destroys the input needed to correct it.
+    - >
+      The guard fires on a race, so it is exercised by a condition that is rare
+      in normal operation and common exactly when the repository is busy. The
+      tests drive it through a stub knob rather than a real race; what they
+      prove is that the comparison is made and branches correctly, not that the
+      window it closes is the only one.
+    - >
+      v2.2.2 and v2.2.3 keep their wrong commits. Moving a published tag was
+      rejected as the more dangerous repair — anything that already fetched
+      them would silently change meaning — so the record stays wrong and
+      v3.0.0 is cut deliberately to make the breaking change reachable under a
+      major. Its release notes are correspondingly thin, because git-cliff
+      still sees the refactor! as already released.
+    - >
+      Only the released path is guarded in the script. A run that finds pins
+      unmatched still delivers against the live tip and returns pr-open, which
+      is correct — it has nothing to tag — but it means "stale" is a verdict
+      about tagging and not a general statement that main moved.
+    - >
+      The git stub in the test suite had no rev-parse case, so before this
+      change both sides of the new comparison would have been the empty string
+      and compared equal. The guard would have passed its tests while being
+      inert. That the stub had to be taught rev-parse is the reason the tests
+      are worth anything here, and a reminder that a stub's silence is not a
+      pass.
+decisions:
+  - id: d01
+    choice: refuse to tag a moved main rather than tag the computed commit
+    options:
+      - tag COMPUTED_SHA instead of HEAD (rejected)
+      - re-derive the version against the live tip and tag that (rejected)
+      - emit a new result and decline to tag (chosen)
+    because: >
+      Tagging COMPUTED_SHA puts the right version on the right commit and leaves
+      the tag off the tip, which breaks the next run in the other direction:
+      git-cliff --unreleased then reports the commits that landed after it as
+      unreleased, which is true, but the pins on main claim a version that no
+      tag on main's ancestry carries at the tip. Re-deriving against the tip
+      inside the same run means computing a version from a tree the job was not
+      checked out at and whose CI verdict this run never saw — it would tag a
+      commit no gate in this run examined. Declining is the only option that
+      neither publishes a wrong claim nor invents an unverified one, and the
+      cost is bounded: the next run does the work correctly.
+    confidence: high
+  - id: d02
+    choice: add a fourth result rather than fold the refusal into an existing one
+    options:
+      - return superseded (rejected)
+      - exit non-zero (rejected)
+      - emit result=stale (chosen)
+    because: >
+      superseded means main already carries a tag at or above the target, and
+      reusing it would make the two indistinguishable in the logs of exactly the
+      incident where telling them apart matters. Exiting non-zero turns an
+      orderly yield into a red cd run on every busy merge — the run did its job,
+      it correctly declined to finish someone else's. A distinct result is also
+      what the spec's own contract table demanded: the suite already asserted
+      that exactly three results exist, with the docstring "a fourth result
+      would be a branch neither of them handles", so adding one obliged handling
+      it in both callers, which is the check working as designed.
+    confidence: high
+  - id: d03
+    choice: invert release.yml's guard conditions to allow-lists
+    options:
+      - leave `!= 'superseded'` and add stale to each (rejected)
+      - "`== 'pr-open' || == 'released'` (chosen)"
+    because: >
+      A deny-list admits every result its author did not think of. `stale` would
+      have fallen straight through four separate conditions into the tagging
+      path — the new result would have been ignored by the workflow that most
+      needs it, and the bug would have been half-fixed in a way that reads as
+      fixed. The allow-list fails closed: a fifth result stops the override
+      rather than being tagged by it.
+    confidence: high
+  - id: d04
+    choice: check the merge commit in release.yml rather than trust matching pins
+    options:
+      - rely on check-workflow-pins.py passing (rejected)
+      - compare the tip against the release pull request's merge commit (chosen)
+    because: >
+      Matching pins and "this is the commit the release was built for" are
+      different questions, and the incident is the proof: a commit that touches
+      no pin leaves the pins matching while moving the tip. The pin check would
+      have been green on that commit. The merge sha is the only thing that answers
+      the actual question on the pr-open path, and when it cannot be read the
+      step fails rather than proceeds — unknown is not the same as confirmed,
+      and a tag cut on an unconfirmed tip is the failure the check exists for.
+    confidence: high
+tags:
+  - release
+  - tagging
+  - race-condition
+  - absent-signal-read-as-verdict

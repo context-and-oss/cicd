@@ -1,0 +1,118 @@
+kind: change-capsule
+schema: 1
+id: CAPS-064
+status: sealed
+intent: >
+  OpenTelemetry Go v1.47.0 was published on 2026-10-02 at 08:10Z, and from that
+  moment no module in this repository compiles. Every consumer's precommit and
+  commit run died at module load with "import cycle not allowed", before a single
+  gate ran, so the envelope, the SARIF and the PR comment were never written. The
+  first consumer failure seen was that morning; the last green run was the
+  evening before. No commit here or in any consumer caused it.
+
+  The mechanism has two halves. `dagger develop` resolves go.opentelemetry.io/otel,
+  otel/trace and otel/metric to their latest release on every run, whatever the
+  committed require block says; measured on src/composites/precommit/go.mod, a
+  clean develop moved all three from v1.46.0 to v1.47.0 and gqlparser from
+  v2.5.37 to v2.5.59. Meanwhile the four `replace … v0.16.0` lines that codegen
+  copies out of dagger.io/dagger's own go.mod hold otel/log at v0.16.0. In
+  v1.47.0, core's internal/global imports otel/log, and otel/log v0.16.0 imports
+  core's internal/global, so the pair forms a cycle.
+
+  Every module now carries three more `replace` lines that hold otel, otel/metric
+  and otel/trace at v1.46.0, the last core release that still pairs with log
+  v0.16.0, with a comment saying why and naming this capsule. A replace is the
+  only lever that holds, because develop rewrites requires and rewrites the four
+  SDK replaces, but leaves a module's own replaces in place.
+impact:
+  visibility: consumer
+  benefit: >
+    Measured from a clean tree with the pinned engine v0.20.8: before, 15 of 16
+    modules failed `go build` after `dagger develop` with the cycle. After, all 16
+    build, `dagger functions` loads src/composites/commit and
+    src/composites/precommit with their full dependency closures, and the comment
+    and the three lines survive develop.
+  compatibility: additive
+  risk:
+    - >
+      The pin is a ceiling. OpenTelemetry fixes released as v1.47.0 or later do not
+      reach these modules until the pin is lifted, and a scan of the developed tree
+      reports v1.46.0 because v1.46.0 is what is built. The pin can be lifted only
+      when dagger.io/dagger moves its own log replace to a release that pairs with
+      the newer core. Every published Dagger version up to and including v0.21.9,
+      and Dagger's main branch, still carries the v0.16.0 replace, so upgrading the
+      engine is not an alternative today.
+    - >
+      Develop still floats the require lines, so after a develop the require block
+      can read v1.47.0 while the replace selects v1.46.0. That is not the CAPS-058
+      false-pass shape, since the replace that decides the version is written out
+      in the same file and a reader or scanner that honours replace sees the version
+      that is built.
+    - >
+      Other direct dependencies float the same way (gqlparser above), and the
+      "latest" develop resolves is not stable between runs. In one probe dast
+      resolved gqlparser v2.5.58 while every other module resolved v2.5.59, and
+      dast stayed on otel v1.46.0 by that luck alone. This change does not pin
+      anything beyond the three otel core modules, because nothing else is broken.
+decisions:
+  - id: d01
+    choice: pin otel core, metric and trace at v1.46.0 with a replace
+    options:
+      - raise the otel/log and sdk/log replace pins to v1.47.0 (rejected)
+      - upgrade the Dagger engine (rejected, measured)
+      - pin core, metric and trace with a module-owned replace (chosen)
+    because: >
+      CAPS-058 d02 measured that develop rewrites the four SDK replace lines per
+      module, so raising them does not hold. Every Dagger release checked carries
+      the same v0.16.0 log pin, so an engine bump changes nothing. A replace the
+      module owns is left alone by develop, which was verified by running develop
+      over all 16 modules with the pin committed.
+    confidence: high
+  - id: d02
+    choice: apply the pin to all sixteen modules
+    options:
+      - pin only the modules that fail today (rejected)
+      - pin every module (chosen)
+    because: >
+      CAPS-058 d01 skipped twelve modules since their replace block was inert. This
+      is the opposite case: a module with no otel require still gets otel through
+      the generated client, and 15 of 16 failed, including modules with no otel
+      require at all. The one that passed did so on a nondeterministic resolution,
+      so leaving it unpinned leaves a module that breaks on its next develop.
+    confidence: high
+  - id: d03
+    choice: commit only the added lines, not develop's floated requires
+    options:
+      - commit the go.mod and go.sum develop produces (rejected)
+      - commit the replace lines and comment alone (chosen)
+    because: >
+      What develop writes depends on what the proxy calls latest at that moment,
+      so committing it records one run's resolution rather than a decision. The
+      committed requires stay at v1.46.0, which agrees with the replace. The four
+      modules that require otel already carry the v1.46.0 sums, and the other
+      twelve commit no otel sums before or after this change, since develop
+      writes them, so no go.sum moves.
+    confidence: medium
+  - id: d04
+    choice: accept CVE-2026-81872 in the open on the dogfood gate
+    options:
+      - pin otel/sdk/log at v0.21.0 (rejected, measured in CAPS-058)
+      - leave the self-check red and merge over it (rejected)
+      - add a third --vuln-accept entry beside the two existing otel log rows (chosen)
+    because: >
+      GHSA-hjf4-fphr-2h65 was published on 2026-09-29, after the last dogfood run
+      on main, so the first run to reach it was this change's own, and main would
+      trip on it the same way. It names otel/sdk/log v0.16.0, which the same
+      codegen replace line holds and develop rewrites, so cicd cannot pin the fix,
+      exactly as with CVE-2026-39882 and CVE-2026-81871. The busy-spin needs the
+      export buffer full, and the only exporter is the Dagger engine's own
+      runner-local telemetry endpoint, so the worst case is CPU burned inside one
+      CI run with no data exposed. The entry in
+      .github/workflows/dogfood-precommit.yml carries its own removal condition,
+      a codegen that emits sdk/log >= 0.21.0, because that is where the fix
+      lands, and the acceptance goes UNUSED and says so once that happens.
+    confidence: high
+tags:
+  - dependencies
+  - supply-chain
+  - incident

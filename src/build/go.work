@@ -1,0 +1,16 @@
+go 1.26.2
+
+// Module-local workspace so `cd src/build && go test -tags unit_test ./...`
+// works: the repo-root go.work deliberately contains only src/internal
+// (Dagger modules are isolated — see the root go.work comment), which would
+// otherwise make Go refuse to run tests from this directory. `use .` scopes
+// the workspace to this module alone.
+use .
+
+replace go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc => go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.16.0
+
+replace go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp => go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.16.0
+
+replace go.opentelemetry.io/otel/log => go.opentelemetry.io/otel/log v0.16.0
+
+replace go.opentelemetry.io/otel/sdk/log => go.opentelemetry.io/otel/sdk/log v0.16.0

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- NuGet writes no dependency graph a scanner can read unless a project
+         opts in, and Trivy resolves .NET only from packages.lock.json /
+         packages.config / *.deps.json. Without this, `security.ScanSource`
+         resolves zero .NET packages here — the fixture would then exercise the
+         *unresolved-ecosystem* path (see src/security/ecosystems.go) instead of
+         the vulnerable-dependency path the comment below claims, and this
+         repository's own dogfood gate would fail on its own test data. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Intentionally old version with known CVE for vuln-scan fixture -->
+    <PackageReference Include="Newtonsoft.Json" Version="9.0.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Tests live in tests/ (own project); keep them out of the app build so
+         bare `dotnet publish -c Release -o publish` works (archive fixture). -->
+    <Compile Remove="tests/**/*.cs" />
+  </ItemGroup>
+</Project>

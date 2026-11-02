@@ -1,0 +1,5 @@
+# Review routing for pull requests. A team, never an individual: ownership
+# must survive a maintainer leaving. The team has to exist in the
+# context-and-oss organisation with write access to this repository, or GitHub
+# ignores the line without failing anything.
+*  @context-and-oss/cicd-maintainers

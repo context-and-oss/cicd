@@ -1,0 +1,163 @@
+kind: change-capsule
+schema: 1
+id: CAPS-036
+status: sealed
+intent: >
+  The quality module measures coverage per language and emits both halves of
+  the measurement: coverageByLanguage carries the percentages and
+  coverageLinesByLanguage carries the coverable-line counts those percentages
+  are of. main.go and byotest.go both populate the pair. Aggregation then threw
+  half of it away — buildCombined merges an explicit per-field whitelist, and
+  coverageLinesByLanguage had no clause, so the counts never reached
+  combined-evidence.json. schema.go claimed the field was present on the
+  combined envelope, and that comment had never been true.
+
+  Consequences ran in two directions. A consumer reading the combined envelope
+  could see that node is at 50% and Go at 100% but not how much code either
+  number describes, so it could not tell 10 lines of Go from 10,000. And
+  coveragePercent, the single repo-wide figure a customer-facing release report
+  actually prints, could only be assembled from the percentages alone — which
+  means an unweighted mean over languages. For a repo with 10 covered lines of
+  10 in Go and 500 of 1000 in node, that mean reads 75% where the truth is
+  50.5%. It is not a slightly wrong number; it is a number about no run that
+  ever happened, and it errs high in exactly the reports where erring high
+  matters.
+
+  So buildCombined merges the counts and derives coveragePercent as the
+  line-weighted total, and withholds it entirely when the weights cannot
+  support it: when any language reports a percentage with no count, when the
+  total coverable-line count is zero, or when no language reports coverage at
+  all. Absent is a state a consumer can render honestly as not measured. A
+  wrong number is not.
+
+  The scalar coverageLines had no merge clause either, and shipping the weighted
+  percentage without it would have left the combined envelope stating a fraction
+  with no denominator on the wire — 50% of 1010 lines and 50% of 10 are the same
+  number and not the same claim. It is now derived from the same computation and
+  under the same withholding condition, because it is not so much a second field
+  as the other half of one.
+impact:
+  visibility: external
+  benefit: >
+    combined-evidence.json now carries the per-language line counts a report
+    needs to weight or contextualise a coverage claim, and its repo-wide
+    coveragePercent is a real weighted figure rather than an average of
+    averages. Consumers that had no honest way to compute a single number get
+    one; consumers that were computing the unweighted mean themselves stop
+    being able to, because the weights are now on the wire.
+  compatibility: none
+  risk:
+    - >
+      coveragePercent on the combined envelope changes value for any
+      multi-language repo, without a schema change to signal it. A consumer
+      that pinned a threshold against the old unweighted figure will see it
+      move, and for the common shape — a small well-covered module beside a
+      large thinly-covered one — it moves down. That is the defect being fixed
+      surfacing as a behaviour change, but a consumer cannot distinguish the
+      two from the field alone.
+    - >
+      Both maps are last-writer-wins across envelopes, so a percentage from one
+      envelope could be paired with a line count from another and yield a
+      weighted figure describing neither. The merge takes both from the same
+      envelope and deletes any stale count when a percentage is overwritten
+      without one, which makes the pair unmergeable-apart by construction — but
+      it is an invariant held by the merge loop, not by the types. A future
+      field added in a separate loop reintroduces it silently.
+    - >
+      Withholding is a coarse instrument. One language missing its count
+      suppresses the repo-wide number for every language, including the ones
+      that reported completely, so a partial instrumentation gap presents as a
+      total measurement gap. Chosen over the alternative because the
+      alternative is worse in a way that is invisible; see d02.
+    - >
+      A consumer that had been summing coverageLinesByLanguage itself to get a
+      denominator now has two sources for the same number, and they disagree by
+      design in the incomplete case: the map still carries every count that was
+      reported, while coverageLines is absent. That is the honest shape, but a
+      consumer preferring its own sum gets exactly the partial total this change
+      refuses to publish, and nothing on the wire warns it.
+    - >
+      Nothing validates the envelope against src/internal/evidence/schema.json,
+      which is stale enough to reject fields already shipping. This change adds
+      no schema exposure it did not have, and no test would have caught the
+      omission that caused it — the guard here is the four unit tests added
+      alongside, each confirmed to fail against a mutation of the logic it
+      covers.
+decisions:
+  - id: d01
+    choice: derive the combined coveragePercent rather than copy it from an envelope
+    options:
+      - carry through the last module envelope percentage that was set (rejected)
+      - compute a line-weighted total across languages (chosen)
+    because: >
+      A per-module percentage describes that module's code, and last-writer-wins
+      would make the repo-wide figure depend on envelope ordering — the number
+      would change when a language was added or a job reordered, with nothing
+      in the output explaining why. Deriving it makes the figure a function of
+      the measurements rather than of the aggregation order, and puts the
+      weights that justify it in the same document.
+    confidence: high
+  - id: d02
+    choice: withhold coveragePercent instead of weighting the languages that have counts
+    options:
+      - weight the subset with counts and emit the result (rejected)
+      - emit nothing when any language lacks a count (chosen)
+    because: >
+      Weighting the subset silently redefines the number as being about part of
+      the repository while still presenting it as the whole. That is the more
+      dangerous failure precisely because it looks plausible — a consumer has
+      no field to check and no reason to doubt it. This mirrors the rule
+      quality.Check already holds at main.go:164, that a coverage gate which
+      could not measure must never read as satisfied, and the reason
+      dotnetreport.go refuses to treat a missing cobertura report as zero
+      coverage.
+    confidence: high
+  - id: d03
+    choice: merge the percentage and its line count as a pair from one envelope
+    options:
+      - merge each map in its own loop, as the surrounding fields do (rejected)
+      - merge both from the same envelope and drop stale counts (chosen)
+    because: >
+      Separate loops read as tidier and match the neighbouring merge clauses,
+      but with two last-writer-wins maps they permit a cross-envelope pair,
+      which produces a weighted number about no single run. Pairing them costs
+      a nested lookup and a delete; the alternative costs correctness in a way
+      no reader of the output could detect. Covered by a dedicated test that
+      asserts the cross-envelope pair cannot form.
+    confidence: high
+  - id: d05
+    choice: return the percentage and its denominator from one function
+    options:
+      - a second helper for the total, sharing the withholding predicate (rejected)
+      - sum coverageLinesByLanguage unconditionally at the call site (rejected)
+      - one function returning both figures (chosen)
+    because: >
+      Summing unconditionally recreates the trap d02 refuses. With go reporting a
+      percentage and no count and python reporting 5539, the sum is a denominator
+      for part of the repository published beside a percentage presented as the
+      whole, and a reader multiplying the two recovers a covered-line count that
+      is simply wrong. A second helper avoids that but leaves two places holding
+      one rule, and the failure mode of changing only one of them is again a
+      plausible-looking number. Returning both makes the pair inseparable at the
+      call site, which is this capsule's own second risk — an invariant held by a
+      loop rather than by the code shape — answered where it could be.
+    confidence: high
+  - id: d04
+    choice: correct the schema.go comments as part of this change
+    options:
+      - leave the field documentation as it stands (rejected)
+      - state the pairing invariant and the derivation at the type (chosen)
+      - restrict the edit to deleting the false present-on-combined claim (rejected)
+    because: >
+      The comment asserting the field was present on the combined envelope was
+      false, and a stale comment about a field being carried is what let the
+      omission sit unnoticed. Deleting the false half would have been enough to
+      stop it misleading, but the invariant that makes this change correct lives
+      in a merge loop a reader will not visit before adding a sibling field. The
+      type is where the next author looks.
+    confidence: medium
+tags:
+  - evidence
+  - coverage
+  - quality
+  - reporting

@@ -1,0 +1,151 @@
+kind: change-capsule
+schema: 1
+id: CAPS-025
+status: sealed
+intent: >
+  The change-intent gate graded a fraction of every artifact it read and
+  reported on all of it. extractYAMLText decided line by line, with two rules
+  that each destroyed prose without saying so. A line holding a colon but no
+  colon-space was dropped entirely, because the only continuation branch was
+  guarded by a test for the absence of a colon. A line holding a colon-space
+  anywhere was truncated to whatever followed the first one, because the
+  key-value branch matched prose as readily as it matched a key. Block-scalar
+  bodies were never tracked at all, so a capsule's paragraphs were fed through
+  both rules.
+
+  Measured across the twenty-four capsules in this repository, 29456 of 195714
+  bytes never reached a rule — 15.1 percent, and 13.0 percent of CAPS-024 in
+  particular. That is the artifact this change was found by. Its line reading
+  it lives in dotnetreport.go which is untagged, test.go is a unit_test build
+  constraint, was discarded over the colon inside the build constraint, so the
+  artifact named the two files it changed, the extractor deleted both, and
+  refs-infer-coupling reported that the artifact may describe a different
+  change — about an artifact describing exactly that change. The check ran red
+  on the pull request carrying it.
+
+  Colons in this repository's prose are not exotic and not avoidable. A Go
+  build constraint has one, a URL has one, an ERE character class has two, and
+  a sentence reporting a measurement has one. The previous behaviour required a
+  capsule to be written around its own extractor.
+
+  extract.go now tracks a block scalar by the indentation of the key that
+  opened it, which is YAML's own rule for where the body ends, and treats a
+  blank line inside the body as a paragraph break rather than a terminator.
+  isBlockScalarHeader and opensBlockScalar decide what opens a block, and
+  extract_test.go drives all three.
+impact:
+  visibility: internal
+  benefit: >
+    Every rule in the gate now grades the document the author wrote rather than
+    a mutilated version of it, so a capsule that names the files it changed is
+    seen to name them, and a weasel word or an unresolved marker sitting beside
+    a colon can no longer pass unread.
+  compatibility: fix
+  risk:
+    - >
+      The defect failed in both directions and only one of them was captured,
+      which is why the extractor is the fix rather than the rule that reported
+      it. The false failure is the see-the-file-the-artifact-named spec one
+      layer earlier, and its cheapest remedy is the worst possible one — the
+      quickest way to silence the finding was to delete the artifact's mentions
+      of unchanged files, the rejected options and the call sites left alone,
+      which that spec names as the most valuable sentences in a capsule. The
+      other direction was a false pass, unmeasured but structural, since the
+      placeholder and weasel-word rules never saw a dropped line either.
+    - >
+      The fix can only add text to what the rules see, so it could newly fire
+      the placeholder or weasel-word rules on artifacts that were green. Audited
+      before committing by running the four prose rules over all 24 capsules and
+      57 specs at both revisions. 0 findings before, 0 findings after, over 81
+      artifacts.
+    - >
+      And then it fired on this change's own two artifacts, which that audit did
+      not cover because they were being written while it ran. Both discussed the
+      placeholder rule by its hyphenated name, and the pattern is word-bounded,
+      so a hyphen supplies the boundary the Go identifier checkNoTBD does not.
+      Reworded rather than exempted. No text rule separates a prose mention of
+      the token from a real placeholder, so an exemption for a quoted or
+      backticked mention is a documented way to write a placeholder that never
+      fires. The consequence is permanent and is stated in the spec: an artifact
+      names this rule by what it does, not by the token it looks for.
+    - >
+      Two capsules lost bytes rather than gaining them, CAPS-010 by 6 and
+      CAPS-019 by 8, and that is correct. A folding indicator on its own line
+      used to be emitted as prose, because the key-value branch read the
+      indicator as the value; it is now recognised and skipped. The arithmetic
+      is checked rather than assumed — CAPS-010 recovered 8 bytes of prose and
+      stopped emitting 7 indicators worth 14 bytes.
+    - >
+      isBlockScalarHeader stays exact, and the reason is the fix's own hazard.
+      Matching a leading folding character loosely would read a line of prose
+      beginning with a quotation marker as a block header and swallow the
+      paragraph beneath it, which is the same silent loss arriving through the
+      repair. opensBlockScalar likewise refuses to treat a line of prose ending
+      in a colon as a key, and both refusals are asserted.
+    - >
+      Verified by negative control, with the new helpers left in place so the
+      control isolates the loop rather than the compile. The shipped loop over
+      the same fixture drops all three named files and turns two sentences into
+      one, producing it lives in nothing in it is reachable from the only suite
+      that runs without a Dagger session. The corruption reads as fluent prose,
+      which is why nothing caught it for twenty-four capsules.
+    - >
+      Deliberately not done: parsing the artifact with a YAML library. The gate
+      reads capsules and markdown specs with frontmatter, extractMarkdownText
+      reuses this function for the frontmatter half, and a real parser would
+      reject a malformed document where the gate's job is to grade whatever it
+      was given. What is fixed here is a line-based extractor that lied about
+      its own coverage, not the choice to be line-based.
+decisions:
+  - id: d01
+    choice: fix the extractor, not the rule that reported the finding
+    options:
+      - widen checkRefsCoupling again (rejected)
+      - reword the capsule to avoid colons (rejected)
+      - track block scalars by indentation in extract.go (chosen)
+    because: >
+      The rule was right and its input was wrong. Widening the rule would leave
+      every other rule grading a partial document, and the reverse-direction
+      false pass would stay untouched. Rewording the capsule would silence a
+      live defect affecting every future artifact, and the wording it asks for
+      is prose written around a parser.
+    confidence: high
+  - id: d02
+    choice: a blank line inside a block scalar is a paragraph break
+    options:
+      - close the block on a blank line (rejected)
+      - close it only on a line indented no deeper than its key (chosen)
+    because: >
+      Closing on a blank line would drop every paragraph after the first, which
+      is most of a capsule, and the loss would look exactly like the loss being
+      repaired. Indentation is YAML's own rule, so the extractor agrees with
+      the parser that check-capsules already runs over the same file.
+    confidence: high
+  - id: d03
+    choice: audit the whole corpus at both revisions before committing
+    options:
+      - fix and rely on the suite (rejected)
+      - run the prose rules over every artifact, before and after (chosen)
+    because: >
+      A fix that can only add text can only add findings, and a gate that
+      starts failing artifacts nobody edited would be a worse outcome than the
+      defect. Measuring it cost one throwaway test and produced the byte table
+      in this capsule. It also caught the two negative deltas, which would
+      otherwise have read as the fix losing prose.
+    confidence: high
+  - id: d04
+    choice: a spec under specs/, not the capsule alone
+    options:
+      - the capsule and the function header carry it (rejected)
+      - write specs/grade-the-whole-artifact.md (chosen)
+    because: >
+      A wrong verdict was produced in a real run, which is what specs/ is
+      reserved for, and see-the-file-the-artifact-named is the direct precedent
+      — the same rule, the same direction, a false failure rather than a false
+      pass. The measured byte table and the fluent-corruption control belong
+      somewhere a reader can find them from the doctrine list.
+    confidence: high
+tags:
+  - intent
+  - evidence
+  - cross-cutting
