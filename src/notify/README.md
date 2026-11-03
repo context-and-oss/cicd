@@ -5,13 +5,13 @@ Posts pipeline status notifications to Microsoft Teams, GitHub PRs, and Azure De
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.3
 ```
 
 ## Usage
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.2 call teams \
+dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.3 call teams \
   --webhook-url=$TEAMS_WEBHOOK \
   --summary=combined-evidence.json \
   --pipeline-name=precommit

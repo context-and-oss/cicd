@@ -1,46 +1,131 @@
-# Intent: reconcile the reviewed source candidate
+# Intent: bump version pins to v5.1.3
 
 ## Why
 
-A clean import must retain intended fixes and dependency updates rather than
-silently omit pending work or overwrite sanitised source with an older release
-snapshot. Because source reconciliation and release delivery are different
-operations, this record describes a proposed v5.1.2 candidate, not a tag,
-published version, completed review or completed destination bootstrap.
-A version already published for different source must not be reassigned,
-because consumers and caches can retain the earlier immutable tag contents.
+This release bumps every managed version pin in this repository from the
+previous tag to `v5.1.3`. The version is not chosen by hand:
+`git cliff --bumped-version` derives it from the conventional-commit history
+on `main`, and the release run fails rather than guessing when git-cliff
+cannot answer.
 
-## What is retained and changed
+The bump arrives as a pull request because release changes must satisfy
+the destination's effective pull-request, status-check and review policy.
+A direct workflow push does not establish those requirements or prove that
+they were satisfied. The delivery design and its verification boundary are
+written up in
+[`specs/release-by-pull-request.md`](/specs/release-by-pull-request.md), which is the
+document to read for the reasoning this file does not restate.
 
-Allocation-safe SBOM collection growth and its regression tests are already in
-the reviewed source. They are retained rather than reapplied or reimplemented.
-The runtime-only workflow-rule adaptation and previous privacy curation also
-remain intact.
+This artifact exists because the intent gate requires one for every change
+to `main`, and a release is a change to `main`. Widening the gate's
+machine-origin exemption to cover the release identity was rejected: it
+would hand the identity that can write to `.github/workflows/` a way past
+the gate, which is a larger trust decision than a pin bump warrants.
 
-The SARIF uploader in `.github/workflows/commit.yml`,
-`.github/workflows/dast.yml`, `.github/workflows/dogfood-precommit.yml` and
-`.github/workflows/precommit.yml` now uses the upstream v4.39.1 commit. This is
-an action dependency pin change, not removal of CodeQL or a change to workflow
-permissions, conditions or required checks.
+## What changed
 
-`scripts/bump-version.py` is deliberately unchanged. Its canonical all-scope
-operation rebuilds every managed module/workflow/template pin at proposed
-v5.1.2 on the current sanitised files. Reconstructing the proposal here, rather
-than copying an earlier release artifact, preserves the current provenance,
-privacy and review-policy corrections. `CHANGELOG.md` remains unreleased;
-`CONTRIBUTING.md` distinguishes proposed pins from a real bootstrap.
+Version pins only — 38 file(s) carrying a pin, plus this artifact. No
+source, module contract or workflow logic. The set is derived from the
+defended inventory in
+`scripts/repo-inventory.json` by `scripts/_pin_targets.py`, which is shared
+with the coherence gate so the bumper and the guard cannot drift apart.
 
-## Verification and delivery boundary
+**Workflow pins**
 
-Pin/command coherence and repository gates must pass alongside the allocation
-regressions. The upload action's commit is checked against its upstream version
-ref. Existing source execution behaviour is retained; local checks do not prove
-a hosted upload, destination protections, release availability or tag handoff.
+- `.github/workflows/commit-monorepo.yml`
+- `.github/workflows/commit.yml`
+- `.github/workflows/dast.yml`
+- `.github/workflows/precommit.yml`
 
-No old Git objects, issue/review history, Actions content, credentials or source
-archives belong to this reconciliation. No source push, tag, release, human
-approval, protected-branch bypass, repository rename or publication is asserted.
-The matching bootstrap version and destination execution still need explicit
-acceptance under the destination's effective policy. A successful CI check is
-not a required approving review, and an approved source proposal is not evidence
-that a release was delivered.
+**GitHub Actions templates**
+
+- `templates/github-actions/commit-monorepo.yml`
+- `templates/github-actions/commit.yml`
+- `templates/github-actions/dast.yml`
+- `templates/github-actions/precommit.yml`
+
+**Azure DevOps templates**
+
+- `templates/azure-devops/commit.yml`
+- `templates/azure-devops/dast.yml`
+- `templates/azure-devops/precommit.yml`
+- `templates/azure-devops/shared/commit.yml`
+- `templates/azure-devops/shared/precommit.yml`
+
+**Local templates**
+
+- `templates/local/scripts/cicd-prepush`
+
+**Module and repository docs**
+
+- `README.md`
+- `docs/explanation/migrating-to-cicd.md`
+- `docs/how-to-guides/adopt-incrementally.md`
+- `docs/how-to-guides/build-your-own-pipeline.md`
+- `docs/how-to-guides/mix-and-match-modules.md`
+- `docs/how-to-guides/scan-a-running-app.md`
+- `docs/how-to-guides/use-complete-pipeline.md`
+- `docs/how-to-guides/use-individual-modules.md`
+- `docs/how-to-guides/use-without-dockerfile.md`
+- `docs/reference/dast.md`
+- `docs/tutorials/getting-started.md`
+- `src/build/README.md`
+- `src/composites/commit/README.md`
+- `src/composites/dast/README.md`
+- `src/composites/precommit/README.md`
+- `src/cross-cutting/intent/README.md`
+- `src/cross-cutting/report/README.md`
+- `src/notify/README.md`
+- `src/quality/README.md`
+- `src/risk/README.md`
+- `src/security/README.md`
+- `src/stage-2/README.md`
+- `src/stage-4/README.md`
+
+**Other managed pins**
+
+- `CONTRIBUTING.md`
+
+## Proof
+
+Written and delivered by `cd.yml` through
+`scripts/ci/deliver-release-pins.sh`, which refuses to open this pull
+request unless every step below succeeded first:
+
+- `python3 scripts/bump-version.py 5.1.3` and the same command with
+  `--scope workflows`, so consumer-facing pins and workflow pins move
+  together. The workflow scope is separate because GitHub refuses a push
+  touching `.github/workflows/` unless the credential carries the
+  `workflow` scope, which no `permissions:` key can grant.
+- `python3 scripts/check-workflow-pins.py` — the release-blocking coherence
+  gate. It is what caught the historical `commit-archive@v1.0.0` skew,
+  where a pin advanced past a command that no longer existed. It runs
+  against the live tip of `main`, so a merge landing during the release
+  cannot slip past it.
+- the bump is re-derived against the live tip on each attempt rather than
+  rebased from a stale tree, so newly merged pinned content is bumped too.
+
+## Decisions
+
+**This file is machine-written.** The prose is a fixed template in
+`scripts/ci/write-release-intent.py`; only the version and the file list
+above vary, and the file list is read from the bump that actually happened
+rather than assumed. Nothing here is a human's judgement about this
+release — the judgement is in the commits being released and in the gates
+that ran before this pull request opened.
+
+**The tag is cut after this merges, not here.** Once this lands, CI runs on
+`main`, the release run finds the pins already at `v5.1.3`, and cuts the
+tag and the GitHub release with notes generated by git-cliff. So a merged
+pin bump with no tag means the run that should have tagged did not — the
+scheduled detector in `scripts/release_drift.py` reports that state rather
+than letting it pass as a repository with nothing to release.
+
+## Known residue
+
+This template does not know whether a human reviewed this pull request.
+Required approvals and other effective branch requirements must be
+satisfied under the destination's chosen policy. The release preflight
+checks its configured prerequisites; bypass eligibility and an armed
+auto-merge request neither supply approval nor prove a merge occurred.
+The automated checks listed above are not a substitute for required review.

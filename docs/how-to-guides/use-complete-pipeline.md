@@ -47,7 +47,7 @@ The copied `.github/workflows/commit.yml` works as-is:
 ```yaml
 jobs:
   commit:
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.3
     secrets:
       TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
       NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
@@ -64,7 +64,7 @@ that secret; the smallest caller names only what it uses:
 ```yaml
 jobs:
   commit:
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.3
     secrets:
       TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
 ```
@@ -191,7 +191,7 @@ dagger -m ./src/composites/precommit call run \
 From an application repo, use the released module address:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.2 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.3 call run \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -206,7 +206,7 @@ Use this when the source has a Dockerfile. The image is built and scanned but
 never published — each consumer repo owns its own deployment:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.2 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.3 call run \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \

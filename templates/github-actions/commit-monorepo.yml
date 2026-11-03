@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   evidence:
-    uses: context-and-oss/cicd/.github/workflows/commit-monorepo.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/commit-monorepo.yml@v5.1.3
     secrets:
       NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
       NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}

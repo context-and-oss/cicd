@@ -9,18 +9,18 @@ own deployment.
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3
 ```
 
 ## Usage
 
 ```bash
 # Build an image
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.2 call build \
+dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call build \
   --src=. --commit-sha=$SHA --branch=main --repo-url=$REPO_URL
 
 # Generate SBOM from a built image
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.2 call sbom \
+dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call sbom \
   --image=<container> --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=sbom-evidence.json
 ```

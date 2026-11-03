@@ -64,7 +64,7 @@ After — the reusable workflow does the heavy lifting:
 # .github/workflows/precommit.yml — the caller stub
 jobs:
   precommit:
-    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.3
     secrets:
       TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
       NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}

@@ -24,7 +24,7 @@ SHA="$(git rev-parse HEAD)"
 BRANCH="$(git branch --show-current)"
 REPO_URL="https://github.com/your-org/your-repo"
 
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.2 call check \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call check \
   --src . \
   --fail-on HIGH \
   --commit-sha "$SHA" \
@@ -32,7 +32,7 @@ dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.2 call check \
   --repo-url "$REPO_URL" \
   export --path ./out/evidence-quality.json
 
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src . \
   --fail-on HIGH \
   --commit-sha "$SHA" \
@@ -49,7 +49,7 @@ out scanning before adopting the complete composite.
 Run AI risk discovery on demand or on a schedule:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.2 call scan \
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call scan \
   --source . \
   export --path .
 ```
@@ -58,7 +58,7 @@ Review and commit `findings.json` and `decisions.json`, then make CI enforce the
 reviewed decisions:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.2 call validate \
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call validate \
   --source . \
   --fail-on HIGH \
   --commit-sha "$SHA" \
@@ -72,7 +72,7 @@ dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.2 call validate \
 Run source scanning before merge:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src . \
   --fail-on HIGH \
   --commit-sha "$SHA" \
@@ -84,7 +84,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
 Run image scanning after the image exists:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-image \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-image \
   --image "$IMAGE_REF" \
   --fail-on HIGH \
   --commit-sha "$SHA" \
@@ -98,7 +98,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-image \
 `stage-2` returns evidence files for quality and source security:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.2 call run \
+dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.3 call run \
   --src . \
   --fail-on HIGH \
   --commit-sha "$SHA" \
@@ -109,7 +109,7 @@ dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.2 call run \
 `stage-4` returns evidence files for build/SBOM and image security:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.2 call run \
+dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.3 call run \
   --src . \
   --fail-on HIGH \
   --commit-sha "$SHA" \
@@ -156,7 +156,7 @@ permissions:
 jobs:
   precommit:
     if: github.event_name == 'pull_request'
-    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.3
     secrets:
       TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
       NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
@@ -170,13 +170,13 @@ jobs:
 
       - name: Install Dagger
         # Checksum-verified download, no `curl install.sh | sh`.
-        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.2
+        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.3
         with:
           version: 0.20.8
 
       - name: Passive web scan
         run: |
-          dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-web \
+          dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
             --target https://staging.example.com \
             --full=false \
             --fail-on HIGH \
@@ -228,7 +228,7 @@ steps:
 
   - bash: |
       mkdir -p ./out
-      dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.2 call check \
+      dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call check \
         --src . \
         --fail-on HIGH \
         --commit-sha "$(Build.SourceVersion)" \
@@ -236,7 +236,7 @@ steps:
         --repo-url "$(Build.Repository.Uri)" \
         export --path ./out/evidence-quality.json
 
-      dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+      dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
         --src . \
         --fail-on HIGH \
         --commit-sha "$(Build.SourceVersion)" \

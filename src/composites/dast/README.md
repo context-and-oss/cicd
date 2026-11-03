@@ -20,7 +20,7 @@ Composes: [build](../../build) + [security](../../security) +
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3
 ```
 
 ## Usage

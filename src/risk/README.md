@@ -7,7 +7,7 @@ Returns findings as committed JSON artifacts; Validate gates CI against them.
 ## Install
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3
 ```
 
 ## Usage
@@ -30,7 +30,7 @@ dagger -m ./src/risk call scan --source . --llm-url http://my-proxy:4000 export 
 # Step 2 — review and edit decisions.json (set status: approved / accepted_risk / rejected)
 
 # Step 3 — validate in CI (reads committed findings.json + decisions.json)
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.2 call validate \
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call validate \
   --source=. --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=evidence.json

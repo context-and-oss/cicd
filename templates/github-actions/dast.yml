@@ -74,7 +74,7 @@ permissions:
 
 jobs:
   dast:
-    uses: context-and-oss/cicd/.github/workflows/dast.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/dast.yml@v5.1.3
     with:
       # ─── the cadence, resolved to a mode ──────────────────────────────
       # The cron strings live HERE, not in the reusable workflow, so this
