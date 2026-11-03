@@ -41,10 +41,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # App-token readback verifies PR state and exact-head CI after delivery.
+      pull-requests: read
+      checks: read
 
     steps:
       # Everything cheap and everything refusable goes first: this workflow
-      # provisions a Dagger engine and loads fifteen modules, and finding out
+      # provisions a Dagger engine and loads every module, and finding out
       # afterwards that the version was malformed or the PAT is missing wastes the
       # whole run for a reason knowable in the first second.
       - name: Guard — main, semver, and a usable release credential
@@ -85,9 +88,8 @@ jobs:
           # GITHUB_TOKEN as an http.<host>.extraheader, and an Authorization header
           # beats URL-embedded credentials — so it silently shadows the PAT set
           # below and pushes fall back to the default token, which has no
-          # `workflows` scope and cannot touch .github/workflows/. That shadowing
-          # is what failed the v1.2.0 release from cd.yml; this workflow had the
-          # same latent bug and never hit it only because it had not been used.
+          # `workflows` scope and cannot touch .github/workflows/. Disable persisted
+          # credentials so the explicitly selected write identity is not shadowed.
           persist-credentials: false
 
       - name: Configure git and the release credential
@@ -123,10 +125,8 @@ jobs:
 
           FAILED=0
 
-          # Drive this from the defended inventory, not a copied list — a
-          # hand-maintained list here previously omitted three modules
-          # (pages and intent among them), so a manual release could ship with those
-          # modules silently unverified.
+          # Drive this from the defended inventory, not a copied list that could
+          # omit modules and let a manual release ship them silently unverified.
           for MODULE in $(python3 scripts/inventory-query.py modules)
           do
             echo "Checking ./$MODULE ..."
@@ -155,22 +155,15 @@ jobs:
             exit 1
           fi
 
-      # The bump reaches main as a pull request, not as a push. This step used to
-      # end in `git push origin HEAD:main`, which two branch rulesets refuse
-      # structurally — one requires a pull request, the other requires the check
-      # named `ci` on the commit being pushed, and a commit created and pushed in
-      # one motion can carry neither. The same dead line in cd.yml is why 64
-      # commits went unreleased from 2026-07-30 onward.
-      #
-      # Shared with cd.yml deliberately: one implementation of the delivery, two
-      # thin callers. It also bumps BOTH scopes and runs the coherence gate, which
-      # the previous version of this workflow did not — it bumped consumer-facing
-      # pins only, so a manual release left every .github/workflows/ pin behind
-      # and the gate that would have caught it never ran.
+      # Deliver pins by pull request so effective branch/review policy applies;
+      # a direct push does not prove the required checks ran first. Share delivery
+      # with cd.yml so both callers bump consumer/workflow scopes and apply the
+      # same coherence gate before requesting a merge.
       - name: Deliver bumped pins by pull request
         id: deliver
         env:
           RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}
+          RELEASE_VERIFY_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           GH_TOKEN="$RELEASE_TOKEN" \
@@ -236,10 +229,9 @@ jobs:
           # Pins matching is not the same question as "is this the commit the
           # release was built for". A commit that touches no pin leaves them
           # matching while moving the tip, and the tag then covers work this
-          # release never weighed: v2.2.3 was built for a pins merge, cut on a
-          # `refactor!` that landed seconds later, and swallowed the major that
-          # commit should have triggered -- after which git-cliff saw nothing
-          # unreleased and the major could never be computed again.
+          # release never weighed: a later breaking change could land inside a
+          # patch tag, leaving no unreleased commit from which to derive its
+          # intended major bump.
           #
           # Only the pr-open path is checked here. On the released path the
           # delivery script already compared the live tip against the commit the
@@ -260,10 +252,8 @@ jobs:
 
       # Generated before the tag exists: `--unreleased` means "since the newest
       # tag", so running this after tagging would produce empty notes. Same
-      # generator as cd.yml rather than `gh release create --generate-notes`,
-      # which the previous version of this workflow used — two release runs
-      # producing differently formatted notes for the same repository is drift
-      # that only shows up on the releases page.
+      # generator as cd.yml: different note generators would produce different
+      # release records for equivalent delivery paths.
       - name: Generate release notes
         if: steps.deliver.outputs.result == 'pr-open' || steps.deliver.outputs.result == 'released'
         run: git cliff --unreleased --strip header > /tmp/release-notes.md

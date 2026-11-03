@@ -55,12 +55,10 @@ jobs:
   # names, and the run that repairs that is the CD run for the new tip -- which
   # never starts when CI on the new tip fails.
   #
-  # That is not hypothetical. On 2026-09-10 CI on the new tip died in
-  # `Install Dagger CLI` on `curl ... exit 35`, this gate skipped every job, and
-  # main sat with thirteen dangling @v3.2.2 pins while every check on every
-  # branch was green. release-drift.yml measures something else (commits ahead
-  # of the newest tag) behind a two-day threshold, so nothing would have said so
-  # for two days.
+  # A dependency-fetch failure can prevent the successor CI from running, so
+  # pins can remain unresolved even when the release job itself was skipped.
+  # Scheduled release-drift detection measures a different condition and may
+  # not report the abandoned handoff immediately.
   #
   # Deliberately gated on the failure rather than running always: on the success
   # path this run IS the successor, so it would have to exclude itself and would
@@ -138,9 +136,9 @@ jobs:
         run: |
           # A copy of this tree carries pins at some @vX.Y.Z; a clone that has
           # no tag reachable from HEAD is a copy nobody bootstrapped, not a
-          # repository before its first release. The old `... | sed || echo
-          # 0.0.0` bound the fallback to sed, so CURRENT came out EMPTY here
-          # and the bump below would rewrite every pin. Refuse instead; see
+          # repository before its first release. A pipeline fallback attached
+          # to the final command can leave CURRENT empty after an earlier failure
+          # and let the bump rewrite every pin. Refuse instead; see
           # CONTRIBUTING.md, "Bootstrapping a fresh copy".
           if ! tag=$(git describe --tags --abbrev=0 2>/dev/null) || [ -z "$tag" ]; then
             echo "::error::no v* tag is reachable from HEAD. A copy carrying pins must be bootstrapped with the tag those pins name before CD can release (CONTRIBUTING.md, 'Bootstrapping a fresh copy')."
@@ -149,9 +147,8 @@ jobs:
           CURRENT=${tag#v}
           # --unreleased is load-bearing. Without it cliff partitions history by
           # commit *date* and files a commit merged from a long-open branch under a
-          # release that already shipped, so a feature comes out as a patch — twice,
-          # permanently. The release-notes step below already passes it;
-          # these two asked the same binary over two different partitions of history.
+          # release that already shipped, so a feature can come out as a patch.
+          # The bump and release notes must use the same unreleased partition.
           if ! RAW_NEXT=$(git cliff --unreleased --bumped-version); then
             echo "git-cliff failed (see above for details)"
             exit 1
@@ -219,10 +216,8 @@ jobs:
 
           FAILED=0
 
-          # Drive this from the defended inventory, not a copied list — a
-          # hand-maintained list here previously omitted three modules
-          # (pages and intent among them), so a release could ship with those modules
-          # silently unverified.
+          # Drive this from the defended inventory, not a copied list that could
+          # omit modules and let a release ship them silently unverified.
           for MODULE in $(python3 scripts/inventory-query.py modules)
           do
             echo "Checking ./$MODULE ..."
@@ -256,6 +251,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # App-token readback verifies PR state and exact-head CI after delivery.
+      pull-requests: read
+      checks: read
     steps:
       # nosemgrep: yaml.github-actions.security.workflow-run-target-code-checkout.workflow-run-target-code-checkout
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -267,10 +265,9 @@ jobs:
           # GITHUB_TOKEN as an http.<host>.extraheader, and an Authorization header
           # beats URL-embedded creds — so it silently shadows the PAT we set below
           # and pushes fall back to the default token (a GitHub App with no
-          # `workflows` scope, which cannot touch .github/workflows/). The old
-          # code unset that header by hand; the v4->v6 checkout bump broke
-          # that dance and is what failed the v1.2.0 release. persist-credentials:
-          # false removes the whole class of bug — the PAT we embed via
+          # `workflows` scope, which cannot touch .github/workflows/). Relying on
+          # checkout's credential-storage implementation would make upgrades
+          # fragile. persist-credentials:false avoids that dependency; the PAT via
           # `git remote set-url` becomes the sole credential for every push here.
           persist-credentials: false
 
@@ -285,17 +282,14 @@ jobs:
       - name: Install git-cliff
         uses: ./.github/actions/install-git-cliff
 
-      # The bump reaches main as a pull request, not as a push. Two branch
-      # rulesets make a push impossible: one requires a pull request, the other
-      # requires the check named `ci` on the commit being pushed, and a commit
-      # created and pushed in one motion can carry neither. This step used to end
-      # in `git push origin HEAD:main` and died there on every release from
-      # 2026-07-30 onward — 64 commits went unreleased and v1.11.0 shipped by
-      # hand. See specs/deliver-release-pins-by-pull-request.md.
+      # Deliver pins by pull request so the destination's effective branch,
+      # review and required-CI policy applies. A direct push of a newly created
+      # commit cannot establish that those requirements ran first. See
+      # specs/deliver-release-pins-by-pull-request.md.
       #
       # The mechanics live in scripts/ci/deliver-release-pins.sh rather than here,
-      # because release.yml needs the identical delivery and two copies of release
-      # mechanics is a drift this repository has already been bitten by. That also
+      # because release.yml needs identical delivery; duplicate mechanics drift.
+      # That also
       # puts every branch of it under scripts/tests/test_deliver_release_pins.py,
       # which a `run:` body cannot be.
       #
@@ -312,6 +306,7 @@ jobs:
         id: push
         env:
           RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}
+          RELEASE_VERIFY_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.next-version.outputs.version }}
         run: |
           set -euo pipefail

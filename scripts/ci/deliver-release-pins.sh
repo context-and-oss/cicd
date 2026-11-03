@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
 # Deliver a release's version-pin bump to main by pull request.
 #
-# A release cannot be pushed to main in this repository. Two branch rulesets
-# govern it — one requires a pull request, the other requires the check named
-# `ci` on the commit being pushed — and a commit created and pushed in one
-# motion can carry neither. `cd.yml` and `release.yml` both ended in
-# `git push origin HEAD:main` and both died there on every release from
-# 2026-07-30 onward, which is how 64 commits went unreleased. See
-# specs/release-by-pull-request.md.
-#
-# So the bump arrives the way every other change to main arrives: on a branch,
-# as a pull request, merged by GitHub's auto-merge once `ci` passes. Both
-# workflows call THIS script rather than each carrying its own copy, because two
-# implementations of release mechanics is the drift this repository keeps getting
-# bitten by — release.yml's own hand-maintained module list already went stale
-# once, by its own comment.
+# Deliver pins on a branch and pull request so the destination's effective
+# review and required-CI rules apply. Auto-merge supplies no human approval.
+# Both release workflows share this implementation to avoid divergent bump,
+# validation and delivery mechanics. See specs/release-by-pull-request.md.
 #
 # Usage:  deliver-release-pins.sh <version> <source-workflow>
 #           version          semver without a leading v, e.g. 1.12.0
@@ -22,9 +12,11 @@
 #
 # Requires: cwd at the repository root; `origin` already carrying a credential
 # with Contents + Workflows write (every release rewrites .github/workflows/
-# pins, which no `permissions:` key can authorise); GH_TOKEN set for `gh`; and
-# the check named `ci` actually required on main — asserted rather than assumed,
-# because for four releases it was not (see scripts/release_gate.py).
+# pins, which no `permissions:` key can authorise); GH_TOKEN set to that write
+# identity for `gh`; RELEASE_VERIFY_TOKEN set to the workflow's GitHub App token
+# with Pull requests and Checks read for delivered-PR verification; and
+# the check named `ci` actually required on main — asserted rather than assumed
+# by scripts/release_gate.py.
 #
 # Result, on the last stdout line and appended to $GITHUB_OUTPUT when set:
 #   result=released    pins on main are already at the target — the caller tags
@@ -49,13 +41,10 @@ if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   exit 2
 fi
 
-# NOT release/v$VERSION. Both rulesets condition on
-# ["refs/heads/main", "refs/heads/release/**"], so a branch under that prefix
-# cannot be created by push either — a new branch carries no check, so the
-# attempt is refused with the same GH013 that blocks the release commit. The
-# first v1.11.0 attempt lost a round to exactly this, and nothing announces it:
-# the rejection names the rule but never says the branch name is what pulled the
-# ref into scope.
+# Use a delivery branch outside a potentially protected release/** namespace.
+# A new branch carries no prior check, so a creation rule can reject it even
+# though the intended final merge is a pull request. Read effective rules and
+# refusals rather than assuming a branch prefix is exempt.
 BRANCH="chore/release-v${VERSION}"
 TITLE="chore(release): bump version pins to v${VERSION}"
 
@@ -78,9 +67,8 @@ bump_and_validate() {
   python3 scripts/bump-version.py "$VERSION" --scope workflows
   # The release-blocking coherence gate: every managed pin must agree on one
   # version and every command a workflow or template calls must still exist in
-  # its module source. This caught the historical commit-archive@v1.0.0 skew,
-  # where a pin advanced past a command that had been deleted. It runs against
-  # the live tip of main below, so a merge landing mid-release cannot slip past.
+  # its module source. Run against live main below so a merge landing during
+  # delivery cannot leave new pinned content or a removed command unchecked.
   python3 scripts/check-workflow-pins.py
 }
 
@@ -90,16 +78,19 @@ pr_body=$(mktemp)
 preflight_log=$(mktemp)
 trap 'rm -f "$push_log" "$changed_list" "$pr_body" "$preflight_log"' EXIT
 
-# Everything the API can refuse goes before anything is written. This script
-# pushes a branch and only THEN talks to GitHub, so a credential that can write
-# Contents but not Pull Requests gets all the way through the bump, pushes a
-# release branch, and dies on the first `gh` call — leaving a branch on the
-# remote with no pull request against it. That reads like a half-delivered
-# release and has to be cleaned up by hand. It is not hypothetical: the first
-# real run of this script did exactly that, because CICD_RELEASE_TOKEN carried
-# Contents + Workflows write and no `pull_requests` permission at all, and the
-# only diagnostic was GitHub's own `Resource not accessible by personal access
-# token (repository.pullRequests)` — which names no remedy.
+# The Checks API's fine-grained auth contract supports App tokens, not
+# fine-grained personal access tokens. Require a verifier before writes; never fall back
+# to the writer if it is missing. Only the delivered-PR readback uses it, so the
+# branch preflight still asks about the actual release identity's capabilities.
+if [ -z "${RELEASE_VERIFY_TOKEN:-}" ]; then
+  echo "::error::RELEASE_VERIFY_TOKEN is required for delivered-PR verification. Pass the workflow GITHUB_TOKEN with Pull requests and Checks read. Nothing was pushed." >&2
+  exit 1
+fi
+
+# Probe pull-request access before a branch can be written. Contents/Workflows
+# write alone does not grant Pull requests access; discovering that only after
+# push would leave a release branch without a delivery PR. This read probe does
+# not prove that later mutating API calls or verifier requests will succeed.
 #
 # This asks the cheapest question needing the same permission. It proves READ
 # only: a fine-grained PAT grants Pull requests as read-only or read-and-write,
@@ -114,12 +105,9 @@ fi
 # The second preflight, and it asks whether this script's central claim is even
 # true. Everything below is built on `ci` being a required status check on main:
 # the pull request body says so, auto-merge depends on it, and the tag cut
-# afterwards inherits whatever trust it confers. On 2026-08-04 the org ruleset
-# lost that rule and nothing noticed — `gh pr merge --auto` merged four
-# consecutive release pull requests five seconds after opening them, and the
-# `ci` run on the first one *started* sixteen minutes later and went green. So
-# those commits read `ci: success` today, and a gate that was never consulted is
-# indistinguishable, after the fact, from a gate that passed.
+# afterwards inherits whatever trust it confers. Without a required check,
+# auto-merge can merge immediately and CI can become green only afterward.
+# That later success is not evidence that the merge was gated.
 #
 # This runs on every path, including the `released` path that only tags: a tag
 # cut from an ungated main is the same false pass one step further along. There
@@ -148,9 +136,9 @@ for attempt in 1 2 3 4 5; do
   # another may already have released a newer tag. Without this guard, the
   # superseded run would rewrite every pin downward and tag a lower version.
   # The same refusal cd.yml makes before computing a version: a clone with no
-  # reachable tag is an unbootstrapped copy, and the old `| sed || echo 0.0.0`
-  # left `latest` empty rather than 0.0.0, so the guard below compared against
-  # nothing and the bump rewrote every pin.
+  # reachable tag is an unbootstrapped copy. A fallback attached to a pipeline's
+  # final command can hide an earlier failure and leave latest empty; refuse
+  # instead of comparing against an unknown baseline.
   if ! tag=$(git describe --tags --abbrev=0 2>/dev/null) || [ -z "$tag" ]; then
     echo "::error::no v* tag is reachable from HEAD. A copy carrying pins must be bootstrapped with the tag those pins name before a release can be delivered (CONTRIBUTING.md, 'Bootstrapping a fresh copy')." >&2
     exit 1
@@ -170,31 +158,14 @@ for attempt in 1 2 3 4 5; do
     # run has merged (the normal path — this is the run that tags), or a re-run
     # whose pin delivery landed and whose tag push failed. Both want the tag.
     #
-    # Both want the tag on THIS commit, though, and the caller tags whatever HEAD
-    # is when it gets control — which the reset above just pointed at the live
-    # tip. While the tip equals the commit the version was computed for, those are
-    # the same thing. When main moved in between, they are not, and the tag lands
-    # on work no one weighed: v2.2.3 was computed for a pins merge and cut on a
-    # `refactor!` that merged fourteen seconds later, so a breaking change shipped
-    # inside a patch and the major it deserved could never be computed again --
-    # git-cliff saw nothing unreleased, because the tag had already swallowed it.
+    # The caller tags HEAD, now reset to live main. That must equal the commit
+    # whose changes determined this version; otherwise a later breaking change
+    # could be swallowed by a patch tag and disappear from unreleased history.
     #
-    # Refusing costs this version its number, and it is still the right call: a
-    # tag on the wrong commit is wrong in the published record and cannot be
-    # taken back. But it is not free, and this comment used to say it was --
-    # "nothing is lost but the gap in the sequence". That was false every single
-    # time. This branch is only reachable because the diff is empty, which means
-    # main's pins ALREADY carry v$VERSION, and the guard above has established
-    # that no tag at or above it exists. So refusing here always leaves main
-    # pinned to a version nothing named, and a consumer following main resolves
-    # it against a ref that was never created.
-    #
-    # What repairs that is the release run for the new tip -- which the warning
-    # below used to simply assert. On 2026-09-10 the assertion was false: CI on
-    # the new tip died on `curl ... exit 35` fetching the Dagger CLI, CD's gate
-    # skipped every job, and main carried thirteen dangling @v3.2.2 pins inside
-    # a CD run reporting success. So the claim is now checked rather than made.
-    # See specs/verify-the-release-handoff.md.
+    # Refusing the moved tip is necessary but leaves main pinned to an uncut
+    # version: this branch has no remaining pin diff and no tag at the target.
+    # A successor release run must repair that handoff. Verify it instead of
+    # assuming CI on the new tip can run. See specs/verify-the-release-handoff.md.
     tip=$(git rev-parse HEAD)
     if [ "$tip" != "$COMPUTED_SHA" ]; then
       echo "::warning::main moved from ${COMPUTED_SHA} to ${tip} while v${VERSION} was being delivered, so this run's version no longer accounts for everything on main. Nothing was tagged, and main is pinned to v${VERSION} until some later run cuts it."
@@ -220,10 +191,9 @@ for attempt in 1 2 3 4 5; do
         echo "::warning::could not establish whether anything is going to cut v${VERSION}; release-drift.yml asks again on its schedule." >&2
         exit 0
       fi
-      # Loud, and deliberately so: nothing is coming, main is broken now, and
-      # the check above has already printed which run stranded it and how to
-      # restart it. The alternative is what happened on 2026-09-10 -- a green
-      # run, a green branch, and a two-day wait for the scheduled sweep.
+      # Nothing is coming to repair the unresolved pins. The check names the
+      # stranded run and remedy; fail now rather than waiting for a scheduled
+      # sweep while this delivery appears healthy.
       exit 1
     fi
     echo "Pins already at v${VERSION}; nothing to deliver — the caller tags."
@@ -239,9 +209,8 @@ for attempt in 1 2 3 4 5; do
   artifact=$(python3 scripts/ci/write-release-intent.py "$VERSION" \
     --changed-from "$changed_list" --source "$SOURCE")
 
-  # Stage tracked modifications and the artifact by name. Never `git add -A`:
-  # release.yml used to, which swept untracked build junk (scripts/__pycache__)
-  # into the release commit.
+  # Stage tracked modifications and the artifact by name. `git add -A` could
+  # sweep untracked build output into the release commit.
   git add -u
   git add "$artifact"
   git commit -q -m "$TITLE"
@@ -262,7 +231,7 @@ for attempt in 1 2 3 4 5; do
       continue
     fi
     reason=$(awk '/^remote: - /{sub(/^remote: - /,""); gsub(/[[:space:]]+$/,""); if ($0 != "") { printf "%s%s", sep, $0; sep="; " }}' "$push_log")
-    echo "::error::push of ${BRANCH} was refused for a reason no retry can satisfy.${reason:+ Remote says: $reason} Check, in this order: (1) the branch name is outside refs/heads/release/** — that prefix is inside both branch rulesets, so a branch there cannot be created by push at all; (2) CICD_RELEASE_TOKEN still grants Contents + Workflows write, since every release rewrites .github/workflows/ pins." >&2
+    echo "::error::push of ${BRANCH} was refused for a reason no retry can satisfy.${reason:+ Remote says: $reason} Check, in this order: (1) inspect effective branch-creation rules — a prefix such as refs/heads/release/** may be protected; do not assume a branch-name change waives policy; (2) CICD_RELEASE_TOKEN still grants Contents + Workflows write, since every release rewrites .github/workflows/ pins." >&2
     exit 1
   fi
 
@@ -276,17 +245,17 @@ for attempt in 1 2 3 4 5; do
     {
       echo "Bumps every managed version pin to \`v${VERSION}\`, delivered by \`${SOURCE}\`."
       echo
-      echo "A release cannot be pushed to \`main\` here: one ruleset requires a pull"
-      echo "request and another requires the check named \`ci\`, and a commit created"
-      echo "and pushed in one motion can carry neither. See"
+      echo "Pins are delivered by pull request so effective branch and review"
+      echo "policy applies. The preflight verified that \`ci\` is required. See"
       echo "\`specs/release-by-pull-request.md\`."
       echo
       echo "The rationale artifact for this bump is \`${artifact}\`. The coherence gate"
       echo "(\`scripts/check-workflow-pins.py\`) passed against the live tip of \`main\`"
-      echo "before this branch was pushed — that is the review for a pins-only change."
+      echo "before this branch was pushed. That is automated evidence, not a human review."
       echo
-      echo "Auto-merge is armed. Once \`ci\` passes and this merges, the release run"
-      echo "that follows finds the pins already at the target and cuts the tag."
+      echo "Auto-merge is requested; it supplies no approval. This request still needs"
+      echo "\`ci\` and every applicable check and review requirement to be satisfied."
+      echo "After the merge, successful CI/CD must verify the pins before tagging."
     } > "$pr_body"
     gh pr create --base main --head "$BRANCH" --title "$TITLE" --body-file "$pr_body"
     existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
@@ -305,11 +274,10 @@ for attempt in 1 2 3 4 5; do
       ;;
   esac
 
-  # GitHub does the waiting: no idle runner, and the merge happens the moment
-  # `ci` passes. The review ruleset requires one approval on main; the release
-  # identity is a bypass actor on it, which the preflight above verified, so
-  # the request merges on `ci` alone. Enabling auto-merge on a pull request
-  # that already has it is a no-op, so a re-run is harmless.
+  # GitHub can wait for applicable CI and review requirements without an idle
+  # runner. Capability to bypass a rule is not approval to do so; requesting
+  # auto-merge neither supplies a review nor proves the merge will complete.
+  # Re-requesting auto-merge on an already-armed PR is a no-op.
   gh pr merge --auto --merge "$BRANCH"
 
   # Now prove what the body above asserts, because this command does not.
@@ -320,7 +288,10 @@ for attempt in 1 2 3 4 5; do
   # not: merged with nothing having examined it. That third one is what the
   # branch preflight above now prevents, and this is the assertion that catches
   # it if it is ever reachable by some other route.
-  python3 scripts/check-release-gate.py --delivered-pr "$existing"
+  # Scope the App credential to this read-only verifier. All subsequent PR
+  # writes still use the release identity; a failed readback remains a failure.
+  GH_TOKEN="$RELEASE_VERIFY_TOKEN" \
+    python3 scripts/check-release-gate.py --delivered-pr "$existing"
 
   # Close release pull requests for LOWER versions. The branch name carries the
   # version, so a target that moves (a `feat:` landing while a patch release is
