@@ -275,10 +275,11 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"::error::the release gate could not be verified: {err}. This is not "
             "a verdict that the gate is fine — a check that could not look must "
-            "never read as clean. If the release credential is a fine-grained "
-            "PAT, it needs read access to this repository's contents and "
-            "metadata to read branch rules, check runs and whether it may bypass "
-            "a review ruleset.",
+            "never read as clean. Branch preflight needs the release identity's "
+            "repository contents and metadata read access. Delivered-PR "
+            "verification needs a GitHub App token with Pull requests and Checks "
+            "read; in Actions use GITHUB_TOKEN, not a fine-grained PAT, for "
+            "that readback.",
             file=sys.stderr,
         )
         return 2

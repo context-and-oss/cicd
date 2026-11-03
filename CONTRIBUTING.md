@@ -195,12 +195,20 @@ The following are verification obligations, not claims that settings exist:
    forbids such bypasses is incompatible with that preflight as written;
    resolve the release design through review before using it, not by disabling
    required protections.
-3. **Release credential.** Verify `CICD_RELEASE_TOKEN` is available only where
-   needed, with contents, pull requests and workflows read/write and metadata
-   read. The preflight uses the repository rulesets endpoint's
-   `current_user_can_bypass`; it does not need organisation administration
-   write. Optional notification and feed credentials are needed only for runs
-   that use those services. No credential configuration is established here.
+3. **Separate write and verification credentials.** Verify `CICD_RELEASE_TOKEN`
+   is available only where needed, with contents, pull requests and workflows
+   read/write, plus actions and metadata read. The branch preflight uses that
+   release identity and the repository rulesets endpoint's
+   `current_user_can_bypass`; it does not need organisation administration write.
+   Both release workflows also pass `github.token` as `RELEASE_VERIFY_TOKEN`
+   with job-level pull requests and checks **read** for delivered-PR readback.
+   The [Checks API](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)
+   supports GitHub App tokens, not fine-grained PATs; do not seek a PAT Checks
+   permission or broaden the PAT to work around it. Direct callers of the
+   delivery script must supply the separate verifier too. No fallback to the
+   write token is used, and neither credential supplies a human approval.
+   Optional notification and feed credentials are needed only for runs that
+   use those services. No credential configuration is established here.
 4. **Preflight as the intended release identity.** Both checks must exit 0:
 
    ```bash

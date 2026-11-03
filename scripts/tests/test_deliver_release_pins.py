@@ -24,8 +24,8 @@ that fail silently if they regress:
 * a pull request authored by the Actions default token is refused, because one it
   creates triggers no workflow runs, so `ci` would never run and auto-merge would
   never fire — the request would sit open forever
-* `git add -u` plus the artifact by name, never `git add -A`, which is what swept
-  untracked build junk into release commits
+* `git add -u` plus the artifact by name, never `git add -A`, which could sweep
+  untracked build output into release commits
 * a superseded run neither bumps nor tags, so a concurrent release cannot be
   downgraded
 * pins already at the target report `released` so the caller tags — this is the
@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import subprocess
 import shutil
 import tempfile
@@ -125,6 +126,17 @@ exit 0
 
 GH_STUB = r"""#!/usr/bin/env bash
 printf '%s\n' "gh $*" >> "$CALL_LOG"
+# Fake credentials label auth roles without putting token values in logs.
+role=unknown
+case "${GH_TOKEN:-}" in
+  stub-token) role=writer ;;
+  stub-verify-token) role=verifier ;;
+esac
+printf '%s\n' "$role gh $*" >> "$AUTH_LOG"
+if [ "$role" = verifier ] && [ "$STUB_VERIFY_RC" != 0 ]; then
+  printf '%s\n' 'gh: Resource not accessible by integration (HTTP 403)' >&2
+  exit "$STUB_VERIFY_RC"
+fi
 case "$1 $2" in
   "pr list")
     # Three different listings: the permission preflight probes with --limit 1,
@@ -148,6 +160,11 @@ case "$1 $2" in
     esac
     exit 0 ;;
   "pr create")
+    previous=""
+    for arg in "$@"; do
+      if [ "$previous" = --body-file ]; then cp "$arg" "$STUB_STATE/pr_body"; fi
+      previous="$arg"
+    done
     touch "$STUB_STATE/pr_created"
     printf 'https://github.com/context-and-oss/cicd/pull/%s\n' "$STUB_NEW_PR"
     exit 0 ;;
@@ -169,7 +186,16 @@ case "$1 $2" in
           exit "$STUB_RULES_RC"
         fi
         printf '%s\n' "$STUB_RULES_JSON" ;;
-      *check-runs*) printf '%s\n' "$STUB_CHECK_RUNS_JSON" ;;
+      *check-runs*)
+        if [ "$role" != verifier ]; then
+          printf '%s\n' 'gh: Checks read requires the App fixture identity (HTTP 403)' >&2
+          exit 1
+        fi
+        if [ "$STUB_CHECKS_RC" != 0 ]; then
+          printf '%s\n' 'gh: Checks read denied (HTTP 403)' >&2
+          exit "$STUB_CHECKS_RC"
+        fi
+        printf '%s\n' "$STUB_CHECK_RUNS_JSON" ;;
     esac
     exit 0 ;;
 esac
@@ -199,6 +225,7 @@ class Harness:
         self.bin = self.root / "stubbin"
         self.state = self.root / "state"
         self.log = self.root / "calls.log"
+        self.auth_log = self.root / "auth-calls.log"
         for d in (self.bin, self.state, self.root / "scripts" / "ci", self.root / "specs"):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -237,6 +264,7 @@ class Harness:
         self.env.update(
             PATH="{}:{}".format(self.bin, os.environ["PATH"]),
             CALL_LOG=str(self.log),
+            AUTH_LOG=str(self.auth_log),
             STUB_STATE=str(self.state),
             STUB_LATEST_TAG=scenario.get("latest_tag", "v1.11.0"),
             STUB_HEAD_SHA=scenario.get("head_sha", "a" * 40),
@@ -257,6 +285,9 @@ class Harness:
             STUB_PR_STATE_JSON=scenario.get("pr_state", ARMED_PR),
             STUB_CHECK_RUNS_JSON=scenario.get("check_runs", GREEN_CHECK_RUNS),
             GH_TOKEN="stub-token",
+            RELEASE_VERIFY_TOKEN="stub-verify-token",
+            STUB_VERIFY_RC=str(scenario.get("verify_rc", 0)),
+            STUB_CHECKS_RC=str(scenario.get("checks_rc", 0)),
             GITHUB_OUTPUT=str(self.root / "github_output"),
         )
         self.env.pop("GITHUB_ACTIONS", None)
@@ -269,6 +300,9 @@ class Harness:
 
     def calls(self) -> list:
         return self.log.read_text().splitlines() if self.log.is_file() else []
+
+    def auth_calls(self) -> list:
+        return self.auth_log.read_text().splitlines() if self.auth_log.is_file() else []
 
     def outputs(self) -> str:
         p = self.root / "github_output"
@@ -415,6 +449,17 @@ class TestPullRequestDelivery(unittest.TestCase):
         self.assertIn("chore/release-v1.12.0", merge[0])
         self.assertIn("result=pr-open", proc.stdout)
         self.assertIn("result=pr-open", h.outputs())
+
+    def test_generated_body_does_not_substitute_checks_or_auto_merge_for_review(self):
+        h = harness()
+        proc = h.run()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        body = (h.state / "pr_body").read_text()
+        self.assertIn("automated evidence, not a human review", body)
+        self.assertIn("Auto-merge is requested; it supplies no approval", body)
+        self.assertIn("every applicable check and review requirement", body)
+        self.assertNotIn("that is the review", body)
+        self.assertNotIn("Auto-merge is armed.", body)
 
     def test_pull_request_targets_main(self):
         h = harness()
@@ -767,7 +812,7 @@ class TestSupersededPullRequests(unittest.TestCase):
 
 class TestStaging(unittest.TestCase):
     def test_stages_tracked_changes_and_the_artifact_by_name(self):
-        """`git add -A` swept untracked build junk into release commits."""
+        """`git add -A` could sweep untracked build output into a release commit."""
         h = harness()
         h.run()
         adds = [c for c in h.calls() if c.startswith("git add")]
@@ -802,10 +847,10 @@ class TestSupersede(unittest.TestCase):
         self.assertIn("result=pr-open", h.run(version="1.12.0").stdout)
 
     def test_no_reachable_tag_refuses_before_touching_anything(self):
-        """A fresh copy of the tree nobody tagged. The old line was
-        `git describe | sed 's/^v//' || echo 0.0.0`, where `||` binds to sed, so
-        `latest` came out empty, the supersede guard compared against nothing,
-        and the bump rewrote every pin from a base nobody chose."""
+        """A copy with no reachable tag has no chosen release baseline.
+        A fallback attached only to a pipeline's final command can hide an
+        earlier failure and leave latest empty; refuse rather than bump from
+        that unknown base."""
         h = harness(latest_tag="")
         proc = h.run(version="1.12.0")
         self.assertEqual(proc.returncode, 1, proc.stdout)
@@ -878,15 +923,13 @@ class TestMainMovedUnderTheRelease(unittest.TestCase):
 
 
 class TestTheStaleHandoffIsCheckedNotAsserted(unittest.TestCase):
-    """The stale branch is only reachable when main's pins ALREADY carry the
-    target and no tag at or above it exists, so it leaves main pinned to an
-    uncut version *every time*. The old code called that free — "nothing is
-    lost but the gap in the sequence" — and asserted, in a warning inside a run
-    reporting success, that the run for the new tip would tag instead.
+    """The stale branch leaves main pinned to an uncut version because its
+    pins already match and no tag at or above the target exists. A warning
+    cannot establish that a successor will repair it.
 
     If CI on the new tip cannot fetch the Dagger CLI, CD can skip delivery and
-    leave pins pointing at an uncut version. Checking the successor run avoids
-    mistaking that abandoned handoff for a healthy release."""
+    leave those pins unresolved. Check the successor instead of mistaking an
+    abandoned handoff for a healthy release."""
 
     def test_the_handoff_is_actually_checked(self):
         h = harness(diff_quiet_rc=0, head_sha="a" * 40, tip_sha="b" * 40)
@@ -902,7 +945,7 @@ class TestTheStaleHandoffIsCheckedNotAsserted(unittest.TestCase):
         self.assertIn("--exclude-run-id 1000000001", h.handoff_args())
 
     def test_a_handoff_nobody_will_discharge_fails_the_run(self):
-        """The whole point. A green CD run is what let main stay broken."""
+        """A green delivery must not conceal an abandoned release handoff."""
         h = harness(diff_quiet_rc=0, head_sha="a" * 40, tip_sha="b" * 40, handoff_rc=1)
         proc = h.run()
         self.assertEqual(proc.returncode, 1, proc.stdout)
@@ -1021,6 +1064,105 @@ class TestFailureModes(unittest.TestCase):
             cwd=str(h.root), env=h.env,
         )
         self.assertNotEqual(proc.returncode, 0)
+
+
+class TestVerificationCredentials(unittest.TestCase):
+    def test_missing_or_empty_verifier_stops_before_any_api_or_git_call(self):
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                h = harness()
+                if missing:
+                    h.env.pop("RELEASE_VERIFY_TOKEN")
+                else:
+                    h.env["RELEASE_VERIFY_TOKEN"] = ""
+                proc = h.run()
+                self.assertEqual(proc.returncode, 1, proc.stdout)
+                self.assertIn("RELEASE_VERIFY_TOKEN is required", proc.stderr)
+                self.assertIn("Checks read", proc.stderr)
+                self.assertEqual(h.calls(), [])
+                self.assertEqual(h.outputs(), "")
+
+    def test_only_delivered_pr_readback_uses_the_app_identity(self):
+        h = harness(open_release_prs=release_pr(23, "1.11.1"))
+        proc = h.run()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        calls = h.auth_calls()
+        reader = [c for c in calls if c.startswith("verifier ")]
+        self.assertEqual(len(reader), 1, calls)
+        self.assertIn("gh pr view", reader[0])
+        self.assertIn("--json state,mergedAt,autoMergeRequest,headRefOid,reviewDecision", reader[0])
+        for fragment in ("rules/branches/main", "gh pr list", "gh pr create", "gh pr merge", "gh pr close"):
+            self.assertTrue(any(c.startswith("writer ") and fragment in c for c in calls), calls)
+        self.assertFalse(any(c.startswith("unknown ") for c in calls), calls)
+
+    def test_immediate_merge_proof_reads_checks_with_app_not_writer(self):
+        h = harness(pr_state=merged_pr("2040-02-11T09:15:00Z"))
+        proc = h.run()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        checks = [c for c in h.auth_calls() if "check-runs" in c]
+        self.assertEqual(len(checks), 1, h.auth_calls())
+        self.assertTrue(checks[0].startswith("verifier gh api "), checks)
+        self.assertIn("commits/" + "1" * 40 + "/check-runs", checks[0])
+        self.assertIn("result=pr-open", proc.stdout)
+
+    def test_denied_verifier_fails_without_falling_back_to_the_writer(self):
+        h = harness(verify_rc=1)
+        proc = h.run()
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertIn("could not be verified", proc.stderr)
+        self.assertNotIn("result=pr-open", proc.stdout)
+        self.assertEqual(h.outputs(), "")
+        calls = h.auth_calls()
+        reader = [c for c in calls if c.startswith("verifier ")]
+        self.assertEqual(len(reader), 1, calls)
+        self.assertEqual(calls[-1], reader[0], calls)
+        self.assertFalse(any("gh pr close" in c for c in calls), calls)
+
+    def test_denied_checks_after_readable_pr_state_is_not_a_pass_or_writer_retry(self):
+        h = harness(pr_state=merged_pr("2040-02-11T09:15:00Z"), checks_rc=1)
+        proc = h.run()
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertIn("Checks read denied", proc.stderr)
+        self.assertIn("GitHub App token", proc.stderr)
+        self.assertIn("GITHUB_TOKEN", proc.stderr)
+        self.assertEqual(h.outputs(), "")
+        checks = [c for c in h.auth_calls() if "check-runs" in c]
+        self.assertEqual(len(checks), 1, h.auth_calls())
+        self.assertTrue(checks[0].startswith("verifier gh api "), checks)
+        for key in ("GH_TOKEN", "RELEASE_VERIFY_TOKEN"):
+            self.assertNotIn(h.env[key], proc.stdout + proc.stderr)
+
+    def test_neither_credential_value_reaches_output_or_command_arguments(self):
+        h = harness(pr_state=merged_pr("2040-02-11T09:15:00Z"))
+        proc = h.run()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        logs = proc.stdout + proc.stderr + "\n".join(h.calls() + h.auth_calls())
+        for key in ("GH_TOKEN", "RELEASE_VERIFY_TOKEN"):
+            self.assertNotIn(h.env[key], logs)
+
+    def test_both_workflow_callers_bind_app_readback_and_keep_pat_writes(self):
+        for workflow, job_id in (("cd.yml", "tag-and-release"), ("release.yml", "release")):
+            with self.subTest(workflow=workflow):
+                text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text()
+                job = re.search(
+                    r"(?ms)^  " + job_id + r":\n(.*?)(?=^  [\w-]+:|\Z)", text,
+                ).group(1)
+                permissions = re.search(
+                    r"(?m)^    permissions:\n((?:      [^\n]*\n)+)", job,
+                ).group(1)
+                self.assertEqual(dict(re.findall(r"(?m)^      ([\w-]+): (\w+)$", permissions)), {
+                    "contents": "write", "pull-requests": "read", "checks": "read",
+                })
+                delivery = job.split("      - name: Deliver bumped pins by pull request\n", 1)[1]
+                delivery = delivery.split("\n      - name:", 1)[0]
+                self.assertIn("RELEASE_VERIFY_TOKEN: ${{ github.token }}", delivery)
+                self.assertIn("RELEASE_TOKEN: ${{ secrets.CICD_RELEASE_TOKEN }}", delivery)
+                self.assertIn('GH_TOKEN="$RELEASE_TOKEN"', delivery)
+                self.assertIn("bash scripts/ci/deliver-release-pins.sh", delivery)
+                self.assertIn(
+                    'git remote set-url origin "https://x-access-token:${RELEASE_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"',
+                    job,
+                )
 
 
 class TestSecrets(unittest.TestCase):
