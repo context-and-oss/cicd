@@ -8,7 +8,7 @@ pre-commit or commit pipeline.
 Run linting and unit tests:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.2 call check \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call check \
   --src . \
   --include go \
   --fail-on HIGH \
@@ -27,7 +27,7 @@ detect supported languages. Supported values are `go`, `node`, `python`, and
 Run SAST, secrets detection, and filesystem vulnerability scanning:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -39,7 +39,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
 Scope a scan when a repository has generated or vendored content:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src . \
   --path services/api \
   --exclude vendor \
@@ -56,7 +56,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
 Scan a built container image:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-image \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-image \
   --image alpine:3.19 \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -70,7 +70,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-image \
 Run a passive OWASP ZAP baseline scan against a live target:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-web \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
   --target https://staging.example.com \
   --full=false \
   --fail-on HIGH \
@@ -87,7 +87,7 @@ Only use `--full=true` against environments you own and control.
 Validate committed `findings.json` and `decisions.json` in CI:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.2 call validate \
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call validate \
   --source . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -99,7 +99,7 @@ dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.2 call validate \
 Generate those files during a local review:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.2 call scan \
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call scan \
   --source . \
   export --path .
 ```
@@ -112,13 +112,13 @@ the decisions in CI.
 Build an OCI image and generate a CycloneDX SBOM:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.2 call build \
+dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call build \
   --src . \
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
   --repo-url "https://github.com/your-org/your-repo"
 
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.2 call sbom \
+dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call sbom \
   --image alpine:3.19 \
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
@@ -134,7 +134,7 @@ when calling `build`.
 Build a PR or build-summary comment from an evidence file:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.2 call github-build-comment \
+dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.3 call github-build-comment \
   --summary ./evidence-security.json \
   --pipeline-name security \
   export --path ./comment.md
@@ -145,7 +145,7 @@ envelope of its own, so export it — that document is the only place that says
 whether the card arrived:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.2 call teams \
+dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.3 call teams \
   --summary ./evidence-security.json \
   --pipeline-name security \
   --webhook-url env:TEAMS_WEBHOOK \
@@ -180,13 +180,13 @@ jobs:
 
       - name: Install Dagger
         # Checksum-verified download, no `curl install.sh | sh`.
-        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.2
+        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.3
         with:
           version: 0.20.8
 
       - name: Run source security scan
         run: |
-          dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+          dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
             --src . \
             --fail-on HIGH \
             --commit-sha "$GITHUB_SHA" \
@@ -249,7 +249,7 @@ steps:
 
   - bash: |
       mkdir -p ./out
-      dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+      dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
         --src . \
         --fail-on HIGH \
         --commit-sha "$(Build.SourceVersion)" \

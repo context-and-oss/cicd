@@ -17,7 +17,7 @@ Returns an evidence envelope.
 ## Install
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3
 ```
 
 ## Functions
@@ -36,13 +36,13 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2
 
 ```bash
 # Basic scan
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src=. --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=evidence.json
 
 # Scope to a subdirectory and exclude vendor/generated code
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src=. --path=src/api --exclude=vendor --exclude=generated \
   --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
@@ -124,7 +124,7 @@ dotnet restore --use-lock-file   # then commit the generated packages.lock.json
 If your packages come from a private feed, the restore needs to reach it:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src=. --fail-on=HIGH \
   --nuget-feed-url=$NUGET_FEED_URL --nuget-token=env:NUGET_TOKEN \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
@@ -145,7 +145,7 @@ declare a supported dependency ecosystem, and probe failures remain errors.
 ### scan-image
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-image \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-image \
   --image=<container> --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=evidence.json
@@ -164,7 +164,7 @@ reports. It is wired into no composite; call it directly, on whatever schedule
 your release process needs.
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-sbom \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-sbom \
   --sbom=sbom.cdx.json --fail-on=NONE \
   --commit-sha=$RELEASE_SHA --branch=main --repo-url=$REPO_URL \
   export --path=vuln-current.json
@@ -193,14 +193,14 @@ that sends attack payloads — only run against environments you own and control
 
 ```bash
 # Passive baseline scan (safe for staging/production)
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-web \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
   --target=https://staging.example.com \
   --full=false --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=web-evidence.json
 
 # Active full scan (attack payloads — test environments only)
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 call scan-web \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
   --target=https://test.example.com \
   --full=true --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \

@@ -145,14 +145,14 @@ jobs:
 
       - name: DAST
         run: |
-          dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.2 call scan \
+          dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3 call scan \
             --app=service --service=tcp://localhost:5000 \
             --port=5000 --health-path=/health \
             --mode=baseline --fail-on=HIGH \
             --commit-sha=$GITHUB_SHA --branch=${GITHUB_REF_NAME} \
             --repo-url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY \
             export --path=./dast-scan.json
-          dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.2 call package \
+          dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3 call package \
             --evidence=./dast-scan.json \
             --commit-sha=$GITHUB_SHA --branch=${GITHUB_REF_NAME} \
             --repo-url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY \

@@ -251,7 +251,7 @@ claim they passed while the repository was private.
 - [ ] **One reviewed parentless import commit**, tagged and released at the
   approved bootstrap version its pins name; no old Git/GitHub state imported.
 - [ ] **Anonymous module fetch — after publication.** From a machine with no GitHub credentials,
-  `dagger -m github.com/context-and-oss/cicd/src/security@v5.1.2 functions`
+  `dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 functions`
   (the version the pins name) resolves the tag.
 - [ ] **A pull request from a fork — after publication** runs `ci` without secrets and reports its
   status.

@@ -10,13 +10,13 @@ Composes: [stage-4](../../stage-4) + [cross-cutting/evidence](../../cross-cuttin
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.3
 ```
 
 ## Usage
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.2 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.3 call run \
   --src=. --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   --pipeline-name=commit \

@@ -67,7 +67,7 @@ the migration is the changed path plus one added line:
 ```yaml
 jobs:
   commit: # was: commit-archive
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.3
     with:
       artifact: archive # the added line
       build-cmd: "npm ci && npm run build" # unchanged
@@ -162,7 +162,7 @@ Copy `templates/github-actions/commit.yml` into your repo's
 ```yaml
 jobs:
   commit:
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.3
     with:
       artifact: archive
       build-cmd: "npm ci && npm run build"
@@ -223,7 +223,7 @@ via two inputs in your caller stub:
 ```yaml
 jobs:
   precommit:
-    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.3
     with:
       test-cmd: "npm ci && npm run test:coverage"
       coverage-path: coverage/coverage-summary.json
@@ -267,7 +267,7 @@ Or through the reusable workflow:
 ```yaml
 jobs:
   precommit:
-    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.2
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.3
     with:
       test-legs: |
         [{"label":"web","language":"node","cmd":"npm ci && npm run test:coverage",

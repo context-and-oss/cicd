@@ -9,13 +9,13 @@ Composes: [stage-2](../../stage-2) + [cross-cutting/evidence](../../cross-cuttin
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.3
 ```
 
 ## Usage
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.2 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.3 call run \
   --src=. --include=go --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   --pipeline-name=precommit \
@@ -39,7 +39,7 @@ no scan, because it manufactures assurance.
 So every caller has to read the verdict itself:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.2 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.3 call run \
   ... export --path ./audit-evidence
 
 passed=$(jq -r '.passed' ./audit-evidence/combined-evidence.json)

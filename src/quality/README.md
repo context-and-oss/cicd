@@ -8,13 +8,13 @@ Supports Go, Node.js, Python, and .NET. Returns an evidence envelope.
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3
 ```
 
 ## Usage
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.2 call check \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call check \
   --src=. --include=go --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=evidence.json

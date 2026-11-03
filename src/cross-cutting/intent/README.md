@@ -14,7 +14,7 @@ an opt-in gate that is off produces exactly what a gate that passed produces.
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3
 ```
 
 ## Functions
@@ -28,7 +28,7 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.2
 ```bash
 # Gate one pull request: scope to its diff, fail on any error-severity finding
 git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ origin/main...HEAD > /tmp/change.diff
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.2 call check \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3 call check \
   --src . \
   --diff /tmp/change.diff \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -37,7 +37,7 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.2 call c
   export --path=./intent-evidence.json
 
 # Audit every artifact in the tree (no diff): the fallback for a push with no base
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.2 call check \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3 call check \
   --src . \
   --commit-sha local --branch main --repo-url https://example.com \
   export --path=./intent-evidence.json

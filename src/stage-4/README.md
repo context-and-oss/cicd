@@ -8,13 +8,13 @@ Composes: [build](../build) + [security](../security)
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.3
 ```
 
 ## Usage
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.2 call run \
+dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.3 call run \
   --src=. --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL
 ```

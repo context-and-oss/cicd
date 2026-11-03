@@ -9,7 +9,7 @@ share the same evidence envelope schema.
 ## Install
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.2
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3
 ```
 
 ## Functions
@@ -22,17 +22,17 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.2
 
 ```bash
 # Extract SARIF from a scan-source evidence file (e.g. for GitHub Advanced Security upload-sarif)
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.2 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3 call report \
   --evidence ./evidence.json \
   export --path=./results.sarif
 
 # Extract CycloneDX from a vuln scan or SBOM evidence file
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.2 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3 call report \
   --evidence ./vuln-evidence.json \
   export --path=./vuln.cdx.json
 
 # Extract ZAP JSON from a scan-web evidence file
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.2 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3 call report \
   --evidence ./web-evidence.json \
   export --path=./zap-report.json
 ```
