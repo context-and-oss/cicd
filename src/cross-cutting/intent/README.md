@@ -17,7 +17,7 @@ an opt-in gate that is off produces exactly what a gate that passed produces.
 Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/cross-cutting/intent` from its root.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.4
 ```
 
 ## Functions
@@ -33,7 +33,7 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3
 set -eu
 rm -f ./intent-evidence.json /tmp/change.diff
 git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ origin/main...HEAD > /tmp/change.diff
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3 call check \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.4 call check \
   --src . \
   --diff /tmp/change.diff \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -43,7 +43,7 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3 call c
 jq -e '.passed == true' ./intent-evidence.json >/dev/null || exit 1
 
 # Inspection only, not a CI gate: audit every artifact without a diff
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3 call check \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.4 call check \
   --src . \
   --commit-sha local --branch main --repo-url https://example.com \
   export --path=./intent-evidence.json

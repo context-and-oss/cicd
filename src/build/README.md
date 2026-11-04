@@ -11,7 +11,7 @@ own deployment.
 Remote references require authorized read access while the repository is private; anonymous fetch is conditional on a future explicitly approved public distribution. An authorized read-only source checkout can instead use `-m ./src/build` from its root. Source access and package-feed credentials are separate.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/build@v5.1.4
 ```
 
 ## Usage
@@ -20,7 +20,7 @@ This is build inspection, not a CI evidence gate. Set `SHA` and `REPO_URL` first
 
 ```bash
 # Build an image
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call build \
+dagger -m github.com/context-and-oss/cicd/src/build@v5.1.4 call build \
   --src=. --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL"
 ```
 

@@ -63,13 +63,13 @@ Install Dagger, then call the module:
       - uses: actions/checkout@v4
       - name: Install Dagger
         # Checksum-verified download, no `curl install.sh | sh`.
-        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.3
+        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.4
         with:
           version: 0.20.8
       - name: cicd security scan (shadow)
         run: |
           rm -f ./evidence-security.json
-          dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
+          dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-source \
             --src . --fail-on HIGH \
             --commit-sha "$GITHUB_SHA" \
             --branch "$GITHUB_REF_NAME" \
@@ -85,7 +85,7 @@ Azure DevOps — add a step to your `azure-pipelines.yml`:
   - bash: |
       set -euo pipefail
       rm -f ./evidence-security.json
-      dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
+      dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-source \
         --src . --fail-on HIGH \
         --commit-sha "$(Build.SourceVersion)" \
         --branch "$BUILD_SOURCEBRANCHNAME" \

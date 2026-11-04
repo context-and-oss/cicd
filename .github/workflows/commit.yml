@@ -4,7 +4,7 @@
 # Invoked by consumer repos via:
 #   jobs:
 #     commit:
-#       uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.3
+#       uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.4
 #       with:
 #         artifact: container   # container | archive | none
 #       secrets:
@@ -704,7 +704,7 @@ jobs:
 
           # Never merge a fresh export with an earlier candidate or verdict.
           rm -rf -- ./audit-evidence
-          run_with_disk_guard dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.3 call run \
+          run_with_disk_guard dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.4 call run \
             --src . \
             --artifact "$ARTIFACT" \
             --fail-on "$FAIL_ON" \
@@ -955,7 +955,7 @@ jobs:
       - name: Generate evidence page
         if: steps.preflight.outputs.skip != 'true'
         run: |
-          dagger -m github.com/context-and-oss/cicd/src/cross-cutting/pages@v5.1.3 call build \
+          dagger -m github.com/context-and-oss/cicd/src/cross-cutting/pages@v5.1.4 call build \
             --evidence ./audit-evidence/combined-evidence.json \
             export --path ./pages-dist
 
