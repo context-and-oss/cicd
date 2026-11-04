@@ -4,6 +4,14 @@ Build a custom pipeline when the standard composites are close, but your team
 needs a different order, a different gate, extra deployment logic, or another
 reporting channel.
 
+Read [availability and source access](../../README.md#availability-and-source-access)
+first: this repository is currently private. Remote installs and installer actions
+require separately authorized access. For private local development, install from
+module paths in a separate authorized checkout; do not copy credentials or use a
+writer token. Anonymous imports apply only after authorized publication and verified
+release availability. Default SAST rules have
+[Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+
 ## Start with a local Dagger module
 
 Create a module in the application repository:
@@ -22,6 +30,7 @@ dagger install github.com/context-and-oss/cicd/src/security@v5.1.3
 dagger install github.com/context-and-oss/cicd/src/risk@v5.1.3
 dagger install github.com/context-and-oss/cicd/src/cross-cutting/evidence@v5.1.3
 dagger develop
+cd ..  # return to the application root for the ./ci commands below
 ```
 
 ## Compose module calls
@@ -80,14 +89,21 @@ func (m *AppCi) PrGate(
 Run it:
 
 ```bash
+rm -rf ./audit-evidence &&
 dagger -m ./ci call pr-gate \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
   --repo-url "https://github.com/your-org/your-repo" \
-  export --path ./audit-evidence
+  export --path ./audit-evidence &&
+jq -e '.passed == true' ./audit-evidence/combined-evidence.json > /dev/null
 ```
+
+Exporting is not grading: the fresh combined envelope must pass. Preserve warnings,
+errors and per-source scope/examined/rule metadata; a passing verdict does not mean
+complete examination. Retain existing protections until equivalent scope and
+blocking policy are configured and verified.
 
 ## Decide where the custom logic belongs
 
@@ -173,6 +189,8 @@ jobs:
 
       - name: Run custom PR gate
         run: |
+          set -euo pipefail
+          rm -rf ./audit-evidence
           dagger -m ./ci call pr-gate \
             --src . \
             --fail-on HIGH \
@@ -196,7 +214,8 @@ jobs:
 
 Once the approved namespace is public and the referenced release exists, these
 modules can be imported without a git token. Neither availability nor a release
-is established by this import candidate. A private module needs its own git credential.
+is established by this import candidate. Private-source access must be separately
+authorized and read-only; a feed or comment credential is not module authorization.
 If you want PR comments or job-summary markdown, import `notify` and add a
 generated comment file to the returned directory, following the composite modules.
 
@@ -226,6 +245,8 @@ steps:
   # nobody read.
 
   - bash: |
+      set -euo pipefail
+      rm -rf ./audit-evidence
       dagger -m ./ci call pr-gate \
         --src . \
         --fail-on HIGH \
@@ -243,6 +264,10 @@ steps:
     displayName: Upload evidence
     condition: always()
 ```
+
+For Azure Repos, an owner must configure and verify required target-branch
+**Build validation** for this pipeline; YAML `pr:` alone does not establish it.
+GitHub-hosted source uses YAML PR triggers subject to platform settings.
 
 That keeps the pipeline behavior testable locally and portable between CI
 systems.

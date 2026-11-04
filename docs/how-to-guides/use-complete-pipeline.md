@@ -8,7 +8,13 @@ flow with evidence, comments, artifacts, and optional Teams notifications.
 | CI moment | Module | What it runs |
 |-----------|--------|--------------|
 | Pull requests and non-main branches | `composites/precommit` | `quality`, `security scan-source`, `risk validate`, evidence wrapping, PR/summary output |
-| Main branch commits | `composites/commit` | `build`, `sbom`, `security scan-image`, evidence wrapping, summary output |
+| Main branch commits | `composites/commit` | Repository source gate (`quality`, source security, risk validation), then explicit `container`, `archive` or `none` artifact tail, evidence wrapping and summary output |
+
+See [archive/none shapes](use-without-dockerfile.md) for non-container repositories.
+[Application mode](../../templates/github-actions/commit-monorepo.yml) uses explicit
+app boundaries and check legs rather than repository-wide discovery; its dependency
+vulnerability, dependency licence and SBOM assessments are currently deferred.
+Do not interpret its passing result as repository-wide or dependency assurance.
 
 Both pipelines run Semgrep with default rules fetched at run time from
 `semgrep/semgrep-rules`, which are under the **Semgrep Rules License v1.0**,
@@ -31,8 +37,14 @@ cp templates/github-actions/precommit.yml .github/workflows/precommit.yml
 cp templates/github-actions/commit.yml .github/workflows/commit.yml
 ```
 
-The cicd modules are fetched from the public repository, so no secret is
-required to run either workflow. The optional secrets:
+The repository is currently private. These remote workflow/action coordinates
+require authorized platform access and are not generally available public
+integrations. See [availability and source access](../../README.md#availability-and-source-access)
+for authorized read-only checkout/local-module use. Anonymous fetches apply only
+after explicit publication authorization and release availability verification.
+Package-feed and notification credentials do not grant module-source access.
+
+Optional secrets (omit them unless needed):
 
 | Secret | Purpose |
 |--------|---------|
@@ -42,24 +54,20 @@ required to run either workflow. The optional secrets:
 
 The commit workflow builds and scans the image but never publishes it — each
 consumer repo owns its own deployment, so no registry credentials are needed.
-The copied `.github/workflows/commit.yml` works as-is:
+Once workflow access is established, a minimal caller is:
 
 ```yaml
 jobs:
   commit:
     uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.3
-    secrets:
-      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
-      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
-      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+    # No optional secrets by default.
 ```
 
 ### Why the secrets are mapped by name
 
 `secrets: inherit` would hand the reusable workflow every secret the caller
-can see. The map above passes **only the keys it names**, and only keys the
-reusable workflow declares can be listed at all. Delete a line to withhold
-that secret; the smallest caller names only what it uses:
+can see. When a feature needs a secret, map **only the keys it needs**; only keys
+the reusable workflow declares can be listed. For example, opting into Teams:
 
 ```yaml
 jobs:
@@ -71,6 +79,22 @@ jobs:
 
 An optional secret left out of the map resolves empty inside the reusable
 workflow, and the Teams leg then reports `SKIPPED` rather than failing.
+
+### Coverage baseline and enforcement
+
+The precommit caller excludes main pushes. Its baseline fetch looks for
+`precommit-evidence-*` in successful default-branch runs of that **same caller
+workflow**; commit workflow artifacts do not seed it. Configure a default-branch
+push path in that same precommit caller, with the same coverage-producing inputs,
+before relying on its ratchet. Verify a successful seed artifact, the next PR's
+baseline selection, and a controlled regression failure. The shipped starter pair
+does not establish this automatically. Commit coverage measurement is supported
+with `test-cmd` plus `coverage-path` or per-leg `coveragePath`; its ratchet is
+separately opt-in through `coverage-gate`.
+
+Retain minimum-coverage, blocking licence, full-history secrets and live-verification
+protections until equivalent scope and enforcement are configured and verified.
+A relative ratchet is not a minimum; default licence warn mode is not blocking.
 
 ## Azure DevOps
 
@@ -100,8 +124,14 @@ Create the variables described at the top of each template. At minimum:
 |----------|--------------|---------|
 | `ADO_ORG` | precommit PR comments | Azure DevOps organization name |
 
-Enable "Allow scripts to access the OAuth token" if you want Azure DevOps PR
-comments.
+For **Azure Repos**, an owner must configure a required target-branch
+**Build validation** policy selecting the precommit pipeline. YAML `pr:` does not
+establish Azure Repos PR validation. Verify an actual PR-triggered run, the required
+policy's blocking behavior, and comment delivery separately. For GitHub-hosted
+source in Azure Pipelines, YAML PR triggers apply subject to platform settings.
+
+For comments, expose `System.AccessToken` and grant the build service permission
+to contribute to pull requests; see [authentication](set-up-azure-devops-auth.md).
 
 ### Use shared templates from GitHub
 
@@ -136,7 +166,7 @@ resources:
       type: github
       name: context-and-oss/cicd
       endpoint: github-shared-pipelines
-      ref: refs/tags/v0.1.0
+      ref: refs/tags/v5.1.3
 
 extends:
   template: templates/azure-devops/shared/precommit.yml@cicdTemplates
@@ -157,7 +187,7 @@ resources:
       type: github
       name: context-and-oss/cicd
       endpoint: github-shared-pipelines
-      ref: refs/tags/v0.1.0
+      ref: refs/tags/v5.1.3
 
 extends:
   template: templates/azure-devops/shared/commit.yml@cicdTemplates
@@ -166,9 +196,11 @@ extends:
 Keep template refs pinned to a released tag. Move projects to a newer tag
 deliberately instead of tracking `main`.
 
-The GitHub service connection gives Azure DevOps permission to fetch the YAML
-template repository. The Dagger modules themselves are fetched from the public
-cicd repository inside the run and need no credential.
+The GitHub service connection authorizes fetching the YAML template repository.
+It does not automatically authorize Dagger's separate module fetch inside the run.
+Establish separately authorized read-only module-source access, or use local module
+paths from an authorized separate checkout; never substitute a writer credential.
+Verify the pinned shared-template files and their module dependencies before use.
 
 When the service connection is not granted to all pipelines, the first run may
 pause and ask an Azure DevOps admin to permit that pipeline to use the
@@ -188,16 +220,19 @@ dagger -m ./src/composites/precommit call run \
   export --path ./out/precommit-evidence
 ```
 
-From an application repo, use the released module address:
+The fixture command above is inspection only. From an application repo, once
+module-source access is established, export and grade a fresh bundle:
 
 ```bash
+rm -rf ./audit-evidence &&
 dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.3 call run \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
   --repo-url "https://github.com/your-org/your-repo" \
-  export --path ./audit-evidence
+  export --path ./audit-evidence &&
+jq -e '.passed == true' ./audit-evidence/combined-evidence.json > /dev/null
 ```
 
 ## Run the complete commit pipeline locally
@@ -206,13 +241,15 @@ Use this when the source has a Dockerfile. The image is built and scanned but
 never published — each consumer repo owns its own deployment:
 
 ```bash
+rm -rf ./audit-evidence &&
 dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.3 call run \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
   --repo-url "https://github.com/your-org/your-repo" \
-  export --path ./audit-evidence
+  export --path ./audit-evidence &&
+jq -e '.passed == true' ./audit-evidence/combined-evidence.json > /dev/null
 ```
 
 Add `--dockerfile` when the Dockerfile does not sit at the source root, and
@@ -246,8 +283,9 @@ Use `--fail-on` to decide which severities fail the pipeline:
 
 `NONE` suppresses **findings**, not non-runs: a step that could not execute still
 reports `passed: false` at every threshold, with the reason in `errors[]`. A green
-`NONE` run therefore means the pipeline did the work and you chose not to gate on
-what it found — not merely that nothing came back.
+`NONE` run therefore does not mean clean or complete examination. Inspect warnings,
+suppressions and per-source scope, examined and rules metadata even when `passed`
+is true; partial or unrequested checks may not fail the verdict.
 
 ## Related
 

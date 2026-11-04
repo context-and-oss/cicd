@@ -26,8 +26,9 @@ What cicd explicitly does **not** take over:
 - **Deployment.** cicd builds and scans an artifact; it never publishes or
   deploys. Pushing the image, importing the Dataverse solution, shipping the
   zip — yours.
-- **Your curated lint/quality config.** cicd runs a *baseline* linter. Your
-  project-specific ESLint ruleset or SonarQube trend dashboard stays yours.
+- **Your curated lint/quality config.** Native lint legs use supported
+  repository configuration (including your own ESLint); cicd does not recreate
+  every existing quality gate or trend dashboard.
 - **Version bumping** of your app or packages. cicd only pins its own module
   refs.
 
@@ -39,7 +40,18 @@ ownership split.
 
 ### GitHub Actions
 
-A typical hand-rolled `build.yml` collapses into a caller stub. Before:
+A caller stub can replace overlapping checks only after equivalent scope and
+blocking behavior are configured and verified. Keep existing coverage floors,
+license gates, secrets/history protections and specialized checks until then.
+A coverage ratchet is not a minimum, the license policy defaults to warning,
+and a snapshot scan is not history scanning or live credential verification.
+
+The following before/after snippets illustrate structure, not complete workflows.
+Default SAST uses runtime-fetched rules under restrictive, non-Apache terms:
+review [the licensing boundary](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20)
+before internal use, hosted-service operation or redistribution.
+
+Before:
 
 ```yaml
 # .github/workflows/build.yml — the hand-rolled version
@@ -58,20 +70,22 @@ jobs:
       - uses: actions/github-script@v7             # PR comment
 ```
 
-After — the reusable workflow does the heavy lifting:
+After — the reusable workflow runs the configured checks. The remote form below
+requires authorized workflow/module access; anonymous fetch is available only
+when the repository is public. For an authorized source checkout, use local
+`-m ./src/composites/precommit` calls as described in the local-run guide instead
+of adding writer credentials or copying secrets. This example assumes a
+Node/Vitest project with its coverage provider declared in the lockfile.
+Optional notification and private-feed secrets are deliberately omitted.
 
 ```yaml
 # .github/workflows/precommit.yml — the caller stub
 jobs:
   precommit:
     uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.3
-    secrets:
-      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
-      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
-      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
     with:
-      test-cmd: npm ci && npm test -- --coverage    # your test, witnessed
-      coverage-path: coverage/coverage-summary.json
+      test-cmd: npm ci --ignore-scripts && ./node_modules/.bin/vitest run --coverage --coverage.reporter=json-summary --coverage.reportsDirectory=/tmp/cov
+      coverage-path: /tmp/cov/coverage-summary.json
 ```
 
 More than one stack in the repo? `test-cmd` runs one command in one container,
@@ -121,23 +135,35 @@ audit-evidence/
   comment.md               # the PR-comment / build-summary body
 ```
 
-Instead of reverse-engineering pass/fail from a dozen tool logs, you get one
-signed-off record of what ran, on which commit, and what it found — the same
-shape wherever it ran.
+Instead of reverse-engineering pass/fail from tool logs, you get a generated
+audit record of what ran, on which commit, and what it found. Required human
+review, approval and any cryptographic signing are separate controls. A passing
+verdict is not a claim of clean or complete scope: retain warnings, non-runs,
+suppressions and examined metadata when reviewing or publishing evidence.
 
 ## Gotchas from real migrations
 
-Surfaced during the consumer prototype — expect these:
+Review these boundaries before replacing existing checks:
 
-- **gitleaks history noise.** A full-history secrets scan lights up on
-  long-rotated or fixture secrets. Scope to the diff, or triage and
-  `.gitleaksignore` the known-benign ones — don't just crank `--fail-on` down.
-- **Empty Semgrep ruleset = false pass.** Setting `sast-rulesets` to empty
-  makes Semgrep scan *nothing* and report clean. Never blank it; omit the flag
-  to keep the default pack (see `src/security/CLAUDE.md`).
-- **Structurally-valid but empty SBOM.** The archive SBOM is built from your
-  **lockfiles**. No committed lockfile → a valid-but-empty SBOM that no
-  downstream inventory can use. Commit the lockfile.
+- **Gitleaks history scope.** Source scanning checks the working tree and, when
+  a readable `.git/` directory is mounted, the available Git history. A shallow
+  checkout limits that history; absent/worktree-pointer metadata does not prove
+  history was scanned. `--diff` does not scope the secrets scan. Rotate/revoke
+  exposed credentials first, then review any justified `.gitleaksignore`, inline
+  `gitleaks:allow` or config suppression. Tree suppressions are disclosed, but
+  the history leg is not shadowed; retain an existing history control until
+  equivalent scope and enforcement are verified.
+- **Empty/auto Semgrep rulesets fail.** Empty rulesets and `auto` are rejected;
+  loading no rules or missing a pinned rule floor is a non-run, not a clean
+  pass. Omit the flag for the default pack or supply licensed, checked-in rules.
+- **Source inventory is not an archive inventory.** Repository-mode archive
+  dependency assessment uses supported source inputs. Lockfile-free .NET trees
+  can be restored automatically, with scan-time version-resolution warnings;
+  other ecosystems still require readable dependency inputs. Application mode
+  defers dependency assessment entirely. Inspect dependency/SBOM outcomes,
+  errors and examined counts, not just whether CycloneDX JSON exists. Neither
+  a lockfile nor a restored graph proves the exact shipped contents (see
+  [Artifact shapes](artifact-shapes.md)).
 - **.NET SDK band mismatch — and the input that looks like the fix but is not.**
   cicd's own .NET legs run `dotnet format` and `dotnet test` in a digest-pinned
   SDK image, and an SDK image carries its band in the tag, so the band cicd picks

@@ -1,10 +1,10 @@
 #!/bin/sh
-# Adapter only. If your repository holds directories the audit should not see
-# (vendored code, fixtures kept deliberately broken), scope the run here rather
-# than editing scripts/cicd-prepush, which is meant to stay in sync upstream:
-#
-#   CICD_INCLUDE=go,node
-#   export CICD_INCLUDE
-#
-# cicd's own .githooks/pre-push does exactly this.
+# Adapter only. CICD_INCLUDE selects quality languages, not directories or the
+# scope of all scanners. It is not a privacy boundary: source security still
+# receives the supplied source tree. CICD_SRC selects that tree explicitly;
+# a narrower tree is not a repository-wide audit. Review scope warnings.
+# Keep scripts/cicd-prepush in sync upstream rather than changing its runtime.
+# Source access and runtime SAST licence restrictions:
+#   README.md#availability-and-source-access
+#   THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20
 exec ./scripts/cicd-prepush

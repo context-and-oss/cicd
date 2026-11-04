@@ -21,4 +21,4 @@ what the modules do today.
 | [Deployment](./deployment/index.md)                 | Deployment strategies and ring-based rollout patterns                        |
 | [Release Management](./release-management/index.md) | Release documentation and approval patterns (RA vs CDe)                      |
 | [Environments](./environments/index.md)             | Environment types and network security zones                                 |
-| [Security](./security/index.md)                     | Security integration using open-source tools                                 |
+| [Security](./security/index.md)                     | Security tools, runtime rule licensing and scan boundaries |

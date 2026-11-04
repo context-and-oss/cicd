@@ -1,6 +1,12 @@
 # Container Registry Cleanup
 
-This guide explains how to safely clean up old container images while protecting released packages.
+This page describes a possible consumer-owned registry-cleanup design, not a
+shipped cicd cleanup command or configuration contract. Its YAML and protection
+layers are illustrative requirements, not verified guarantees. cicd does not
+publish or delete consumer images. Before any deletion, verify registry-specific
+APIs and authorization, inventory release and deployment references by digest,
+retain rollback candidates, and inspect a dry-run plan under your own review
+policy. Mutable tags and release-note parsing alone do not prove an image unused.
 
 ## Overview
 

@@ -1,82 +1,62 @@
-# Changelog-Based Release System
+# Release Versioning and Changelog
 
 ## Overview
 
-This repository uses a **changelog-based release system**.
+This repository uses conventional commits and git-cliff to compute release
+versions and notes; a manually added changelog version is not the release input.
+`cd.yml` follows successful CI on a push to the repository's `main`.
+`release.yml` is the manually requested version path. Both use
+`scripts/ci/deliver-release-pins.sh` to deliver managed pin changes by pull request.
 
-Releases are triggered by updating changelogs and merging to main - no manual tagging required.
-
-**Key principle:** The changelog is the source of truth for releases.
-
-When a new version appears in a changelog and merges to main,
-the release workflow automatically creates a git tag and triggers the appropriate release pipeline.
+This describes the source-defined mechanism, not proof that hosted protections,
+credentials, human review or the complete release loop have been verified.
 
 ---
 
 ## How It Works
 
-The release process follows a simple flow:
-
-1. **Check for changes** - Are there unreleased changes since the last release?
-2. **Update changelog** - Finalize the changelog with a new version entry
-3. **Create PR** - Submit the changelog update for review
-4. **Merge to main** - After approval, merge triggers automation
-5. **Automatic tagging** - `release-auto.yml` workflow creates git tag
-6. **Build and publish** - Module-specific workflow builds artifacts
+1. **Write parseable conventional commits.** The `commit-subjects` CI job
+   checks parseability; a subject git-cliff cannot parse can otherwise disappear
+   from release computation.
+2. **Compute the version from unreleased history.** CD runs
+   `git cliff --unreleased --bumped-version` and separately checks the bump
+   against reachable history, including the no-release path. The manual release
+   workflow takes an explicit version instead.
+3. **Validate and deliver pins.** The shared delivery script updates managed
+   pins, runs the workflow-pin gate, generates a release intent artifact and
+   opens or reuses a `chore/release-v<version>` pull request. It checks effective
+   required `ci` policy and uses a separate read credential for delivered-PR
+   verification, never a writer fallback.
+4. **Review and merge normally.** Required CI and actual human review remain
+   separate obligations. Arming auto-merge supplies no human approval and must
+   not be treated as review evidence.
+5. **Tag only the matching delivered state.** Normal CD can tag on a later run
+   once pins match; the manual workflow waits for delivery and verifies the
+   merged state before its own tagging path. Superseded versions are skipped; a moved `main` is not
+   tagged using a version computed for an earlier tip. The handoff checks and
+   scheduled drift monitor report unresolved delivery rather than making a
+   changelog edit stand in for a release.
 
 ```text
-Developer
-    │
-    ▼
-┌──────────────────┐
-│ Check pending    │  Are there changes to release?
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│ Update changelog │  Finalize version entry
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│ Create PR        │  Submit for review
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│ Merge to main    │  After approval
-└────────┬─────────┘
-         │
-─────────┼─────────────────────────────────────────
-         │  CI/CD (automated)
-         ▼
-┌──────────────────┐
-│ Auto-tagging     │  Creates git tag from changelog
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│ Build & publish  │  Module-specific release workflow
-└──────────────────┘
+Conventional commits → successful CI → version computation + bump check
+    → validated pin/intent PR → required CI + human review → merge
+    → matching-state release run → tag and generated release notes
 ```
 
 ---
 
-## Why Changelog-Based?
+## Why Keep the Changelog as Output?
 
-### Traditional Approach Problems
+Release notes describe the version selected from history; they do not select it.
+Using the same unreleased partition for version computation and notes avoids
+filing newly merged changes under an already shipped release.
 
-- Manual git tagging is error-prone
-- Easy to forget to update changelog
-- Tag creation and changelog updates can get out of sync
-- Multiple steps to coordinate
-
-### Changelog-Based Benefits
-
-- **Single source of truth** - Changelog drives the release
-- **Reviewed releases** - Changelog changes go through PR review
-- **Automatic tagging** - No manual git tag commands
-- **Audit trail** - Every release decision is a reviewed commit
+The pin PR keeps release changes on the normal review path instead of pushing
+release edits directly to `main`. Source code can check CI and delivery state,
+but it cannot by itself establish that an authorized human reviewed a release.
+Effective destination policy and an observed, human-reviewed source-to-release
+loop still need verification. Do not infer that proof from generated notes or a
+successful automation status.
 
 ---
 

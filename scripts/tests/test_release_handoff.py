@@ -136,6 +136,21 @@ class TestReadingPinsFromTheInventory(unittest.TestCase):
         self.assertEqual(sorted(pins), ["3.2.2"])
         self.assertEqual(pins["3.2.2"], ["a.yml:3", "b.md:1"])
 
+    def test_ado_resource_pin_is_read_at_the_ref_line(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "a.yml").write_text(
+                "resources:\n  repositories:\n    - repository: cicdTemplates\n"
+                "      name: context-and-oss/cicd\n"
+                "      endpoint: example-connection\n      ref: refs/tags/v3.3.0\n"
+                "    - repository: other\n      name: example-org/shared-models\n"
+                "      ref: refs/tags/v1.0.0\n"
+            )
+            pins = read_pins(FakeInventory(root, ["a.yml"]))
+        self.assertEqual(pins, {"3.3.0": ["a.yml:6"]})
+
     def test_a_surface_that_cannot_be_read_is_skipped_not_fatal(self):
         import tempfile
 

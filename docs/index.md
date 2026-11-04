@@ -1,5 +1,11 @@
 # Documentation
 
+The repository is currently private. Remote module, action and reusable-workflow
+examples are conditional on authorized access, not a promise of public availability.
+See [availability and source access](../README.md#availability-and-source-access)
+for separate read-only source-checkout/local-module use. Anonymous fetching applies
+only after authorized publication and verification of the referenced release.
+
 ## Getting started
 
 If you are deciding whether this belongs in your delivery flow, start with

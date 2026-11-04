@@ -1,5 +1,12 @@
 # Ghost Tracking
 
+This page describes a naming convention and a possible consumer-owned discovery
+system, not a supported cicd command or configuration contract. The configuration,
+placeholder CLI calls and report shapes below are design examples; verify an
+implementation in your own tooling before relying on them. A prefix alone never
+makes code inactive or safe to deploy, and Git-tracked discovery does not exclude
+already tracked files merely because they match `.gitignore`.
+
 ## What is a Ghost?
 
 A **ghost** is any file, directory, or code construct that follows a naming convention (default: `ghost-` prefix) to mark it as **dark launch code** - code that exists in the codebase and can be deployed to production, but remains inactive or hidden.
@@ -103,7 +110,9 @@ ghost-tracking:
   ghost-alias: ghost    # The prefix (default: "ghost")
 ```
 
-Note: No exclusion configuration is needed - the scanner uses git-tracked files only, so `.gitignore` patterns are automatically respected.
+In this proposed design, discovery uses Git-tracked files. `.gitignore` does not
+remove files already tracked; explicit exclusions require a defined and tested
+policy in the implementation you choose.
 
 ### Custom Alias
 
@@ -126,8 +135,8 @@ Ghost tracking uses git-tracked files only - it does NOT walk the filesystem.
 
 **What this means:**
 - Only files in the git index are scanned
-- `.gitignore` patterns are automatically respected
-- `vendor/`, `node_modules/`, `out/` are excluded if gitignored
+- `.gitignore` affects which untracked files normally enter the index, not tracked files
+- `vendor/`, `node_modules/` and `out/` remain visible if already tracked
 - Untracked files are not discovered as ghosts
 
 **Benefits:**
@@ -249,7 +258,7 @@ Example YAML output:
 
 - Temporary debugging code (use branches or delete after)
 - Dead code that will never activate (just delete it)
-- Test fixtures (use `testdata/` which is excluded)
+- Test fixtures (use `testdata/` and verify any exclusion in your own tooling)
 
 ### Ghost Hygiene
 

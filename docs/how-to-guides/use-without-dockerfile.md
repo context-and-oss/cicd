@@ -4,7 +4,16 @@ Your repo ships a zip or a folder — a Dataverse webresource solution, a .NET
 app published to an Azure Web App — not a container image. This guide wires
 the **archive** pipeline shape into such a repo: attested build, lockfile
 SBOM, secrets scan of the built output, witnessed test coverage with a
-ratchet gate. No Dockerfile anywhere.
+ratchet gate. No Dockerfile is needed in your source (Docker still runs Dagger).
+
+Read [availability and source access](../../README.md#availability-and-source-access)
+first: the repository is currently private, and remote examples require authorized
+access. Local `./src/...` examples require an authorized cicd source checkout.
+Default SAST rules have [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+Keep existing coverage minima, blocking licence policy, history-secrets and live
+credential-verification protections until equivalent checks are configured and
+verified. A ratchet is relative, licence warn mode is not blocking, and a source
+snapshot is not a history or live-verification audit.
 
 Background on *why* the pipeline is shaped this way:
 [Artifact shapes](../explanation/artifact-shapes.md),
@@ -73,10 +82,7 @@ jobs:
       build-cmd: "npm ci && npm run build" # unchanged
       output-path: dist # unchanged
       # unchanged and still optional: toolchain-image, fail-on, deploy-pages
-    secrets:
-      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
-      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
-      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+    # Add only explicitly needed optional secrets by name.
 ```
 
 The workflow `name:` and the job id are yours to keep or change — but a branch
@@ -117,10 +123,10 @@ Coverage is the one thing that needs a deliberate line, and it is a gain rather
 than a regression: `commit-archive.yml` had no `test-cmd` input and passed no
 test flags to the composite, so it produced no coverage and migrating cannot
 take any away. Getting coverage at the commit stage is opt-in, and `test-cmd`
-alone will not do it — `commit.yml` exposes no `coverage-path` input and
-forwards none to the composite, so a `test-cmd` run witnesses your tests and
-harvests no report. Coverage arrives through `test-legs`, where each leg names
-its own `coveragePath`; see
+alone does not name a report. `commit.yml` supports `test-cmd` plus
+`coverage-path`, or `test-legs` where each leg names `coveragePath`. Measurement
+is separate from enforcement: set `coverage-gate: gate` to opt into the commit
+workflow's baseline fetch and ratchet (empty by default). See
 [A polyglot repository](#a-polyglot-repository-one-leg-per-language) below.
 
 ## The commit stage: run --artifact archive
@@ -132,8 +138,12 @@ scans the built output for secrets, and aggregates everything into the audit
 directory (`combined-evidence.json`, `findings.sarif`, `sbom.cdx.json`,
 `comment.md`).
 
+The standalone fixture and test-leg commands on this page are **inspection
+examples**, not CI gates. For a gate, clean the previous output, stop on export
+failure, and grade each required fresh envelope with `jq -e '.passed == true'`.
+
 Try it against the bundled fixture (the planted `leaked.env` finding is
-deliberate — it proves the artifact secrets scan works):
+deliberate — it exercises the artifact secrets scan):
 
 ```sh
 # doc-test
@@ -167,10 +177,7 @@ jobs:
       artifact: archive
       build-cmd: "npm ci && npm run build"
       output-path: dist
-    secrets:
-      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
-      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
-      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+    # Add only explicitly needed optional secrets by name.
 ```
 
 Optional inputs: `toolchain-image` and `fail-on`.
@@ -195,8 +202,10 @@ The template passes `--build-cmd`/`--output-path` only when `ARTIFACT` is
 
 Both the pre-commit and the commit stage can execute **your** test command and
 attest the result — witnessed evidence, not a self-reported report file. The
-coverage ratchet below is a pre-commit/PR concern only (ADR-005). Coverage is
-harvested from the file your test command writes:
+coverage ratchet can run at either stage: precommit defaults to `gate` for BYO
+tests; the commit workflow opts in via `coverage-gate`. Both need a usable
+baseline and measured coverage. Coverage is harvested from the report your test
+command writes:
 
 | Language | Coverage output to point `--coverage-path` (or a leg's `coveragePath`) at |
 |----------|-----------------------------------------------|
@@ -217,8 +226,8 @@ dagger -m ./src/quality call test \
   export --path /tmp/qt.json && jq -e '.coverageByLanguage.node > 0' /tmp/qt.json
 ```
 
-In CI you don't call this directly — the reusable precommit workflow does,
-via two inputs in your caller stub:
+In CI the reusable workflows can call this through `test-cmd` and `coverage-path`.
+For example, in the precommit caller (also configure baseline seeding below):
 
 ```yaml
 jobs:
@@ -227,10 +236,7 @@ jobs:
     with:
       test-cmd: "npm ci && npm run test:coverage"
       coverage-path: coverage/coverage-summary.json
-    secrets:
-      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
-      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
-      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+    # Add only explicitly needed optional secrets by name.
 ```
 
 With `test-cmd` set, the auto-detected baseline lint still runs (lint-only
@@ -250,13 +256,13 @@ Use `test-legs` instead: a JSON array of legs, each with its own command,
 language, container and coverage report.
 
 ```sh
-dagger -m ./src/quality call test \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call test \
   --src . \
   --test-legs '[
     {"label":"web","language":"node","cmd":"npm ci && npm run test:coverage",
      "coveragePath":"coverage/coverage-summary.json"},
-    {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\"",
-     "coveragePath":"TestResults/coverage.cobertura.xml"}
+    {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\" --results-directory /tmp/cicd-test-results",
+     "coveragePath":"/tmp/cicd-test-results/*.cobertura.xml"}
   ]' \
   --commit-sha local --branch main --repo-url https://example.com \
   export --path /tmp/qt.json
@@ -272,13 +278,19 @@ jobs:
       test-legs: |
         [{"label":"web","language":"node","cmd":"npm ci && npm run test:coverage",
           "coveragePath":"coverage/coverage-summary.json"},
-         {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\"",
-          "coveragePath":"TestResults/coverage.cobertura.xml"}]
-    secrets:
-      TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
-      NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
-      NUGET_FEED_TOKEN: ${{ secrets.NUGET_FEED_TOKEN }}
+         {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\" --results-directory /tmp/cicd-test-results",
+          "coveragePath":"/tmp/cicd-test-results/*.cobertura.xml"}]
+    # Add only explicitly needed optional secrets by name.
 ```
+
+These .NET examples assume VSTest with a configured XPlat/coverlet collector.
+The explicit absolute results directory pools reports from nested test projects;
+without it, each project can write to its own `TestResults` directory. The path
+`/tmp/cicd-test-results/*.cobertura.xml` uses cicd's recursive filename-pattern
+search beneath that shared directory rather than claiming a fixed file.
+For MTP, configure the runner's supported coverage extension/arguments instead.
+Verify that your command produces parseable reports and measured .NET coverage in
+the evidence before relying on a ratchet; passing tests alone do not prove harvest.
 
 Leg keys: `label` (required, unique, `[A-Za-z0-9._-]`), `language` (required —
 exactly `go`, `node`, `python` or `dotnet`; no aliases, because the value is
@@ -323,11 +335,11 @@ a leg container, so it fails at fixture initialisation on every run. A leg can
 declare the dependency instead:
 
 ```sh
-dagger -m ./src/quality call test \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call test \
   --src . \
   --test-legs '[
-    {"label":"api","language":"dotnet","cmd":"dotnet test",
-     "coveragePath":"TestResults/*.cobertura.xml",
+    {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\" --results-directory /tmp/cicd-test-results",
+     "coveragePath":"/tmp/cicd-test-results/*.cobertura.xml",
      "services":[
        {"alias":"db","image":"postgres:16-alpine","port":5432,
         "env":{"POSTGRES_PASSWORD":"test","POSTGRES_DB":"app"},
@@ -389,9 +401,15 @@ Rules worth knowing:
 
 ## The coverage ratchet
 
-The ratchet compares measured coverage against a **baseline**: the previous
-successful default-branch run's evidence artifact. There is no file to commit
-to your repo — the workflow fetches the artifact automatically
+The ratchet compares measured coverage against a **baseline**: an evidence
+artifact from a successful default-branch run of the **same caller workflow**.
+Precommit selects `precommit-evidence-*`; commit selects `commit-evidence-*`.
+The shipped precommit caller excludes main pushes, so the starter pair does not
+automatically seed its PR baseline. Configure a default-branch push path in that
+same precommit caller, with the same coverage-producing inputs. Verify the seed
+artifact, the next PR's selected baseline, and a controlled regression failure
+before calling the ratchet enforced. A separate commit workflow does not seed it.
+There is no file to commit to your repo — the workflow fetches the artifact
 ([ADR-003](../decisions/ADR-003-fileless-coverage-ratchet.md)).
 
 Per language: the gate trips when
@@ -427,14 +445,13 @@ The lifecycle in practice:
 
 1. **Bootstrap** — your first PR has no baseline; the ratchet skips with a
    warning and CI stays green (fail-open by design).
-2. **Seed** — the first merge to your default branch uploads the evidence
-   artifact; the next PR ratchets against it.
-3. **Advance** — beat the baseline, merge, and the new number becomes the
-   baseline automatically.
-4. **Deliberate drop** — deleting tested code can legitimately drop coverage
-   beyond tolerance. Set `coverage-gate: warn` in the caller stub for that
-   PR-series, then revert to `gate`. The change is visible in your workflow
-   diff — that's the escape hatch and the audit trail.
+2. **Seed** — the configured default-branch run of that same caller must
+   successfully upload compatible measured coverage; inspect the artifact.
+3. **Verify** — confirm the next run selects that baseline and a controlled
+   coverage regression actually fails in `gate` mode.
+4. **Advance** — later successful default-branch runs of that caller provide
+   new baselines. Review legitimate drops under your existing coverage policy;
+   do not disable unrelated protections to clear a ratchet.
 
 Two operational notes: GitHub artifact retention defaults to 90 days — a repo
 dormant longer re-bootstraps silently on its next PR (the warning tells you).
@@ -444,81 +461,77 @@ do this.
 
 ## Toolchain resolution
 
-This precedence governs the container **your own** `build-cmd` / `test-cmd` runs
-in, and nothing else. It does not steer cicd's own auto-detected lint and unit-test
-legs: those run cicd's commands in images cicd pins, and for .NET the pinned SDK
-band is selected from your repository rather than from `toolchain-image` — see
-[.NET SDK band selection](../reference/runtime-images.md#net-sdk-band-selection).
+The container **your own** command runs in is separate from cicd's native
+lint/test images. An explicit `--toolchain-image` wins for a single BYO command
+or archive build; each test leg instead uses its own `toolchainImage`. This is
+the route for a consumer-selected digest pin. It does not change the images
+used by auto-detected native checks.
 
-The container your build/test command runs in is resolved by precedence
-([ADR-004](../decisions/ADR-004-toolchain-resolution.md)):
+### Archive builds and non-.NET BYO tests
 
-1. **`--toolchain-image` / `toolchain-image` input** — explicit image; the
-   only level where you can pin by digest
-   (`node:22-alpine@sha256:...`).
-2. **Version files** — `.nvmrc` → `node:<major>-alpine`; `global.json`'s
-   **`sdk.version`** → `mcr.microsoft.com/dotnet/sdk:<major.minor>`.
-3. **Pinned defaults** — node:22-alpine, golang:1.26-alpine,
-   python:3.12-slim, mcr.microsoft.com/dotnet/sdk:8.0.
+The generic resolver follows [ADR-004](../decisions/ADR-004-toolchain-resolution.md):
 
-At level 2 the **key** is load-bearing, not the file. A `global.json` declaring
-no `sdk.version` resolves at level 3, and that includes the
-Microsoft.Testing.Platform opt-in: a file containing only
-`{"test": {"runner": "Microsoft.Testing.Platform"}}` selects
-`mcr.microsoft.com/dotnet/sdk:8.0`, and that SDK predates the opt-in, ignores
-it, and routes the invocation through VSTest instead. If you pin a runner,
-pin an SDK beside it.
+1. An explicit image.
+2. A usable root version file: `.nvmrc` selects `node:<major>-alpine`;
+   for a .NET **archive build**, `global.json`'s `sdk.version` selects
+   `mcr.microsoft.com/dotnet/sdk:<major.minor>`.
+3. Defaults: `node:22-alpine`, `golang:1.26-alpine`, `python:3.12-slim`,
+   or `mcr.microsoft.com/dotnet/sdk:8.0` for that archive path.
 
-The two files accept different shorthand, which is easy to generalise the wrong
-way. `.nvmrc` takes a bare major — `22` resolves to `node:22-alpine`.
-`sdk.version` needs at least `<major>.<minor>`: `"10.0"` and `"10.0.100"` both
-resolve to `mcr.microsoft.com/dotnet/sdk:10.0`, while `"10"` resolves at level 3
-to `8.0`.
+`.nvmrc` accepts a bare major such as `22`; `sdk.version` needs at least
+`<major>.<minor>`, not just `"10"`. A runner-only `global.json` supplies no SDK
+version. The generic archive resolver therefore falls back to 8.0 in that
+case, **without** examining target frameworks. This is not the .NET BYO-test
+rule below. Use a valid SDK version and runner configuration for your project.
 
-A version file cicd read and could not use still falls through to level 3, but
-`quality test` now says so. An nvm alias such as `lts/iron`, a `sdk.version` of
-`"10"`, a malformed `global.json` and a runner-only one each produce a warning in
-the evidence naming the file, what it said, and the image used instead:
+For non-.NET BYO tests, an unusable present version file (for example an nvm
+alias such as `lts/iron`) produces a toolchain warning; an absent file does not.
+Archive builds return a directory, not an evidence envelope, and do not expose
+these resolver warnings. Set an explicit image when the build needs certainty.
 
-```
-byo-test: TOOLCHAIN NOT RESOLVED FROM THE TREE — global.json declares no
-sdk.version, so the pinned default mcr.microsoft.com/dotnet/sdk:8.0 was used
-instead. …
-```
+### .NET BYO tests
 
-Each leg also records `toolchainFrom` (`explicit`, `nvmrc`, `global-json` or
-`default`) and `toolchainNote` in its `genericReport` entry, because the image
-alone cannot tell you which level chose it —
-`mcr.microsoft.com/dotnet/sdk:8.0` is both the band a `global.json` can ask for
-and the band you get for asking nothing.
+Without an explicit image, `quality test` uses the repository-aware band
+selection described in [.NET SDK band selection](../reference/runtime-images.md#net-sdk-band-selection):
+usable root `global.json` `sdk.version` first, otherwise the highest literal
+`TargetFramework`/`TargetFrameworks` found in project files and
+`Directory.Build.props` within the discovery depth. It does not evaluate
+MSBuild expressions or conditions.
 
-**No file, no warning.** A repository with no `.nvmrc` and no `global.json` is
-silent here, deliberately: the disclosure is worth reading precisely because it
-is unusual, and a line on every run is a line you stop seeing.
+The requested band maps to the lowest supported band at least as new (currently
+8.0 or 10.0). A request above both uses the newest supported band and discloses
+that limitation; if the command cannot run, the test fails rather than passing
+as clean. No usable SDK request **and** no literal target falls back to 8.0.
+A runner-only `global.json` alongside `net10.0` can therefore select 10.0 from
+the target, not 8.0. Runner/collector arguments still belong to your BYO command.
+A failed repository probe is an error, not permission to use a fallback.
 
-Two limits worth knowing. `build build-archive` resolves its toolchain through
-the same code but returns a directory rather than an evidence envelope, so it has
-nowhere to put the warning and stays silent — set the explicit image if you need
-certainty about which container built an archive. And a *usable* version file is
-reported as the source, not vetted: `.nvmrc` saying `22` means cicd ran
-`node:22-alpine`, not that `node:22-alpine` is a good idea.
+### Inspect the chosen image
 
-Supply-chain note: detected tags (level 2) cannot be digest-pinned ahead of
-time. If your security posture requires digest-pinned toolchains, set the
-explicit image. Scanner images (trivy, gitleaks, …) are digest-pinned by the
-modules regardless — this choice only affects the container your own code
-runs in.
+Each BYO leg records its image and `toolchainFrom` (`explicit`, `nvmrc`,
+`global-json`, `target-framework` or `default`) in `genericReport`, plus
+`toolchainNote` when applicable. Review warnings and the actual measured test
+and coverage metadata; an image choice is not proof of compatibility.
+
+These consumer toolchain selections use tags unless you supply an explicit
+digest. Native scanner/linter images remain separately digest-pinned; for .NET
+native checks the repository selects among the supported pinned SDK bands,
+not through your `toolchain-image` override.
 
 ## The SBOM and your lockfile
 
-The archive SBOM is generated from your **lockfiles** (`package-lock.json`,
-`*.csproj`/lock files) — commit your lockfile or the SBOM will be structurally
-valid but empty.
+Repository-mode archive dependency inventory comes from source dependency
+manifests/lockfiles, not a complete inventory of arbitrary output bytes. Commit
+lockfiles where supported. Lockfile-free .NET can restore a dependency graph in a
+pinned SDK; that restore requires working package access. Inspect inventory warnings
+and examined counts instead of assuming an empty inventory is complete.
+Application mode currently defers SBOM and dependency assessment.
 
 ## What stays yours
 
-The pipeline never runs your eslint config (your own lint stays in your own
-gate), never auto-detects your build command, and never deploys — importing
+Repository-mode quality runs auto-detected baseline lint; retain additional
+consumer lint policy until equivalence is verified. cicd never auto-detects your
+build command and never deploys — importing
 the solution to Dataverse or pushing the zip to Azure remains your repo's
 workflow ([ADR-002](../decisions/ADR-002-witnessed-test-execution.md)
 covers the ownership split).

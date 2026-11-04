@@ -3,9 +3,17 @@
 ## Reporting a vulnerability
 
 Please do not open a public issue for a security problem in cicd itself.
-Use GitHub's private vulnerability reporting instead: **Security → Report a
-vulnerability** on this repository. That opens a private advisory only the
-maintainers can read, and it is where we will reply.
+When GitHub private vulnerability reporting is available, use **Security →
+Report a vulnerability** on this repository. The report is shared privately
+with the reporter and authorized repository security maintainers, not filed as
+a public issue.
+
+Public availability and report delivery are separate publication checks. While
+the repository is private, or if that button is unavailable, do not post a
+vulnerability or credentials in an ordinary issue. Authorized collaborators
+should use an existing confidential maintainer contact. A maintainer must
+verify the public reporting interface and receipt after publication; this
+policy is not evidence that a report has been delivered.
 
 Include what you can of:
 
@@ -47,8 +55,10 @@ mounted. Anything those commands can do, a commit to the repository can do.
 **Feed tokens reach the containers that install packages, and nothing else.**
 `NPM_FEED_TOKEN` and `NUGET_FEED_TOKEN` are mounted as Dagger secrets into the
 prepare, lint, test and build containers that restore from the private feed,
-because the restore cannot authenticate otherwise. A command in those containers
-can read them. Scope the tokens to read-only package access. The notification
+and to security dependency-resolution/licence-scan containers that restore a
+.NET dependency graph. The restore cannot authenticate otherwise. A command in
+those containers can read them. These are package-feed credentials, not
+credentials for fetching a private cicd source repository. Scope the tokens to read-only package access. The notification
 credentials (`TEAMS_WEBHOOK`, the GitHub and Azure DevOps tokens) reach only the
 notify step and the PR-comment step, never a container that runs consumer code.
 

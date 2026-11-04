@@ -1,7 +1,17 @@
 # ADR-002: Witnessed BYO test execution, precommit-only
 
 ## Status
-Accepted
+Accepted; the precommit-only placement below is superseded by the current-support amendment.
+
+## Amendment: witnessed tests also run at commit
+
+In repository mode, `commit.Run` now forwards `testCmd`, `testLegs`,
+`coveragePath`, `baseline`, `tolerance` and `coverageGate` to `stage-2.Run`.
+Both precommit and commit can therefore produce witnessed coverage and run the
+ratchet. The original placement and no-commit-coverage consequences below record
+the earlier rationale, not a current API restriction. Automatic baseline retrieval
+is a separate workflow policy; API support does not establish that a caller fetches
+or supplies a baseline. A ratchet is not an absolute minimum-coverage gate.
 
 ## Context
 Compliance requires demonstrating test results and coverage trend as evidence.

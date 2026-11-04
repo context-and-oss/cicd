@@ -44,8 +44,15 @@ in the consumer repository, and cicd exposes a contract instead:
   overwriting the frozen files with rescan output is exactly the
   audit-record-that-lies-over-time this split exists to prevent.
 
-Named asymmetry, not fixed here: the Azure DevOps templates have no gate step
-reading the combined evidence, so they have no outputs analogue yet.
+## Amendment: Azure DevOps verdict gates
+
+The Azure DevOps commit and precommit starters now have an active
+`Gate on the evidence verdict` step that reads `combined-evidence.json` and
+fails on a missing/unreadable verdict or `passed != true`. The former claim
+that these templates have no gate is superseded. That gate is distinct from
+GitHub's reusable-workflow outputs contract; ADO callers consume the evidence
+artifact rather than `workflow_call` outputs. Template source alone does not
+prove an adopted pipeline ran successfully or produced fresh evidence.
 
 ## Consequences
 Easier: consumers publish from a named contract instead of source-diving;

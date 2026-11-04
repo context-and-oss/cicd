@@ -25,8 +25,12 @@ func (m *Quality) Check(
 
 ## Run locally
 
+Local inspection only, from an authorized checkout's root; for CI use the
+[fresh export-and-verdict recipe](README.md#usage), including each required
+`check` and `test` envelope.
+
 ```sh
-cd src/quality && dagger develop   # once, to generate SDK
+(cd src/quality && dagger develop)   # once, to generate SDK
 dagger -m ./src/quality call check \
   --src ./testdata/go-app \
   --commit-sha local --branch main --repo-url https://example.com \
@@ -148,8 +152,7 @@ dagger -m ./src/quality call check \
   so `go test -tags unit_test` reaches it). The parser's uri is `FilePath` with
   `dotnetSrcMount` stripped, never the bare `FileName` — with the name alone,
   same-named files in different folders collapsed into one finding at the
-  aggregator (~2,800 of over 200,000 on one consumer run); a fallback to the name is
-  counted into `warnings[]`.
+  aggregator; a fallback to the name is counted into `warnings[]`.
 - `dotnetrunner.go` — which `dotnet test` CLI the repository asks for
   (`global.json`), the argv each runner needs, the cobertura glob and the
   Microsoft.Testing.Platform exit map (untagged, unit-tested)

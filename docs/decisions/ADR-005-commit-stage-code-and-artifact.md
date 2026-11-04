@@ -36,9 +36,10 @@ The commit stage scans code *and* artifact for any repo shape through one
 - **Heavy tier** — commit's configs are cranked up relative to pre-commit (full
   Semgrep rulesets, opt-in TruffleHog verification, lower `--fail-on`) plus the
   artifact scan. "Heavier" is config on the same tools, not new tooling.
-- **Incremental diff** — a `before..after` range feeds the diff-scoped risk gate
-  (and the intent gate, while commit still ran it); an empty/absent diff falls
-  back to a full-repo scan.
+- **Incremental diff (amended)** — the diff is still forwarded to stage-2 for
+  change-intent reporting, without making intent a commit gate. Commit explicitly
+  selects `InfraScope: "tree"`: infrastructure policy scanning ignores the diff
+  and evaluates the whole supported tree, not just this push's changes.
 
 Pre-commit is **not** thinned by this change. It stays the full fast suite with
 light configs for fast PR feedback; commit is the heavy tier layered on top,
@@ -64,10 +65,14 @@ The commit composite has no step contract, so there is no contract to rework:
 `commit.Run`'s signature is verified by its callers (workflows/templates) via the
 workflow-pin coherence lint, not by a `contract.json`.
 
-The coverage ratchet stays a pre-commit/PR concern (ADR-003) — it is not run at
-commit. Commit's quality check runs lint and test; the ratchet's baseline-fetch
-and drift gate belong to the fast PR loop, where a coverage regression is cheap
-to surface and act on.
+## Amendment: commit supports witnessed coverage and the ratchet
+
+The original precommit-only placement in ADR-002 is superseded. In repository
+mode, `commit.Run` forwards `testCmd`, `testLegs`, `coveragePath`, `baseline`,
+`tolerance` and `coverageGate` to stage-2, so commit evidence can include witnessed
+coverage and a ratchet verdict. Fetching a prior baseline automatically remains
+caller/workflow policy, not a guarantee of this API. Missing-baseline warnings
+must remain visible, and the ratchet does not replace an absolute coverage floor.
 
 ## Amendment: the intent gate is pre-commit-only, and opt-in there
 

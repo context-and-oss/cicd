@@ -756,6 +756,36 @@ class PinConsistencyTests(FixtureTestCase):
             line = pat.sub(repl.format(v="9.9.9"), line)
         self.assertEqual("uses: context-and-oss/cicd/.github/actions/install-dagger@v9.9.9", line)
 
+    def test_stale_ado_repository_resource_pin_is_named(self) -> None:
+        self.fx.append(
+            "docs/index.md",
+            "\nresources:\n  repositories:\n    - repository: cicdTemplates\n"
+            "      type: github\n      name: context-and-oss/cicd\n"
+            "      endpoint: example-connection\n      ref: refs/tags/v0.1.0\n",
+        )
+        problems = check_pin_consistency(self.fx.load())
+        self.assertTrue(any("docs/index.md" in p and "v0.1.0" in p for p in problems), problems)
+
+    def test_bumper_rewrites_only_the_cicd_resource_tag(self) -> None:
+        text = (
+            "      name: 'context-and-oss/cicd'\n"
+            "      endpoint: example-connection\n      ref: 'refs/tags/v0.1.0'\n"
+            "      name: example-org/shared-models\n      ref: refs/tags/v0.1.0\n"
+        )
+        for pat, repl in PIN_REWRITE_PATTERNS:
+            text = pat.sub(repl.format(v="9.9.9"), text)
+        self.assertIn("ref: 'refs/tags/v9.9.9'", text)
+        self.assertIn("name: example-org/shared-models\n      ref: refs/tags/v0.1.0", text)
+
+    def test_resource_match_does_not_cross_to_another_repository(self) -> None:
+        self.fx.append(
+            "docs/index.md",
+            "\n      name: context-and-oss/cicd\n"
+            "    - repository: another\n      name: example-org/shared-models\n"
+            "      ref: refs/tags/v0.1.0\n",
+        )
+        self.assertEqual([], check_pin_consistency(self.fx.load()))
+
     def test_unrelated_third_party_pin_is_left_alone(self) -> None:
         self.fx.append("docs/index.md", "\nExample: `github.com/acme/shared-models@v1.2.3`\n")
         self.assertEqual([], check_pin_consistency(self.fx.load()))

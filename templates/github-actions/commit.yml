@@ -12,10 +12,14 @@
 #   archive             — you ship a zip/dir (set build-cmd + output-path)
 #   none                — source-only repo (library / infra); no build
 #
-# No secret is required: the cicd modules are fetched from the public
-# repository. See templates/github-actions/precommit.yml for the optional
-# secrets, and for why the job below maps them by name instead of using
-# `secrets: inherit` (a map passes only what it lists).
+# The repository is currently private. Verify authorized reusable-workflow,
+# action and module-source access; feed/notification tokens do not grant it.
+# See README.md#availability-and-source-access for local-source alternatives.
+# Anonymous fetches apply only after authorized publication and verification.
+# Omit unused optional secret mappings when adopting. Named mappings avoid
+# secrets: inherit; see templates/github-actions/precommit.yml.
+# Default SAST rules have Semgrep Rules License restrictions; see
+#   THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20
 #
 # ─── Stay up to date (Renovate) ─────────────────────────────────────
 # Renovate tracks the `uses:` ref below automatically. To enable:
@@ -88,8 +92,8 @@ jobs:
       # checked-in config; set empty to keep the composite default
       # (p/security-audit); "auto" is refused by the security module.
       # sast-rulesets: p/security-audit,p/owasp-top-ten,p/secrets
-      # Restrict scanning to specific languages (comma-separated). Empty
-      # auto-detects by marker file.
+      # Restrict quality languages (comma-separated), not directories or all
+      # scanners. Empty auto-detects by marker file; inspect scope warnings.
       # include: go,node
       #
       # Dependency licence policy. Defaults to warn mode with the
@@ -115,6 +119,11 @@ jobs:
       # license-exclude: docs/**,**/fixtures/**
       # Witnessed BYO test command (runs your unit tests inside the gate).
       # test-cmd: npm ci && npm test
+      # coverage-path: coverage/coverage-summary.json  # match your producer
+      # coverage-gate: gate  # Opt-in commit ratchet; empty fetches no baseline.
+      # coverage-tolerance: "1.0"
+      # Verify a same-caller successful default-branch seed and regression failure.
+      # Measurement and a relative ratchet do not replace a coverage minimum.
       # Polyglot repo? test-cmd runs ONE command in ONE container. test-legs
       # witnesses each stack instead, and names any detected language no leg
       # tests. Mutually exclusive with test-cmd.

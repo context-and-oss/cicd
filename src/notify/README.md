@@ -4,18 +4,35 @@ Posts pipeline status notifications to Microsoft Teams, GitHub PRs, and Azure De
 
 ## Install
 
+Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/notify` from its root. Source-access credentials are separate from notification secrets.
+
 ```
 dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.3
 ```
 
 ## Usage
 
+For intentional live delivery only, set `TEAMS_WEBHOOK` in the environment;
+for an offline preview use `build-card` instead.
+
 ```bash
+set -eu
+rm -f ./delivery-evidence.json
 dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.3 call teams \
-  --webhook-url=$TEAMS_WEBHOOK \
+  --webhook-url=env:TEAMS_WEBHOOK \
   --summary=combined-evidence.json \
-  --pipeline-name=precommit
+  --pipeline-name=precommit \
+  export --path=./delivery-evidence.json || exit 1
 ```
+
+Consuming/exporting the result performs the lazy delivery. Inspect `outcome`
+and `warnings`: `passed` remains true for delivered, skipped and lost delivery,
+so it is not delivery proof and this example is not a scan gate.
+
+`ado` differs from Teams: it returns an error on failed comment delivery rather
+than a warned-pass envelope. The ADO precommit starter's comment command has no
+`continueOnError`; a delivery error can fail that step even when the scan verdict
+passed. Inspect the command outcome separately from scan evidence.
 
 ## Functions
 

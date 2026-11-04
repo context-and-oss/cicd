@@ -12,7 +12,7 @@ func (m *Pages) Build(ctx context.Context, evidence *dagger.File) (*dagger.Direc
 ## Run locally
 
 ```sh
-cd src/cross-cutting/pages && dagger develop   # once
+(cd src/cross-cutting/pages && dagger develop)   # once, from repository root
 
 echo '{"schemaVersion":"1.0.0","moduleName":"cross-cutting/evidence","stage":"cross-cutting","tool":{"name":"cicd-evidence"},"repo":{"repoUrl":"https://github.com/example/repo","commitSha":"abc123def456","branch":"main"},"timestampUtc":"2024-01-01T00:00:00Z","durationMs":12345,"passed":true,"findingsCount":2,"findingsBySeverity":{"HIGH":2}}' \
   > /tmp/mock-evidence.json

@@ -1,17 +1,33 @@
-# stage-4 — Commit
+# stage-4 — Container artifact tail
 
 Chains `build` (OCI image + SBOM) and `security` (image secrets + vuln scan).
-Use this module to run the full commit stage in one call.
+This is **not** the full commit stage: source quality, SAST, source secrets,
+dependency licence policy, risk, aggregation and caller-side enforcement are
+not included. Use [composites/commit](../composites/commit/README.md#usage)
+for the full source-plus-artifact pipeline and an export-and-gate recipe.
+Commit wires its artifact tail directly; it does not call stage-4.
 
 Composes: [build](../build) + [security](../security)
 
 ## Install
+
+Remote references require authorized read access while the repository is private;
+anonymous fetch is conditional on an explicitly approved public distribution.
+An authorized read-only source checkout can use `-m ./src/stage-4` from its root.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.3
 ```
 
 ## Usage
+
+Inspection only, not a CI gate. Set `SHA` and `REPO_URL`, and supply a source
+root with a Dockerfile. The return is a slice of **both** SBOM and image-security
+evidence files. A caller-owned Dagger pipeline must aggregate both, clean stale
+output, fail on export failure and enforce the fresh combined verdict with
+`jq -e '.passed == true'`; the commit recipe linked above includes those steps.
+A pass does not imply full scope or clean results: keep warnings, non-runs,
+suppressions and examined metadata.
 
 ```bash
 dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.3 call run \

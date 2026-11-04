@@ -5,7 +5,11 @@
 The Continuous Delivery (CD) Model provides a comprehensive framework for delivering software,
 from initial development through production deployment and ongoing maintenance.
 
-The model ensures quality, traceability, and compliance throughout the entire software delivery lifecycle.
+The model organizes quality, traceability and compliance controls across the
+lifecycle; it does not establish compliance by itself. cicd currently implements
+source/artifact gates and a separately scheduled DAST pipeline, not all twelve
+stages. Production deployment, release authorization, operational verification
+and required human approval remain consumer-owned controls.
 
 Unlike traditional linear Software Development Lifecycle (SDLC) approaches that rely on manual handoffs and stage-gate approvals,
 the CD Model integrates automation, quality gates, and continuous validation at every step.

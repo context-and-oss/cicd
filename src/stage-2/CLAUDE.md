@@ -62,8 +62,16 @@ large repository before any evidence can be uploaded.
 
 ## Run locally
 
+Inspection/shadow run only, from an authorized checkout's root. Default SAST
+uses restrictively licensed runtime rules; review the
+[rule notice](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+The returned slice is not a caller-side gate. Aggregate all required envelopes,
+clean stale output, fail on export failure and enforce the fresh combined
+`passed == true` verdict; [precommit](../composites/precommit/README.md#usage)
+shows the complete caller pattern.
+
 ```sh
-cd src/stage-2 && dagger develop   # once
+(cd src/stage-2 && dagger develop)   # once
 
 dagger -m ./src/stage-2 call run \
   --src ./testdata/go-app \

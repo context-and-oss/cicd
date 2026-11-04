@@ -6,8 +6,14 @@
 # `trigger: batch: false` as templates/azure-devops/commit.yml states it:
 # a batched build gives the commits it folded no evidence of their own.
 #
-# No GitHub credential is needed: the cicd modules are fetched from the
-# public repository. Optional secrets and troubleshooting:
+# The repository is currently private. The YAML service connection does not
+# automatically authorize Dagger's separate module fetch. Establish separately
+# authorized read-only source access; feed/comment tokens do not grant it.
+# See README.md#availability-and-source-access for local -m alternatives.
+# Anonymous fetches apply only after authorized publication and verification.
+# Default SAST rules have Semgrep Rules License restrictions; see
+#   THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20
+# Optional secrets and troubleshooting:
 #   docs/how-to-guides/set-up-azure-devops-auth.md
 #
 # One authoritative gate for any repo shape. Runs the full source gate

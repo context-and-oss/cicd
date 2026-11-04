@@ -3,13 +3,19 @@
 Full commit-stage pipeline (ADR-005): the authoritative heavy gate that scans
 **code and artifact for any repo shape** through one artifact-agnostic entry.
 
-The source gate — every stage-2 code check (quality, SAST, secrets,
-dependency-vuln, risk) — runs for **every** shape via a single
+In **repository mode**, the source gate — stage-2's quality, SAST, secrets,
+dependency-vulnerability, licence-policy and risk checks — runs for every artifact shape via a single
 `dag.Stage2().Run(...)` call. The artifact tail is appended after it, selected
 explicitly by `--artifact` (never auto-detected — ADR-001). Evidence from the
 source gate and the artifact tail is aggregated into one audit directory and a
 Teams notification is optionally posted. Artifacts are built and scanned but
 never published — each consumer repo owns its own deployment.
+
+With `--app-id`, `Run` branches to `runApp` before calling stage-2. Explicit
+application legs and scoped scanners replace repository discovery; dependency
+vulnerability/licence assessment and SBOM generation are deferred. Read the
+[application-mode coverage contract](../../../docs/reference/commit-monorepo.md);
+the repository-mode artifact table below does not apply to that path.
 
 The change-intent gate is deliberately **not** part of that source gate, and this
 composite exposes no flag to enable it. Intent asks whether the author wrote down
@@ -21,6 +27,10 @@ pre-commit instead (`precommit.Run --require-intent`), and see the amendment in
 [ADR-005](../../../docs/decisions/ADR-005-commit-stage-code-and-artifact.md).
 
 ## Entry function
+
+Abridged repository-mode signature below. `main.go` is authoritative for the
+full surface, including `testLegs`, licence policy, preparation/concurrency and
+application-mode inputs; this excerpt is not a complete SDK declaration.
 
 ```go
 func (m *Commit) Run(
@@ -54,7 +64,7 @@ func (m *Commit) Run(
 // Returns directory with: combined-evidence.json, findings.sarif, sbom.cdx.json, comment.md
 ```
 
-## Artifact shapes
+## Artifact shapes (repository mode)
 
 | `--artifact` | Artifact tail (after the source gate) | SBOM source |
 |--------------|----------------------------------------|-------------|
@@ -96,8 +106,14 @@ either silence or noise. See
 
 ## Run locally
 
+These are inspection/shadow runs from an authorized source checkout's root,
+not CI gates (`NONE` collects findings). Default SAST rules have a restrictive
+[licence notice](../../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+For CI, use the [fresh export-and-verdict recipe](README.md#usage); output
+success alone does not enforce the gate.
+
 ```sh
-cd src/composites/commit && dagger develop   # once
+(cd src/composites/commit && dagger develop)   # once
 
 # container shape (has a Dockerfile)
 dagger -m ./src/composites/commit call run \
@@ -156,8 +172,10 @@ The exported directory contains:
   through `stage-2`'s `InfraScope: "tree"`, app mode directly on
   `risk.Validate`. Precommit keeps `changed`, where it earns its keep.
 
-- The source gate runs for every shape — code defects never reach `main` ungated
-  regardless of artifact shape.
+- In repository mode the source gate runs for every artifact shape. Findings
+  only block a consumer when its caller enforces the evidence verdict; neither
+  artifact choice nor a successful export proves that code defects cannot reach
+  the default branch. Application mode has the distinct contract linked above.
 - `--artifact` is always explicit; cicd never auto-detects the build command (ADR-001).
 - Never pass `--sast-rulesets ""` — an empty ruleset silently reports zero
   findings (see `security/CLAUDE.md`). The default is `p/security-audit` and `auto` is

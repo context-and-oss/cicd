@@ -1,8 +1,12 @@
 # Set up Azure DevOps authentication
 
-This guide takes an Azure DevOps consumer from zero to a green pipeline that
-**posts PR comments**. The cicd modules themselves are fetched from the
-public GitHub repository and need no credential. Everything here is what
+This guide separates module-source access from **PR-comment delivery**. The
+repository is currently private; remote module fetches require separately
+authorized read access. Feed and comment tokens do not grant that access. See
+[availability and source access](../../README.md#availability-and-source-access)
+for the separate-checkout/local-`-m` path and conditional future anonymous use.
+Never reuse writer credentials or copy them into an application repository.
+Everything here is what
 `templates/azure-devops/precommit.yml` and `commit.yml` reference today — this
 page is the authoritative walkthrough those templates' inline comments point
 back to.
@@ -36,11 +40,21 @@ is **off and unprivileged by default** — two things to enable:
    *Contribute to pull requests* permission on the repo:
    *Repo → Settings → Repositories → your repo → Security →*
    `<Project> Build Service (<Org>)` → set **Contribute to pull requests** to
-   *Allow*. Without this, the comment API returns **403 and the step swallows
-   it** — the build stays green and the comment simply never appears.
+   *Allow*. Without this, an attempted API call can return **403**.
+   `notify ado` returns delivery errors, and neither precommit template swallows
+   that command's failure: an attempted delivery error fails the step.
 
 Also set a **plain** variable `ADO_ORG` to your organisation name (e.g.
-`my-company`). The comment API call needs it to build the org URL.
+`example-org`). The comment API call needs it to build the org URL.
+
+Prerequisite skips are not delivery success: both templates skip an unset
+`ADO_ORG`; the shared template also skips an absent token or missing evidence.
+The copy-based template does not have those latter two guards. Inspect the step
+log to distinguish a skip from an attempted call and its error.
+
+For Azure Repos, configure required target-branch **Build validation** selecting
+the precommit pipeline. YAML `pr:` alone does not create PR validation. Verify
+an actual PR build and comment separately; a green branch build is not proof.
 
 > The commit pipeline triggers on push to `main` (no PR context), so it does
 > **not** post PR comments — this surface only matters for `precommit.yml`.
@@ -67,8 +81,11 @@ NuGet feed, set the URL as a **plain** variable and the token as a **secret**:
 | `NUGET_FEED_URL` | plain |
 | `NUGET_FEED_TOKEN` | **secret** |
 
-The commit template omits the corresponding `--*-feed-url` flags entirely when
-the URL variable is unset, so leaving these blank is safe.
+The ADO templates omit corresponding feed flags when the URL variable is unset.
+Do not configure feed credentials unless your dependency restore needs them.
+The shared transport helper also accepts an empty feed URL even when a Secret
+object exists; an optional empty NuGet secret is not itself a reason to add
+credentials. This says nothing about access to the cicd module repository.
 
 ---
 
@@ -88,15 +105,16 @@ the URL variable is unset, so leaving these blank is safe.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `failed to resolve module` / `not found` fetching the module | The agent cannot reach `github.com`, or the `@vX.Y.Z` ref names no published tag | Check the agent's outbound access and the pin against the cicd releases |
-| PR comment never appears (build green) | *Allow scripts to access the OAuth token* not enabled on the job | Enable it on the agent job |
-| PR comment never appears (build green) | Build service lacks *Contribute to pull requests* | Grant it on the repo Security settings |
-| PR comment step errors on `ADO_ORG` | `ADO_ORG` unset | Add the plain variable |
+| `failed to resolve module` / `not found` | Missing source authorization, unreachable GitHub, or unavailable ref | Verify authorized read-only source access and the pinned release separately from feed tokens |
+| Comment skipped in logs | A prerequisite guard fired | Set `ADO_ORG`; in the shared template also expose the token and produce evidence |
+| Attempted comment fails with 403 | Build service lacks PR permission | Grant *Contribute to pull requests* and verify delivery on a PR build |
+| Attempted comment fails resolving token | Token not exposed | Map `System.AccessToken` and check job OAuth access |
 
 ## Out of scope
 
-Self-hosted agent setup is not covered here. GitHub Actions needs no
-equivalent of this page: PR comments there use the job's own `GITHUB_TOKEN`.
+Self-hosted agent setup is not covered here. GitHub Actions PR comments use the
+job's own `GITHUB_TOKEN`, subject to event permissions; that token does not imply
+access to a separate private module or reusable-workflow repository.
 
 ## Related
 

@@ -6,6 +6,14 @@ Release quality gates operate at **Stage 9** of the CD Model, serving as the fin
 
 Stage 9 answers the critical question: **"Is this code ready for production?"**
 
+This is a conceptual, consumer-owned gate, not an implemented cicd release
+approval API. The thresholds and pseudocode below are design examples. A cicd
+`passed` verdict is neither human approval nor proof of complete scope; inspect
+warnings, non-runs, suppressions and examined metadata. Preserve existing
+coverage floors, license gates and secrets/history controls until equivalent
+controls are configured and verified: a ratchet is not a minimum and the default
+license policy warns rather than blocks.
+
 The implementation of Stage 9 differs dramatically between the two CD Model patterns:
 
 - **RA (Release Approval)**: Manual approval by release manager, hours to days

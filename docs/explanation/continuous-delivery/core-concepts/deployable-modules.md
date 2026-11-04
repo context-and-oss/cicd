@@ -82,17 +82,13 @@ Libraries, tools, or containers consumed by other systems.
 
 ### Version Number Format
 
-Four-part version number: **Major.Minor.Revision.Patch[-informational]**
+Semantic Versioning uses a three-component core: **MAJOR.MINOR.PATCH**, optionally
+followed by prerelease and build metadata, for example `1.2.3-rc.1+build.4`.
+Choose the bump by compatibility, not by branch commit count.
 
-Example: `1.2.3.4-rc1`
-
-- **Major**: 1
-- **Minor**: 2
-- **Revision**: 3
-- **Patch**: 4 (commit count from branch point, 0 for main)
-- **Informational**: rc1 (release candidate)
-
-Non-used positions default to zero (`1.2` = `1.2.0.0`).
+A four-component assembly/file version such as `1.2.3.4` is a separate,
+platform-specific coordinate, not SemVer. A branch-count field can be useful
+for those coordinates but does not define the SemVer patch.
 
 ### Schemes by Module Type
 
@@ -100,8 +96,9 @@ Non-used positions default to zero (`1.2` = `1.2.0.0`).
 | ----------------- | --------------------------- | --------------------------------- | --------------------- |
 | **Implicit**      | Internal monorepo modules   | Commit SHA                        | -                     |
 | **CalVer**        | SaaS runtime systems        | `YYYY.MMDD.HHMM.Patch`            | `2024.1115.2030.0`    |
-| **Manual SemVer** | SaaS with fixed major/minor | `Fixed.Fixed.Revision.Patch`      | `1.5.1234.0`          |
-| **Auto SemVer**   | Libraries, multi-release    | `Major.Minor.Revision.Patch`      | `2.3.12.0`            |
+| **Manual SemVer** | Explicit compatibility bump | `MAJOR.MINOR.PATCH` | `1.5.3` |
+| **Auto SemVer** | Libraries, multi-release | `MAJOR.MINOR.PATCH` | `2.3.12` |
+| **Assembly/file** | Platform-specific build coordinate | Four numeric components | `1.2.3.4` |
 | **API Version**   | Runtime APIs                | Service: CalVer, Interface: v1/v2 | `2024.1115.0` + v1,v2 |
 
 ### Choosing a Strategy
@@ -116,17 +113,18 @@ Non-used positions default to zero (`1.2` = `1.2.0.0`).
 | Internal monorepo module | Not distributed       | Implicit         |
 | REST API (interface)     | Multi-version support | API (v1, v2)     |
 
-### Patch Number
+### Optional Branch-Count Build Field
 
 ![Versioning Patch](../../../assets/branching/versioning-revision.drawio.png)
 
-The patch number tracks commits on release branches:
+For a platform-specific four-component version, a build field may track branch
+commits. This is not the SemVer patch and is not cicd's release-version policy:
 
-- **Main branch commits**: patch = 0
-- **Release branch commits**: patch = count since branch point
+- **Main branch commits**: build field = 0
+- **Release branch commits**: build field = count since branch point
 
 ```bash
-# Get patch number on release branch
+# Get a branch-count build field (not a SemVer patch)
 git rev-list main.. --count
 ```
 
@@ -160,14 +158,14 @@ A versioned, unchangeable output from the build process.
 **Container Images:**
 
 ```text
-registry.example.com/api-service:1.2.3.4
+registry.example.com/api-service:1.2.3
 ```
 
 **Application Packages:**
 
 ```text
-api-service-1.2.3.4.zip
-api-service-1.2.3.4.tar.gz
+api-service-1.2.3.zip
+api-service-1.2.3.tar.gz
 ```
 
 **Library Packages:**

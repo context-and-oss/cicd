@@ -39,8 +39,14 @@ func (m *Risk) Validate(
 
 ## Run locally
 
+Use an authorized checkout's repository root. These are local inspection and
+artifact-authoring examples, not CI enforcement. See the
+[fresh validate-and-verdict recipe](README.md#usage) for CI. Before proxy use,
+install and authenticate a supported Claude CLI; start the proxy separately
+and wait for readiness before scanning with the same token environment.
+
 ```sh
-cd src/risk && dagger develop   # once, generates internal SDK
+(cd src/risk && dagger develop)   # once, generates internal SDK
 
 # Validate (no risk files — passes with warning)
 dagger -m ./src/risk call validate \
@@ -66,7 +72,8 @@ dagger -m ./src/risk call scan \
   export --path .
 
 # Scan — raw API key via dag.LLM() native mode
-ANTHROPIC_API_KEY=sk-ant-... dagger -m ./src/risk call scan \
+# Set ANTHROPIC_API_KEY securely in the environment first.
+dagger -m ./src/risk call scan \
   --source . \
   export --path .
 
@@ -84,7 +91,7 @@ dagger -m ./src/risk call scan \
 ## Unit tests
 
 ```sh
-cd src/risk && GOWORK=off go test -tags unit_test ./...
+(cd src/risk && GOWORK=off go test -tags unit_test ./...)
 ```
 
 The `-tags unit_test` flag excludes the three dagger-dependent files (`scan.go`, `opa.go`,

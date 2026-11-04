@@ -187,10 +187,9 @@ was violated before the false-pass fixes:
   its parser writes one `runs[].invocations[].toolExecutionNotifications[]`
   entry per file it could not parse (`descriptor.id: "Syntax error"`) and per
   rule that ran out of time (`"Timeout"`), both level `warning`, and nothing
-  else in the document changes. Measured on a C# 12 repository (primary
-  constructors, which Semgrep OSS 1.161.0's C# parser rejects): close
-  to three hundred notifications, nearly one per file, beside a row saying
-  `FINDINGS, warningsCount 0`. `semgrepnotifications.go` classifies them into
+  else in the document changes. A C# primary constructor rejected by Semgrep OSS 1.161.0's parser can
+  therefore sit beside a row saying `FINDINGS, warningsCount 0`, despite the
+  parser notifications in the attached document. `semgrepnotifications.go` classifies them into
   one `warnings[]` line and the semgrep row's `warningsCount`. Three traps,
   each measured against the pinned image: the notification has **no
   `locations` array** — the path is only inside `message.text`, after
@@ -217,7 +216,10 @@ replacement is a non-run, including on a live-only compatibility rerun. The
 successful rerun is the report that leaves the module; a warning says the
 substitution happened. Every other syntax notification keeps the ordinary
 partial-scan warning — cicd substitutes nothing it has not implemented and
-tested. The integration fixture under `testdata/semgrep-github-actions` holds
+tested. Pinned packs plan the adaptation up front; live packs can trigger the
+compatibility rerun. The generated copy remains subject to the upstream
+restrictive licence, not Apache-2.0; see [runtime rules licensing](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+The integration fixture under `testdata/semgrep-github-actions` holds
 the three valid parser failures and two real curl-pipe-shell findings.
 
 Trivy's vulnerability database is cached in the `cicd-trivy-db` volume
@@ -649,13 +651,12 @@ See [specs/tell-a-dead-zap-from-a-clean-one.md](../../specs/tell-a-dead-zap-from
 
 ### Say how much of the API ZAP reached
 
-**Neither scope field measures the scan.** A consumer pipeline run scanned a running
-consumer API, published under twenty findings and passed without touching one `/api/`
-path. `urlsWithAlerts` counts URLs that produced an alert, so it is bounded by
+**Neither scope field measures the scan.** A scan can publish findings and pass
+without touching a declared API path. `urlsWithAlerts` counts URLs that produced an alert, so it is bounded by
 the findings and *falls* on a cleaner target; `endpointsFromSpec` is produced by
 `fetchAPISpecContents` + `countAPIOperations`, entirely outside ZAP, and is what
 cicd asked for. The API SCAN disclosure asserted the comparison had been made
-("only the ~400 operation(s) … were requested") and nothing had compared them.
+("only the declared operations were requested") and nothing had compared them.
 
 **The measurement was in the streams already.** `parseZAPScope`
 (`zapscope.go`) reads `Number of Imported URLs: N` — logged by `zap-api-scan.py`
@@ -675,8 +676,8 @@ that matters most the one that is always absent.
 **`Examined` is the only field that survives.** `cross-cutting/evidence` drops
 `genericReport` and propagates `Examined` verbatim, so `zapExamined` is what
 stops the DAST row reading "not stated". `Total` is left unset in api mode on
-purpose: it is a denominator in the same unit as `Count`, and ~400 operations
-over ~230 paths would render as a coverage percentage between two things that do
+purpose: it is a denominator in the same unit as `Count`, and operations
+over URL paths would render as a coverage percentage between two things that do
 not divide.
 
 **The pair is stated, never reconciled.** `apiScanWarning` prints cicd's count
@@ -1010,8 +1011,8 @@ workdir through `writeEvidenceFile` and return a `File` reference to it.
 
 `WithNewFile` puts the whole JSON document into the returned object's graph ID.
 That is small for most source scans, but a ZAP report can include response data
-for every request it made. On one consumer run, the API scan itself finished
-in a few minutes and the trace then stayed in `Container.WithNewFile evidence.json`
+for every request it made. A completed API scan can therefore stall at
+`Container.WithNewFile evidence.json` while constructing the returned graph,
 until the configured job timeout. The final evidence aggregator already avoids this
 shape for the same reason; producers now do too.
 
