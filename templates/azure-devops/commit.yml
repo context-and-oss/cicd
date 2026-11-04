@@ -4,8 +4,14 @@
 # Copy this file to your repository at .pipelines/commit.yml
 # and adjust the variables below. You own this file once copied.
 #
-# No GitHub credential is needed: the cicd modules are fetched from the
-# public repository. Optional secrets and troubleshooting:
+# The repository is currently private. Remote module fetches require separately
+# authorized read-only source access; feed/comment tokens do not grant it.
+# For a separate authorized checkout and local -m paths, see
+#   README.md#availability-and-source-access
+# Anonymous fetches apply only after authorized publication and verification.
+# Default SAST rules have Semgrep Rules License restrictions; see
+#   THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20
+# Optional secrets and troubleshooting:
 #   docs/how-to-guides/set-up-azure-devops-auth.md
 #
 # ─── Stay up to date (Renovate) ─────────────────────────────────────

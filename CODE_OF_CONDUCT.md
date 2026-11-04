@@ -9,12 +9,16 @@ final for that change.
 
 ## Reporting
 
-Report conduct concerns to the maintainers through GitHub's private
-vulnerability reporting on this repository (**Security → Report a
-vulnerability**). It is the one private channel the repository offers, it
-reaches only the maintainers, and a conduct report filed there is treated with
-the same confidentiality as a security one. Reports are reviewed promptly and
-handled as confidentially as the situation allows.
+Use an existing confidential maintainer contact for conduct concerns. When
+GitHub's private reporting interface is available on this repository
+(**Security → Report a vulnerability**), it can also carry a private report to
+authorized security maintainers. Do not place sensitive personal details in a
+public issue to work around a missing reporting button.
+
+The interface and receipt must be verified after publication; a private
+repository or an unavailable button is not a delivered report. See
+[SECURITY.md](SECURITY.md) for that availability boundary. Reports that reach
+the maintainers are handled as confidentially as the situation allows.
 
 ## Enforcement
 

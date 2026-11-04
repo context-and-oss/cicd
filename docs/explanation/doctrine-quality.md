@@ -299,8 +299,7 @@ band, and `dotnetRunnerFromGlobalJSON` / `dotnetTestArgs` / the exit map live in
   invisible if only the merge count is read: the verdict moves from
   `skipped:no-coverage-output` — *the command produced no coverage report*,
   false about a command that produced reports — to `skipped:no-baseline`, which
-  is true. Measured before `stripBOM` landed and after, on a consumer solution
-  and on `testdata/dotnet-mtp-app`. `coverageSetErrors` makes
+  is true. The source-owned reproduction is `testdata/dotnet-mtp-app`. `coverageSetErrors` makes
   documents-found-and-none-read an `errors[]` entry; `Matched == 0` stays a
   warning, because a command that writes no report is legitimate and failing it
   is a permanent red with no remedy.
@@ -452,8 +451,8 @@ in every field a reader looks at to one touching all of it. Measured on
 `testdata/dotnet-mtp-app` (2 `.csproj`, 1 with a test marker) with a single BYO
 leg: **before, one warning — about the ratchet — and no count anywhere**; after,
 `projectsDiscovered: 2`, `testProjectsDiscovered: 1` and a `warnings[]` line
-naming both. On a consumer tree, dropping part of the project scope had
-produced no warning at all. `dotnetLegScopeWarning` (`legscope.go`, untagged)
+naming both. Without the scope fields, a command that drops part of the project
+scope produces no scope warning at all. `dotnetLegScopeWarning` (`legscope.go`, untagged)
 states the counts and **refuses the division between them, in the sentence** —
 cicd cannot know how many projects a consumer's command should have run, the
 identical bind `coverageSetWarnings` is in one file over, and a ratio would be a
@@ -481,14 +480,11 @@ so a reader habituates, and `projectsDiscovered` /
 two envelopes can still read. Cite that narrow rule with its actor named — a
 *consumer who chooses to compare envelopes*, because nothing in cicd diffs
 those fields and a rule that omits the actor is satisfied by a field no
-mechanism consumes. Measured, that comparison buys more than the rule claims:
-the props-file hoist takes `testProjectsDiscovered` to 0 while
-`coverageDocumentsMerged` holds still and the coverage figure stays identical to
-the precision recorded by the report, and `projectsDiscovered` **holds still** — it counts
-every `.csproj` including test ones, so it is a denominator a refactor cannot
-touch and a deletion must (a real deletion lowers it by the number deleted). The hoist and the
-deletion are therefore separable for adjacent runs, and ambiguous only across
-runs far enough apart to hold an offsetting addition. cicd still emits a caveat
+mechanism consumes. For example, moving test markers into a props file can
+change `testProjectsDiscovered` without changing `projectsDiscovered` or the
+coverage harvest. Deleting a project instead changes the discovered-project
+count. Comparisons can help investigate that distinction, but offsetting
+additions and other changes can make it ambiguous. cicd still emits a caveat
 rather than the diagnostic, and the reason is a **scope decision on one path**,
 not an impossibility — `Test` already takes `--baseline` and
 `parseBaselineCoverage` accepts a full evidence envelope, so a prior envelope

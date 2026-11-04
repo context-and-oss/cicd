@@ -7,18 +7,33 @@ Supports Go, Node.js, Python, and .NET. Returns an evidence envelope.
 
 ## Install
 
+Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/quality` from its root. Source access and package-feed credentials are separate.
+
 ```
 dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3
 ```
 
 ## Usage
 
+Set `SHA` and `REPO_URL`; run with Dagger and `jq` from the source root:
+
 ```bash
+set -eu
+rm -f ./evidence.json
 dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call check \
-  --src=. --include=go --fail-on=HIGH \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
-  export --path=evidence.json
+  --src=. --fail-on=HIGH \
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
+  export --path=./evidence.json || exit 1
+jq -e '.passed == true' ./evidence.json >/dev/null || exit 1
 ```
+
+Evidence export alone does not enforce the verdict. Use the same fresh-output,
+export-failure and JSON checks for **each** required `check`/`test` envelope.
+A pass is not a claim of clean or full-scope analysis: retain warnings, errors,
+non-runs and examined/test/coverage metadata. The coverage ratchet detects drops,
+not an absolute minimum; missing inputs can skip it fail-open. Keep required
+absolute thresholds in the consumer test command unless an equivalent gate is
+configured and verified.
 
 ## Functions
 

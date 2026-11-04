@@ -37,7 +37,7 @@ Multiple security layers protect against different threat vectors:
 
 | Layer                                  | Description                             | Tool              |
 | -------------------------------------- | --------------------------------------- | ----------------- |
-| [SAST](sast.md)                        | Static analysis before code runs        | Trivy             |
+| [SAST](sast.md)                        | Static analysis before code runs        | Semgrep           |
 | [DAST](dast.md)                        | Dynamic testing of running applications | OWASP ZAP         |
 | [Dependency Scanning](supply-chain.md) | Identifying vulnerable libraries        | Trivy, Dependabot |
 | [Container Security](supply-chain.md)  | Multi-layer image scanning              | Trivy             |
@@ -49,7 +49,7 @@ No single layer is perfect - overlapping layers provide comprehensive coverage.
 | Stage                 | Security Activities                   | Tools             | Duration   |
 | --------------------- | ------------------------------------- | ----------------- | ---------- |
 | **Pre-commit (2)**    | Full fast suite: lint/test, SAST, secret scan, dependency scan, risk gate (light configs), plus the opt-in change-intent gate | Semgrep, Gitleaks, Trivy | < 2 min    |
-| **Pull Request (3)** | SAST, dependency scan, container scan | Trivy, Dependabot | < 5 min    |
+| **Pull Request (3)** | SAST, dependency scan, container scan | Semgrep, Trivy, Dependabot | < 5 min |
 | **Commit (4)**        | Heavy code + artifact gate: full source suite plus artifact SBOM/scan per shape (`--artifact container\|archive\|none`) | Semgrep, Gitleaks, Trivy | < 10 min   |
 | **Acceptance (5)**    | DAST baseline scan                    | OWASP ZAP         | < 15 min   |
 | **Extended (6)**      | DAST full scan                        | OWASP ZAP         | 1-4 hours  |
@@ -58,15 +58,20 @@ No single layer is perfect - overlapping layers provide comprehensive coverage.
 
 ## Why Open-Source Tools
 
-This documentation focuses on free, open-source tools:
+The stack includes open-source engines, but that does not license every runtime
+input. Semgrep's default rules are fetched under the restrictive, non-Apache
+Semgrep Rules License: review [internal-use, hosted-service and redistribution limits](../../../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+The stage matrix above is conceptual beyond cicd's implemented source/artifact
+and separately scheduled DAST pipelines, not an automatic deployment workflow.
 
 | Tool           | Purpose               | Why                                 |
 | -------------- | --------------------- | ----------------------------------- |
-| **Trivy**      | Multi-purpose scanner | Fast, comprehensive, no licensing   |
+| **Trivy**      | Multi-purpose scanner | Dependency and image scanning   |
 | **OWASP ZAP**  | DAST                  | Industry standard, active community |
 | **Dependabot** | Dependency updates    | GitHub-native, zero setup           |
 
-These tools provide enterprise-grade security without licensing costs.
+Review each engine, rule pack and service's terms for your intended use; a free
+engine does not imply unrestricted rules or legal clearance.
 
 ## Benefits
 

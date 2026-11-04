@@ -9,8 +9,9 @@ Reusable [Dagger](https://dagger.io) pipeline modules for a 12-stage continuous-
 Same modules run **locally**, in **GitHub Actions**, and in **Azure DevOps** — every domain module
 returns a JSON **evidence envelope** so pass/fail decisions are auditable wherever they ran.
 
-**Status:** stages 2 (pre-commit) and 4 (commit) ship at `v5.0.0`, plus a running-app
-DAST pipeline on its own cadence. The other ten stages are the model, not the code;
+**Implemented:** stages 2 (source gate) and 4 (commit), plus running-app DAST
+on its own cadence. Use the managed release pins below. The other ten stages
+are the model, not the code;
 [ROADMAP.md](ROADMAP.md) says what is planned and [CHANGELOG.md](CHANGELOG.md) says
 exactly what is shipped today, per module.
 
@@ -65,8 +66,25 @@ pipeline? The [migration map](docs/explanation/migrating-to-cicd.md) explains
 what maps to what, and the [step-mapping reference](docs/reference/step-mapping.md)
 is the exhaustive "I run X today → it's Y in cicd" lookup.
 
-> **On Azure DevOps?** The modules are public and need no credential, but PR comments
-> do: see [Set up Azure DevOps authentication](docs/how-to-guides/set-up-azure-devops-auth.md).
+### Availability and source access
+
+The repository is currently private. Remote module coordinates, reusable workflows,
+installer actions and the Renovate preset below are integration candidates, not a
+promise of anonymous access. Anonymous fetching is applicable only after explicit
+publication authorization and verification of the referenced release and files.
+A private repository may be used only through separately authorized read-only source
+access; package-feed and notification tokens do not grant module access. Do not
+reuse a writer token or copy credentials into the application repository.
+
+For local use, obtain an authorized source checkout separately, outside the
+application tree being scanned, then replace the remote `-m` value with its absolute module path (for example,
+`-m "$CICD_SOURCE/src/security"`), keeping `--src .` pointed at your application.
+`CICD_SOURCE` is the path to that checkout. Remote dependencies may still require
+separately authorized read access. This does not make external reusable-workflow
+calls available; verify platform sharing/access policy separately.
+
+> **On Azure DevOps?** Module-source access and PR-comment access are separate:
+> see [Set up Azure DevOps authentication](docs/how-to-guides/set-up-azure-devops-auth.md).
 
 ### Run your first check
 
@@ -94,8 +112,11 @@ run fails it at every `--fail-on`, `NONE` included. The `&&` chain (and the
 `rm -f` before it) means a failed export can never fall through to grading an
 old `evidence.json`.
 
-Open `evidence.json` — pass/fail, findings by severity, embedded SARIF. That's
-the shape every module emits.
+Open `evidence.json` — pass/fail, findings by severity, embedded SARIF, warnings
+and per-source examined/rule metadata. `passed` is a gate decision, not proof of
+complete examination or absence of suppressed findings. Source scanning is not a
+full-history secrets audit or live credential verification; retain existing
+protections until equivalent scope and enforcement are configured and verified.
 
 > **Licence note — default SAST rules.** `scan-source` runs Semgrep with rules
 > fetched at run time from `semgrep/semgrep-rules`, which are licensed under the

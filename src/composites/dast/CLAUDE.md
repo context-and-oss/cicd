@@ -115,7 +115,14 @@ a future "helpful" addition of the set here is a deliberate act.
 
 ## The gate
 
-`ScanWeb`'s, unchanged: findings at or above `--fail-on` fail the run, and a
+The verdict is evidence, not command-exit enforcement: export the detached scan,
+package it, then require `jq -e '.passed == true'` for both fresh scan and
+combined envelopes. Clean stale outputs and fail immediately on either export
+failure; see the [complete caller recipe](README.md#usage). Preserve warnings,
+errors, provenance, rule settings and examined scope even on passes. Scan only
+explicitly authorized targets; passive baseline also generates requests.
+
+`ScanWeb`'s verdict rule is unchanged: findings at or above `--fail-on` fail the envelope, and a
 readiness probe that never got a served response fails it at **every** threshold
 including `NONE`, because a target that was never reached produces a report of
 zero alerts that is otherwise byte-identical to a clean scan
@@ -134,11 +141,11 @@ three copies are byte-identical apart from the SDK import (`synced_files` in `sc
 scan File onto the runner, then invokes `package` in a fresh Dagger call. This
 host-file boundary prevents the returned Directory from carrying a
 runner-backed service graph, which can leave the CLI waiting after the module
-function has completed. A notification that could not be delivered goes to
-stderr and does not fail the run, the same call
-`composites/commit` makes: the verdict is in the audit directory either way, and
-turning a webhook outage into a red DAST run teaches a team to stop passing the
-webhook.
+function has completed. A notification that could not be delivered is a
+non-fatal warned-pass delivery envelope, merged by a second `evidence.Wrap`
+call so `warnings[]` survives in combined evidence and the PR comment; the
+reason also goes to stderr. This is the same tail `composites/commit` uses.
+`passed` alone is not notification delivery proof.
 
 A DAST run produces no SBOM. `sbom.cdx.json` is still written by `evidence.Wrap` (it always
 writes all three merged documents) and is empty of components; do not read it as

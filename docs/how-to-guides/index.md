@@ -1,8 +1,11 @@
 # How-to Guides
 
-Task-oriented recipes for common operations. Most run from *your* repository against the
-published modules and need no checkout of this one; a guide that needs this repository
-checked out says so. Each focuses on getting a specific thing done.
+Task-oriented recipes for common operations. The repository is currently private;
+remote module and workflow examples require authorized access. See
+[availability and source access](../../README.md#availability-and-source-access)
+for the separate authorized source checkout/local-`-m` alternative. Anonymous
+fetches apply only after authorized publication and availability verification.
+Each guide distinguishes application commands from source-checkout examples.
 
 ## Getting started and adoption
 
@@ -15,7 +18,7 @@ checked out says so. Each focuses on getting a specific thing done.
 | [Use the pipeline without a Dockerfile](use-without-dockerfile.md) | Adopt the archive shape: zip/folder artifacts, witnessed test coverage with the ratchet gate, lockfile SBOMs |
 | [Build once, assess it, deploy the retained output](build-once.md) | Share one prepared Node or .NET context across the commit composite's source checks and build, and get the deployable back beside its evidence |
 | [Adopt cicd incrementally](adopt-incrementally.md) | Hand an existing pipeline to cicd one stage at a time (agent-drivable); coexist with the legacy pipeline during the transition |
-| [Set up Azure DevOps authentication](set-up-azure-devops-auth.md) | Configure the PAT, OAuth token, and optional secrets an ADO consumer needs to fetch the module and post PR comments |
+| [Set up Azure DevOps authentication](set-up-azure-devops-auth.md) | Separate authorized module-source access from PR-comment OAuth access and optional feed/notification secrets |
 
 ## Pipeline execution
 

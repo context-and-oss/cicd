@@ -5,8 +5,17 @@ return the deployable alongside its audit evidence. The consumer owns commands,
 build properties and deployment. Source checks still see the original checkout;
 artifact checks see the output being retained.
 
-These additions require a release containing this change. Existing released pins
-in starter templates do not gain new inputs until upgraded.
+This guide describes the implemented inputs at the managed release pins shown
+in the starters. Use the same verified revision for the workflow, modules and
+artifact verifier; an older pin does not gain new inputs without an upgrade. The repository is
+currently private; verify authorized source/workflow access separately from feed
+credentials, as described under [availability and source access](../../README.md#availability-and-source-access).
+Source checks execute SAST with runtime
+[Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+A passing bundle does not imply full-scope or dependency assurance in application
+mode; inspect warnings and per-source examined metadata. Retain existing coverage
+minima, blocking licence policies, history-secrets scans and live verification
+until equivalent scope and enforcement are configured and verified.
 
 ## Configure shared preparation
 

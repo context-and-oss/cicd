@@ -122,19 +122,28 @@ string at run time.
 
 ### Toolchain resolution (ADR-004)
 
-`--toolchain-image` param → version files (`.nvmrc` → `node:<major>-alpine`,
-`global.json`'s `sdk.version` → `mcr.microsoft.com/dotnet/sdk:<major.minor>`)
-→ pinned defaults (`node:22-alpine`, `golang:1.26-alpine`, `python:3.12-slim`,
-`mcr.microsoft.com/dotnet/sdk:8.0`). Only the explicit param can carry a
-digest — the first two levels are computed at run time, so cicd cannot pin them
-ahead of time. The **key** is load-bearing at level 2, not the file: a
-`global.json` with no `sdk.version` — including a runner-only
-Microsoft.Testing.Platform opt-in — resolves at the pinned default. A version
-file cicd read and could not use is disclosed rather than silent: `quality test`
-warns and records `toolchainFrom` / `toolchainNote` per leg. A repository with no
-version file at all stays silent, and `build build-archive` returns a directory
-rather than an envelope so it has nowhere to warn.
-Every image cicd selects *itself* is digest-pinned; see
+The generic resolver uses `--toolchain-image` → version files (`.nvmrc` →
+`node:<major>-alpine`, `global.json`'s `sdk.version` →
+`mcr.microsoft.com/dotnet/sdk:<major.minor>`) → configured defaults. Only an
+explicit image can carry a consumer-supplied digest; version-derived references
+are composed at run time. In this generic chain, a `global.json` with no
+`sdk.version` supplies no SDK choice. `build build-archive` returns a directory,
+not an envelope, and cannot attach a resolution warning.
+
+`quality test` records `toolchainFrom` / `toolchainNote` per leg and discloses
+version files it read but could not use. Its .NET path differs from the generic
+chain:
+
+For **BYO .NET tests**, there is a specialized resolver: unless an explicit
+image is supplied, `sdk.version`, then the highest readable literal
+`TargetFramework`, then the lowest supported SDK band select a readable SDK tag.
+The band rounds up to a supported band, or uses the highest supported band with
+a warning when the request exceeds it. A runner-only `global.json` therefore
+falls through to TargetFramework detection before the default. Per-leg
+`toolchainFrom` / `toolchainNote` disclose that resolution. This differs from
+`build-archive`'s generic version-file resolver and from native .NET checks'
+digest-pinned images.
+Every repository-selected **tool** image is digest-pinned; see
 [Runtime tool images](./runtime-images.md).
 
 This chain covers only the container a consumer's own `build-cmd` / `test-cmd`

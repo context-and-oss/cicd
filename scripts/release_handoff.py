@@ -63,7 +63,7 @@ import sys
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from repo_surface import VERSION_SCAN  # noqa: E402
+from repo_surface import version_pins  # noqa: E402
 
 RESOLVED = "resolved"
 PENDING = "pending"
@@ -289,9 +289,8 @@ def read_pins(inv) -> Dict[str, List[str]]:
             text = path.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        for lineno, line in enumerate(text.splitlines(), 1):
-            for version in VERSION_SCAN.findall(line):
-                pins.setdefault(version, []).append("{}:{}".format(rel, lineno))
+        for version, lineno in version_pins(text):
+            pins.setdefault(version, []).append("{}:{}".format(rel, lineno))
     return pins
 
 

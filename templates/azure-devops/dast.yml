@@ -4,8 +4,11 @@
 # Copy this file to your repository at .pipelines/dast.yml and adjust the
 # variables below. You own this file once copied.
 #
-# No GitHub credential is needed: the cicd modules are fetched from the
-# public repository. Optional secrets and troubleshooting:
+# The repository is currently private. Module fetching requires separately
+# authorized read-only source access, not feed/notification credentials. See
+# README.md#availability-and-source-access for separate-checkout/local -m use.
+# Anonymous fetches apply only after authorized publication and verification.
+# Optional secrets and troubleshooting:
 #   docs/how-to-guides/set-up-azure-devops-auth.md
 #
 # ─── Stay up to date (Renovate) ─────────────────────────────────────
@@ -68,8 +71,10 @@
 # cannot tell "we found nothing" from "we looked at nothing".
 #
 # The gate is the caller's job, and this template has not done it. Paste the
-# step marked "GATE GOES HERE" further down, or accept that these checks are
-# advisory only and say so to whoever reads the build.
+# step marked "GATE GOES HERE" further down only after also clearing previous
+# scan/package outputs and making execution stop on either export failure.
+# A verdict check alone does not prove freshness on reused agents. Otherwise
+# accept that these checks are advisory only and say so to readers.
 #
 # The GitHub reusable workflow (.github/workflows/dast.yml) reads the verdict;
 # use it as the reference.

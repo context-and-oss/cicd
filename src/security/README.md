@@ -16,6 +16,11 @@ Returns an evidence envelope.
 
 ## Install
 
+Remote references require authorized read access while the repository is private;
+anonymous fetch is conditional on an explicitly approved public distribution.
+An authorized read-only source checkout can instead use `-m ./src/security`
+from its root. Source-access credentials are separate from package feeds.
+
 ```bash
 dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3
 ```
@@ -25,6 +30,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3
 | Function | Description |
 |----------|-------------|
 | `scan-source` | SAST + secrets + filesystem vuln scan on source code |
+| `scan-licenses` | Source/dependency licence declarations and configured policy; findings warn by default |
 | `scan-archive` | Source vuln scan + secrets scan of a built archive directory |
 | `scan-image` | Secrets entropy + image vuln scan on a built container |
 | `scan-sbom` | Rescan of an existing CycloneDX SBOM against today's vulnerability database |
@@ -32,21 +38,36 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3
 
 ## Usage
 
+Evidence producers do not make a CI gate merely by exporting successfully.
+The basic source and licence examples below enforce a fresh verdict. Other
+examples are **inspection recipes, not CI gates**; to enforce any of them,
+remove its stale output first, fail on export failure, and run
+`jq -e '.passed == true'` on **each** required fresh envelope. Missing or
+malformed JSON must fail. Keep warnings, errors, suppressions, examined counts
+and per-source outcomes: `passed` is not a claim of clean or full-scope analysis.
+
 ### scan-source
 
 ```bash
-# Basic scan
+# Basic CI gate; set SHA and REPO_URL first, with Dagger and jq installed
+set -eu
+rm -f ./evidence.json
 dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src=. --fail-on=HIGH \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
-  export --path=evidence.json
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
+  export --path=./evidence.json || exit 1
+jq -e '.passed == true' ./evidence.json >/dev/null || exit 1
+```
 
-# Scope to a subdirectory and exclude vendor/generated code
+Alternative scoped inspection only; not equivalent to whole-repository coverage:
+
+```bash
+# Inspect the declared subdirectory and exclusions
 dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   --src=. --path=src/api --exclude=vendor --exclude=generated \
   --fail-on=HIGH \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
-  export --path=evidence.json
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
+  export --path=scoped-inspection.json
 ```
 
 **Parameters:**
@@ -56,7 +77,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
 | `src` | Directory | required | Source directory to scan |
 | `path` | string | `""` | Subdirectory to scope the scan to. Empty = whole `src`. |
 | `exclude` | []string | `[]` | Directory names to remove before scanning |
-| `sast-rulesets` | string | `"p/security-audit"` | Semgrep rulesets (`auto` is rejected — see CLAUDE.md). `p/security-audit` is pinned to a semgrep-rules commit; other registry packs are fetched live and reported as unpinned |
+| `sast-rulesets` | string | `"p/security-audit"` | Semgrep rulesets (`auto` is rejected — see CLAUDE.md). `p/security-audit`, `p/owasp-top-ten` and `p/secrets` use pinned manifests from a semgrep-rules commit; other registry packs are fetched live and reported as unpinned |
 | `fail-on` | string | `"HIGH"` | Minimum severity that fails: CRITICAL\|HIGH\|MEDIUM\|LOW\|NONE |
 | `commit-sha` | string | required | Git commit SHA for evidence provenance |
 | `branch` | string | required | Git branch name |
@@ -131,7 +152,9 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
   export --path=evidence.json
 ```
 
-A token passed with a non-HTTPS feed URL is refused before any container runs.
+A token with an explicit non-HTTPS feed URL is refused before containers run,
+except HTTP to loopback for local protocol tests. An empty feed URL does not
+require adding a credential; omit optional feed settings when not needed.
 
 #### Repositories without dependencies
 
@@ -142,14 +165,40 @@ applicable). They remain passing, but they do not claim that a dependency scan
 or inventory ran. A resultless Trivy report remains an error when the tree does
 declare a supported dependency ecosystem, and probe failures remain errors.
 
-### scan-image
+### scan-licenses
+
+Default `--license-gate warn` does not block licence findings. To enforce the
+chosen policy in repository mode (set provenance variables first):
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-image \
-  --image=<container> --fail-on=HIGH \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
-  export --path=evidence.json
+set -eu
+rm -f ./license-evidence.json
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-licenses \
+  --src=. --license-gate=gate --license-allow=permissive \
+  --license-allow=notice --license-allow=unencumbered --fail-on=LOW \
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
+  export --path=./license-evidence.json || exit 1
+jq -e '.passed == true' ./license-evidence.json >/dev/null || exit 1
 ```
+
+`LOW` blocks every out-of-policy licence finding; a higher severity threshold
+can leave lower-severity policy violations non-blocking even in gate mode.
+These categories are an example policy, not legal clearance. Review the
+allowlist for your use and retain existing controls until equivalent assessed
+scope and enforcement are configured and verified. Inspect dependency-coverage,
+SKIPPED/not-read and exclusion disclosures; a pass does not mean every dependency
+licence was read. [Application mode](../../docs/reference/commit-monorepo.md)
+checks source declarations only and defers dependency licence assessment.
+
+### scan-image
+
+`--image` accepts a Dagger `Container`, not a literal `<container>` shell token.
+In a caller-owned Dagger module, pass the `Container` returned by `Build().Build`
+directly to `Security().ScanImage(...)` (SDK composition, not executable shell).
+[stage-4](../stage-4/README.md) supplies that wiring for a container artifact
+tail; [commit](../composites/commit/README.md) adds source checks, aggregation
+and a complete caller-side gate example. Image scanning is not a replacement
+for source/history secrets scanning or provider/platform protections.
 
 ### scan-sbom
 
@@ -187,22 +236,25 @@ never read as a rescan that found nothing.
 
 ### scan-web
 
-Runs OWASP ZAP dynamic analysis against a live HTTP/S target. Use `--full=false` (default)
-for a passive baseline scan safe for any environment. Use `--full=true` for an active full scan
-that sends attack payloads — only run against environments you own and control.
+Runs OWASP ZAP against exactly one of `--target`, `--service` or `--container`.
+Use `--mode baseline` (default), `api` (document-driven) or `full` (active).
+Every mode requires an explicitly authorized target and appropriate traffic limits;
+even a passive baseline generates requests and is not safe for every environment.
+API/full modes send attack traffic. See the [complete DAST reference](../../docs/reference/dast.md)
+for target lifecycle, API inputs and scope disclosures.
 
 ```bash
-# Passive baseline scan (safe for staging/production)
+# Passive baseline inspection (authorized target only)
 dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
   --target=https://staging.example.com \
-  --full=false --fail-on=HIGH \
+  --mode=baseline --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=web-evidence.json
 
 # Active full scan (attack payloads — test environments only)
 dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
   --target=https://test.example.com \
-  --full=true --fail-on=HIGH \
+  --mode=full --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=web-evidence.json
 ```
@@ -211,14 +263,23 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `target` | string | required | Full HTTP/S URL of the live target |
-| `full` | bool | `false` | `false` = passive baseline; `true` = active full scan |
+| `target` | string | none | HTTP/S URL; exactly one of target/service/container |
+| `service` | Service | none | Runner tunnel, e.g. `tcp://localhost:5000`; mutually exclusive with target/container |
+| `container` | Container | none | Built Dagger container; mutually exclusive with target/service |
+| `mode` | string | `baseline` | `baseline` (passive), `api` (document-driven), `full` (active) |
+| `api-spec`, `api-spec-path` | File / string | none | API document file or path served by target; mutually exclusive, for API mode |
+| `api-format` | string | `openapi` | `openapi`, `soap` or `graphql` |
 | `fail-on` | string | `"HIGH"` | Minimum severity that fails: CRITICAL\|HIGH\|MEDIUM\|LOW\|NONE |
 | `commit-sha` | string | required | Git commit SHA |
 | `branch` | string | required | Git branch name |
 | `repo-url` | string | required | Repository URL |
 
-The evidence envelope includes the raw ZAP JSON report in `genericReport` with `genericFormat="zap-json"`.
+The envelope carries cicd's `dast/1.0` payload in `genericReport` with
+`genericFormat="dast/1.0"`. Its nested `zapReport` is a compact alert report,
+not raw ZAP output: request/response bodies, headers and per-instance evidence
+captures are omitted. [Report extraction](../cross-cutting/report/README.md)
+returns the wrapper; explicitly select `.zapReport` if that compact document
+is needed. Retain the original envelope's readiness, scope and non-run metadata.
 
 ## Docs
 

@@ -43,8 +43,12 @@ Wording and reasoning live in `noartifact.go`; see
 
 ## Run locally
 
+Run from an authorized source checkout's repository root. These are local
+inspection examples, not CI gates; enforce each required fresh evidence
+verdict separately when integrating them into CI.
+
 ```sh
-cd src/build && dagger develop   # once
+(cd src/build && dagger develop)   # once
 
 # build only
 dagger -m ./src/build call build \
@@ -52,17 +56,16 @@ dagger -m ./src/build call build \
   --commit-sha local --branch main --repo-url https://example.com \
   stdout
 
-# generate SBOM (chains build → sbom)
-dagger -m ./src/build call sbom \
-  --image "$(dagger -m ./src/build call build --src ./testdata/go-app --commit-sha local --branch main --repo-url https://example.com)" \
-  --commit-sha local --branch main --repo-url https://example.com \
-  export --path /tmp/sbom-evidence.json
-
 # the no-artifact record (what --artifact none puts in the audit)
 dagger -m ./src/build call no-artifact \
   --commit-sha local --branch main --repo-url https://example.com \
   export --path /tmp/no-artifact-evidence.json
 ```
+
+For SBOM composition, pass the `Container` returned by `Build` directly to
+`Sbom` in a caller-owned Dagger module. A shell command's textual output is not
+that object. [stage-4](../stage-4/README.md) supplies build/SBOM/image-scan wiring;
+aggregate both returned envelopes and gate their fresh combined verdict in CI.
 
 ## Key files
 

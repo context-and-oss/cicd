@@ -16,8 +16,14 @@
 # ─────────────────────────────────────────────────────────────────────
 #
 # ─── Secrets ────────────────────────────────────────────────────────
-# The cicd modules are fetched from the public repository, so no secret
-# is required to run the pipeline. All of these are optional:
+# The repository is currently private. Verify authorized reusable-workflow and
+# action access separately from module-source access; these are not generally
+# available public integrations. See README.md#availability-and-source-access.
+# Anonymous fetches apply only after authorized publication and verification.
+# Feed/notification tokens below do not grant source access. Omit unused secret
+# mappings when adopting; all of these feature credentials are optional:
+# Default SAST rules have Semgrep Rules License restrictions; see
+#   THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20
 #   TEAMS_WEBHOOK    — Teams incoming webhook URL
 #   NPM_FEED_TOKEN   — Token for an internal npm registry
 #   NUGET_FEED_TOKEN — Token for an internal NuGet feed
@@ -124,8 +130,13 @@ jobs:
     #   # container; coverage is harvested and gated against the previous
     #   # successful default-branch run's evidence artifact (no baseline
     #   # file in your repo). Note: the baseline is seeded by runs on your
-    #   # default branch — until one exists the ratchet stays in fail-open
-    #   # bootstrap mode.
+    #   # default branch OF THIS SAME CALLER WORKFLOW, using precommit-evidence-*
+    #   # artifacts. This starter excludes main pushes, so it does not seed that
+    #   # baseline automatically; the separate commit workflow does not seed it.
+    #   # Configure a default-branch push path in this caller with the same
+    #   # coverage inputs, then verify a seed artifact, next-PR selection and
+    #   # controlled regression failure. Until then the ratchet can stay in
+    #   # fail-open bootstrap mode. A ratchet does not replace coverage minima.
     #   test-cmd: npm ci && npm test -- --coverage
     #   coverage-path: coverage/coverage-summary.json
     #   # Polyglot repo? test-cmd runs ONE command in ONE container, and the
@@ -136,7 +147,11 @@ jobs:
     #   # exclusive with test-cmd / coverage-path.
     #   test-legs: |
     #     [{"label":"web","language":"node","cmd":"npm ci && npm test -- --coverage","coveragePath":"coverage/coverage-summary.json"},
-    #      {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\"","coveragePath":"TestResults/coverage.cobertura.xml"}]
+    #      {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\" --results-directory /tmp/cicd-test-results","coveragePath":"/tmp/cicd-test-results/*.cobertura.xml"}]
+    #   # VSTest requires a configured XPlat/coverlet collector. The absolute
+    #   # directory pools nested projects' reports; cicd searches it recursively.
+    #   # Verify measured coverage in evidence; passing tests alone do not prove
+    #   # harvest. MTP needs its own supported coverage extension/arguments.
     #   # (the collector name is one argument — `--collect:\"XPlat Code Coverage\"`
     #   #  word-splits under `sh -c` and silently collects nothing)
     #   coverage-tolerance: "1.0"        # allowed drop in percentage points

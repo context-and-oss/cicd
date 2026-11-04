@@ -42,8 +42,13 @@ func (m *Precommit) Run(
 
 ## Run locally
 
+This is a local inspection/shadow run from an authorized checkout's root, not a
+CI gate. Default SAST uses restrictively licensed runtime rules; review the
+[rule notice](../../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+For enforcement, use the [fresh export-and-verdict recipe](README.md#usage).
+
 ```sh
-cd src/composites/precommit && dagger develop   # once
+(cd src/composites/precommit && dagger develop)   # once
 
 dagger -m ./src/composites/precommit call run \
   --src ./testdata/go-app \
@@ -81,8 +86,8 @@ The exported directory contains:
   not compose quality/security/risk/intent directly, so it cannot silently
   drift from stage-2's own composition (see
   `scripts/smoke/stage-orchestrators.sh`'s equivalence guard).
-- `requireIntent` is the only place a consumer can turn the change-intent gate
-  on; `commit.Run` deliberately exposes no equivalent. It defaults off because
+- `requireIntent` on precommit or stage-2 enables the change-intent gate;
+  `commit.Run` deliberately exposes no equivalent. It defaults off because
   the gate checks a team practice (did the author write down why this change
   exists?) rather than a property of the code. Off, the intent envelope is still
   in the audit reporting `required: false` plus an `intent-gate: NOT REQUIRED …`

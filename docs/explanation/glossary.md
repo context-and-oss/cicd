@@ -4,21 +4,26 @@ The words this repository uses with a fixed meaning. Most of them come from the
 [engineering doctrine](./doctrine.md), where a rule is only as precise as the
 vocabulary it is written in.
 
-**Band.** The major version line of a language toolchain cicd pins an image for
-— `.NET 8`, `.NET 10`, `Node 20`. A module reads the band the repository
-declares (`global.json`, `.nvmrc`, a `<TargetFramework>`) and selects the
-digest-pinned image for it; a band cicd does not pin is an error, never a
-silent fallback to the nearest one.
+**Band.** A language toolchain version line, such as `.NET 8` or `.NET 10`.
+Repository-selected scanner and native-runner images are digest-pinned. The
+native .NET legs select the lowest pinned band at or above the repository's
+request; above the supported range they try the highest pinned band with a
+warning, and an unsupported build is a non-run. Consumer-command toolchains
+(BYO tests and archive builds) follow [ADR-004](../decisions/ADR-004-toolchain-resolution.md)
+and may use readable tags rather than digests; an explicit image can include a
+digest. These are separate selection paths, not a universal exact-band guarantee.
 
 **Capsule.** A short, structured record under `.capsules/` of one decision or
 measurement: the question, what was measured, what was rejected and why. A
 capsule is the evidence behind a sentence in a spec or a CLAUDE.md; it is
 historical, never edited after the fact.
 
-**Composite.** A Dagger module under `src/composites/` that wires stage
-orchestrators and cross-cutting modules into one pre-wired pipeline with a
-single `Run` entry point — `precommit`, `commit`, `dast`. Consumers call a
-composite from the workflow starters under `templates/`.
+**Composite.** An orchestration module under `src/composites/` that wires domain,
+stage and cross-cutting modules into a pipeline. `precommit` and `commit` expose
+`Run`; DAST exposes `Scan` returning a File and `Package` accepting that detached
+File. Export the DAST scan file before packaging it in a fresh call so the
+application service graph does not remain attached. Workflow starters live under
+`templates/`.
 
 **Dogfood.** Running cicd's own pipelines against this repository, so the gate
 that grades consumers grades the code that implements it. The `dogfood-*`

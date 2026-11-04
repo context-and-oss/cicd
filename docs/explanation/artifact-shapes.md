@@ -59,12 +59,21 @@ so."
 
 The two scans of an archive deliberately look at different things.
 
-Dependency identity lives in lockfiles. A bundler erases it: a vite bundle is
-one minified file, a published .NET app is compiled IL — scanning those for
-dependencies yields noise or nothing. So the SBOM and the dependency
-vulnerability scan read the source tree's lockfiles, which is both complete
-and precise for an archive (unlike a container, an archive has no base-image
-OS packages that a source scan would miss).
+Lockfiles preserve dependency identity that bundling or compilation can obscure.
+The archive dependency scan and SBOM are therefore **source-derived inventories**,
+not a complete inventory of the exact shipped bytes. An arbitrary build command
+can add, omit or transform dependencies, bundle a runtime or native libraries,
+or fetch inputs absent from the source graph; cicd does not prove equality
+between that graph and the archive.
+
+In repository mode, a .NET tree without readable dependency inputs triggers a
+restore in a pinned SDK. The resulting graph reflects scan-time resolution,
+not necessarily the versions used by the build; floating-version warnings and
+restore failures remain significant. Other ecosystems still need supported
+resolvable inputs. Application mode (`--app-id`) deliberately defers dependency
+assessment and uses an artifact-only secrets scan for archives: it does not
+provide this dependency inventory. Read the scope, examined metadata, warnings,
+and non-run errors rather than interpreting `passed: true` as full coverage.
 
 Secrets risk is the mirror image. The dangerous failure is not a secret in
 your source — your source scan already covers that — it is a secret that the
@@ -94,6 +103,10 @@ Monotonic gates block legitimate work — deleting tested dead code drops
 coverage — and teach teams to game the number with assertion-free tests. A
 tolerance absorbs refactor noise; the warn-mode escape hatch handles
 deliberate drops while leaving a visible trace in the workflow diff.
+
+The ratchet is not an absolute coverage floor. Retain an existing minimum-coverage
+check until an equivalent control is configured and verified; a missing baseline
+or a warned pass does not meet that minimum by itself.
 
 ## What this buys the fleet
 

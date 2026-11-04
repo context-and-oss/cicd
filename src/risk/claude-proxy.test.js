@@ -1,6 +1,6 @@
 // Loopback tests for claude-proxy.js. Each starts the real proxy as a child
-// process on 127.0.0.1 with testdata/fake-claude first on PATH — no model, no
-// subscription, no network beyond loopback. Run: node --test src/risk/
+// process on 127.0.0.1 with a fixture-only PATH — no model, no subscription,
+// no network beyond loopback, and no host-CLI fallback when the fake is removed. Run: node --test src/risk/
 // (scripts/tests/test_claude_proxy.py runs it in the script suite and CI).
 "use strict";
 
@@ -27,6 +27,8 @@ function sandbox() {
   for (const d of [bin, log, tmp]) fs.mkdirSync(d);
   fs.copyFileSync(FAKE_SRC, path.join(bin, "claude"));
   fs.chmodSync(path.join(bin, "claude"), 0o755);
+  // The fake's /usr/bin/env node shebang needs Node, not the host's CLI path.
+  fs.symlinkSync(process.execPath, path.join(bin, "node"));
   return { root, bin, log, tmp };
 }
 
@@ -35,12 +37,12 @@ function sandbox() {
 function startProxy(box, { args = [], env = {} } = {}) {
   const fullEnv = {
     ...process.env,
-    PATH: `${box.bin}${path.delimiter}${process.env.PATH}`,
     TMPDIR: box.tmp,
     FAKE_CLAUDE_LOG: box.log,
     FAKE_CLAUDE_SECRET_PROBE: crypto.createHash("sha256").update(TOKEN).digest("hex"),
     CICD_RISK_PROXY_TOKEN: TOKEN,
     ...env,
+    PATH: box.bin,
   };
   for (const [k, v] of Object.entries(fullEnv)) if (v === undefined) delete fullEnv[k];
   const child = spawn(process.execPath, [PROXY, "--port", "0", ...args], { env: fullEnv });
@@ -323,6 +325,28 @@ test("a CLI failure or a CLI that cannot start returns a fixed error, never its 
     assert.equal((await request(p.port, { body: chat("hello") })).status, 200);
     const { stdout, stderr } = p.output();
     assert.ok(!stdout.includes("FAKE-STDERR-SENTINEL") && !stderr.includes("FAKE-STDERR-SENTINEL"));
+  } finally {
+    await stopProxy(p);
+  }
+});
+
+test("a missing fake CLI never falls through to a host executable", async () => {
+  const box = sandbox();
+  const fallback = sandbox();
+  const previousPath = process.env.PATH;
+  let p;
+  try {
+    // A second controlled fake models a host installation without contacting it.
+    process.env.PATH = fallback.bin;
+    p = await startProxy(box);
+  } finally {
+    process.env.PATH = previousPath;
+  }
+  try {
+    fs.renameSync(path.join(box.bin, "claude"), path.join(box.bin, "claude.gone"));
+    const res = await request(p.port, { body: chat("isolation fixture") });
+    assert.equal(res.status, 502);
+    assert.deepEqual(records(box), []);
   } finally {
     await stopProxy(p);
   }

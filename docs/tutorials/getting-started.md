@@ -4,6 +4,14 @@
 You can use the complete pipelines, call one module at a time, or compose your
 own flow from the same building blocks.
 
+**Source access first:** the repository is currently private. Remote module,
+action and reusable-workflow examples require authorized access; anonymous use
+applies only after authorized publication and availability verification. See
+[availability and source access](../../README.md#availability-and-source-access)
+for separate read-only checkout/local-`-m` use. Feed and notification tokens do not
+grant module access. Default SAST rules have
+[Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+
 ## Why use it?
 
 Use these modules when you want delivery checks that are portable across CI
@@ -56,7 +64,7 @@ what turns it into an exit code. The `&&` chain means a failed export can never
 fall through to grading an old file. To see why a run did not pass:
 
 ```bash
-jq '{passed, outcome, findingsBySeverity, errors}' evidence-security.json
+jq '{passed, outcome, findingsBySeverity, errors, warnings, sources, examined, rules}' evidence-security.json
 ```
 
 | Field | Meaning |
@@ -64,10 +72,15 @@ jq '{passed, outcome, findingsBySeverity, errors}' evidence-security.json
 | `passed` | The verdict. `false` when a finding reaches `--fail-on`, and also when a scanner could not run, at every `--fail-on` level, `NONE` included |
 | `outcome` | What happened: `CLEAN` (ran, found nothing), `FINDINGS` (ran, found something; `passed` says whether it trips the gate), `FAILED` (ran, and what it ran against failed, such as a test suite), `SKIPPED` (nothing to do, by choice), `ERROR` (could not produce a usable result) |
 | `findingsBySeverity` | What was found, counted by severity |
-| `errors` | Every scanner that could not run or read only part of the input. A non-run is never reported as clean, so read this before trusting a zero |
+| `errors` | Non-runs and other gate failures; read before trusting a zero |
+| `warnings` | Partial parsing, timeouts, suppressions, omitted archives and other scope limitations can appear here without failing the verdict |
+| `sources`, `examined`, `rules` | Per-producer status and available examination/rule metadata; inspect alongside native reports |
 
 The full file also embeds each tool's native report, SARIF or CycloneDX, when the
-tool produced one.
+tool produced one. `passed` is a gate decision, not proof of clean or full-scope
+examination. Preserve existing coverage minima, blocking licence policies,
+full-history secrets scans and live credential verification until equivalent
+scope and enforcement are configured and verified.
 
 To make a job fail on the verdict, gate on `passed` after the call, chained with
 `&&` or in a script running under `set -e`. Check one file per `jq -e`: given
@@ -77,8 +90,9 @@ several files, it exits on the last one only.
 jq -e '.passed == true' evidence-security.json > /dev/null
 ```
 
-Every CI example in these guides ends with that gate. Without it, cicd reports a
-failure and blocks nothing.
+CI gates need that verdict check; explicitly labelled shadow/inspection examples
+intentionally omit it. Without grading, evidence can report failure while blocking
+nothing.
 
 ## Use it entirely
 
@@ -100,6 +114,7 @@ Start here: [Use the complete pipeline](../how-to-guides/use-complete-pipeline.m
 Call a domain module directly when you want one capability:
 
 ```bash
+rm -f ./evidence-quality.json &&
 dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call check \
   --src . \
   --include go \

@@ -2,7 +2,7 @@
 
 ## What this repo is
 
-A monorepo of reusable [Dagger](https://dagger.io) pipeline modules implementing a 12-stage CD Model. Each module is a standalone Dagger module written in Go. Modules live under `src/`, are composed into pre-wired pipelines via `src/composites/`, and consumed by teams via the `templates/` copy-paste starters.
+A monorepo of reusable [Dagger](https://dagger.io) pipeline modules for the source and artifact gates of a 12-stage CD Model, plus independent running-app DAST. The remaining stages are design context, not implemented deployment or approval APIs; see [ROADMAP.md](ROADMAP.md). Each module is a standalone Dagger module written in Go. Modules live under `src/`, are composed into pipelines via `src/composites/`, and consumed through the `templates/` starters.
 
 ## Open source: nothing private in the tree
 
@@ -50,7 +50,8 @@ src/
     dast/                   Running-app DAST on its own cadence — wired into no other
                             composite and not a merge gate. --app url|service|container
                             selects who starts the application; only `container` builds
-                            from this commit and can attest what it scanned → *Directory
+                            from this commit and can attest what it scanned. Scan → exported *File,
+                            then Package in a fresh call → *Directory
 
 templates/                Copy-paste GitHub Actions and Azure DevOps workflow starters
 testdata/                 Language fixture apps used by integration tests
@@ -69,11 +70,11 @@ testdata/                 Language fixture apps used by integration tests
 
 ## Architecture rules
 
-**Evidence-first.** Most entry functions return `(*dagger.File, error)` — a JSON evidence envelope. Exception: `build.Build()` returns `*dagger.Container` so downstream steps (`Sbom`, `security.ScanImage`) can share the same lazy image reference. The `src/cross-cutting/evidence` module aggregates evidence files into `combined-evidence.json`. Never return raw tool output as the final artifact.
+**Evidence-first.** Evidence-producing checks return `(*dagger.File, error)` — a JSON evidence envelope. Resource and transport functions have different contracts: builds/preparation can return containers or directories, composites aggregate audit directories, artifact helpers return manifests/bundles, and rendering helpers return reports. `build.Build()` returns a container so `Sbom` and `security.ScanImage` can share the same lazy image. The `src/cross-cutting/evidence` module aggregates evidence into `combined-evidence.json`. Do not substitute an unwrapped scanner report for a check's evidence envelope.
 
 **The artifact is never published.** cicd builds and scans the deployable; deploying it — registry push, Dataverse import, Web App publish — stays in the consumer repo (ADR-001). There is no `build.Publish`.
 
-**One entry point per composite, shape as a parameter.** The commit composite exposes a single `Run` with an explicit `--artifact container|archive|none` selector; the shape is never auto-detected (ADR-005 supersedes ADR-001's per-shape entry points). Do not add a second entry point for a new shape.
+**One entry point for commit shapes.** The commit composite exposes a single `Run` with an explicit `--artifact container|archive|none` selector; the shape is never auto-detected (ADR-005 supersedes ADR-001's per-shape entry points). Do not add a second entry point for a new commit shape. DAST deliberately uses `Scan` → exported file → `Package` in a fresh call: detaching the scan result releases live service bindings before audit packaging. This lifecycle is not an alternative commit shape.
 
 **Schema in every module.** `src/internal/evidence/schema.go` defines the canonical Go types. Each module that produces evidence has a verbatim copy at `src/<module>/schema.go`. Run `make sync-schema` after changing the schema to keep copies in sync.
 
@@ -253,7 +254,7 @@ dagger -m ./src/composites/commit call run \
 1. Create the directory under `src/` (e.g. `src/quality/`, `src/cross-cutting/<name>/`).
 2. `cd src/<name> && dagger init --name <name> --sdk go`
 3. Copy `src/internal/evidence/schema.go` → `src/<name>/schema.go`
-4. Implement `main.go` — entry functions must return `(*dagger.File, error)` containing an evidence envelope (except `build.Build` which returns `*dagger.Container`).
+4. Implement `main.go` — evidence-producing checks return `(*dagger.File, error)` containing an envelope. Resource, aggregate, packaging and rendering functions retain their declared container/directory/transport contracts; see the architecture rules above.
 5. Add the module to `scripts/repo-inventory.json` — the single defended manifest. `modules` drives the `Makefile`'s `MODULES`/`SYNCED_MODULES`/`CONTRACT_STEPS` and the release module load, and `check-surface` fails on a `dagger.json` on disk that the manifest does not declare. If the module ships a `README.md`/`CLAUDE.md`, declare it under `active_surfaces.module_docs` too, or the undeclared-document check fails.
 6. Add the module to the `module-test` matrix in `.github/workflows/ci.yml` and give it a fixture case in that job's case statement (matrix value uses `src/<name>`).
 7. Wire it into `src/composites/precommit/main.go` or `src/composites/commit/main.go` as appropriate.
@@ -274,11 +275,14 @@ dagger -m ./src/composites/commit call run \
 | `smoke-non-run-matrix` | after lint | `scripts/smoke/non-run-matrix.sh` — injects a real non-run through quality, risk and intent and requires each to fail or be refused at `--fail-on NONE`, beside a positive control per module |
 | `commit-subjects` | every push/PR | `scripts/check-commit-subjects.py` — refuses a subject git-cliff cannot parse. Needs `fetch-depth: 0` |
 
-Plus the aggregate `ci` job, which `needs:` every job above and fails unless each
-one actually succeeded — `skipped` and `cancelled` included. It is the single check
-context intended for required branch protection; destination settings must be
-verified separately. A new job is only covered once it is in that
-`needs:` list.
+The aggregate `ci` job verifies the suite selected by the change classifier.
+Product changes require every product job to succeed; documentation-only changes
+require `docs-validation` and expect the product jobs to be skipped. Both paths
+require classification and commit-subject validation. Unexpected skips or
+cancellations fail. A green documentation path is not execution of module tests,
+container smokes or the separate dogfood intent check. `ci` is the required-check
+context; destination settings still need independent verification. A new job is
+covered only when the aggregate includes its dependency and expected result.
 
 Everything after `lint-repo` runs in parallel, including the composite smokes.
 They used to `needs: module-test`, which passed no artifact and granted no
@@ -322,7 +326,7 @@ is a third answer that is never a pass. None has an override flag.
 
 **A release that never happens is watched from outside the release pipeline.** `cd.yml` failed for four days while 64 commits accumulated and every human-visible signal stayed green. `.github/workflows/release-drift.yml` compares the newest tag against `git cliff --bumped-version` on a schedule, from outside CD, and past two days of drift opens one deduped issue labelled `release-drift`. Logic in `scripts/release_drift.py`. See [specs/report-release-drift.md](specs/report-release-drift.md).
 
-**A release is delivered by pull request, never pushed to main.** The intended `main` policy requires a PR and the `ci` status **on the commit being pushed**. Effective destination rules must be verified rather than inferred from this guide; ordinary workflow pushes cannot be assumed to satisfy them. Release delivery uses `chore/release-v<version>` branches. `scripts/ci/deliver-release-pins.sh` is the one implementation behind `cd.yml` and `release.yml` and reports exactly one of `pr-open` / `released` / `superseded`. Traps: a PR opened by `GITHUB_TOKEN` triggers no workflows, so `CICD_RELEASE_TOKEN` is mandatory; and every release is a change to `main`, so `scripts/ci/write-release-intent.py` writes a real intent artifact. See [specs/deliver-release-pins-by-pull-request.md](specs/deliver-release-pins-by-pull-request.md).
+**A release is delivered by pull request, never pushed to main.** The intended `main` policy requires a PR and the `ci` status **on the commit being pushed**. Effective destination rules must be verified rather than inferred from this guide; ordinary workflow pushes cannot be assumed to satisfy them. Release delivery uses `chore/release-v<version>` branches. `scripts/ci/deliver-release-pins.sh` is the one implementation behind `cd.yml` and `release.yml` and reports `pr-open`, `released`, `superseded` or `stale`. `pr-open` still awaits merge requirements; only `released` permits the caller to tag. `stale` forbids tagging the moved tip and checks the successor handoff; a successful handoff check is not a published release. Traps: a PR opened by `GITHUB_TOKEN` triggers no workflows, so `CICD_RELEASE_TOKEN` is mandatory; and every release is a change to `main`, so `scripts/ci/write-release-intent.py` writes a real intent artifact. See [specs/deliver-release-pins-by-pull-request.md](specs/deliver-release-pins-by-pull-request.md).
 
 **And that pull request's own gate is asked about, never assumed.** The org ruleset once lost its `required_status_checks` rule while still showing as attached; `gh pr merge --auto` on an already-mergeable PR merges on the spot and reports which happened nowhere, so four releases merged before their `ci` run started and read `ci: success` forever. `scripts/check-release-gate.py --branch main` runs as a preflight and fails unless a rule actually names `ci`; `--delivered-pr N` asserts either *open with auto-merge armed* or *merged after `ci` succeeded on the head sha*. While the rule is absent, the pipeline refuses to release at all. See [specs/prove-the-release-merge-was-gated.md](specs/prove-the-release-merge-was-gated.md).
 

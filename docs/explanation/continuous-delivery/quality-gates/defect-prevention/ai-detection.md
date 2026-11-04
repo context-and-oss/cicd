@@ -26,9 +26,17 @@ AI (LLMs like GPT-4, Claude, GitHub Copilot) provides semantic analysis to detec
 
 ## Implementation: risk module
 
-The `risk` Dagger module implements the Stage 2 / Stage 9 AI capabilities described above.
-It scans the repository with an LLM, produces `findings.json` (committed for human review),
-and gates CI via OPA policy enforcement.
+The table above describes conceptual opportunities, not a list of implemented
+cicd capabilities. The `risk` module runs a developer-invoked LLM scan outside CI to produce
+`findings.json` and a `decisions.json` review scaffold. Humans review the findings
+and record decisions; CI uses deterministic OPA policies to validate those
+records and supported infrastructure files. Model output can be incomplete or
+wrong and does not establish production readiness.
+
+Deployment-history scoring and Stage 9 automatic low-risk approval are not
+implemented by this module. Release authorization, required human review and
+any automated deployment policy remain consumer-owned; neither the model nor a
+passing evidence envelope grants approval.
 
 - [AI Risk Analysis](../../security/risk-analysis.md) — how it works
 - [risk module README](../../../../../src/risk/README.md) — install and usage

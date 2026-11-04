@@ -1,9 +1,13 @@
 # scripts/
 
-The repository's own checks, release machinery and generators. Everything here
-runs with Python 3, bash and git alone; nothing imports a third-party package,
-because these run on bare CI runners and inside the release sandbox where no
-dependency install happens first.
+The repository's checks, release machinery and generators. Python helpers
+import only the standard library, but their external commands have separate
+prerequisites: Git and bash for repository helpers, `gh` for release/API checks,
+Go and golangci-lint for Go validation, Node.js 18+ for proxy loopback tests,
+and Dagger plus a running Docker daemon for module development and behavioural
+smokes. Evidence and release shell helpers also use jq. See
+[CONTRIBUTING.md](../CONTRIBUTING.md#prerequisites); no Python dependency install
+substitutes for these executables.
 
 Convention: `check-<name>.py` is a command-line entry point and `<name>.py`
 beside it is the importable logic, tested under `tests/`. Every check answers
@@ -36,7 +40,7 @@ help` lists them.
 | `check-release-handoff.py` | `release_handoff.py` | Reports a `main` pinned to a version no tag names |
 | `check-release-drift.py` | `release_drift.py` | Reports releasable commits no release has tagged, from outside the release pipeline |
 | `bump-version.py` | | Rewrites every consumer-facing pin to a new tag (`make bump-templates VERSION=X.Y.Z`) |
-| `ci/deliver-release-pins.sh` | | Delivers the pin bump to `main` by pull request and reports exactly one of `pr-open`, `released`, `superseded` |
+| `ci/deliver-release-pins.sh` | | Delivers the pin bump to `main` by pull request and reports `pr-open`, `released`, `superseded` or `stale`; only `released` permits tagging, while `stale` verifies the successor handoff without tagging the moved tip |
 | `ci/wait-for-release-merge.sh` | | Waits for that pull request to merge so the caller can tag |
 | `ci/write-release-intent.py` | | Writes `specs/release-latest.md`, the intent artifact the release PR must carry |
 | `ci/classify-push-rejection.sh` | | Decides whether a rejected push is worth retrying |

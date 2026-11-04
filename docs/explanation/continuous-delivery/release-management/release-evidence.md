@@ -2,9 +2,13 @@
 
 ## Overview
 
-Release evidence is the **proof of quality** demonstrating a release meets production readiness criteria.
+Release evidence records validation results for review against production
+readiness criteria; it is not proof of correctness or approval on its own.
 
-This evidence is collected throughout the pipeline and reviewed at Stage 9 (Release Approval).
+The tables below describe a conceptual consumer release process, not evidence
+that cicd implements every stage. Generated envelopes are not signed-off records:
+required human review, authorization and any cryptographic signing are separate.
+Retain warnings, non-runs, suppressions and examined metadata alongside verdicts.
 
 ---
 

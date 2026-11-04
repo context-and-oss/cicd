@@ -101,13 +101,13 @@ What a consumer sees, and what to do about it:
    in `src/quality/images.go`, an entry in `dotnetSDKBands`, a `case` in
    `dotnetSDKBase`, and a declaration in `scripts/runtime-images.json` plus a
    `renovate.json` group. `make check-image-pins` fails until all of them exist.
-4. **As a stopgap**, drop `dotnet` from `--include` so cicd stops reporting a leg
-   it cannot run, or move the tests to `quality.test` — your own `--test-cmd` in
-   the toolchain your `--toolchain-image` names. Both cost coverage rather than
-   restoring it: the first stops the .NET legs entirely, the second hands the
-   toolchain back to the repository being gated. And `include` is a `commit.yml`
-   passthrough — `precommit.yml` exposes no such input — so the first is
-   unavailable to the pre-commit gate.
+4. **Do not treat language exclusion as a repair.** Both `commit.yml` and
+   `precommit.yml` expose `include`, but omitting .NET removes checks rather than
+   restoring a usable gate. BYO tests can select their own compatible SDK through
+   `--toolchain-image`; they do **not** repair native lint. With BYO tests,
+   `quality.Check` becomes lint-only and still runs `dotnet format` in cicd's
+   selected pinned SDK. Keep existing protections while resolving a compatible
+   supported SDK configuration or a maintainer pin correction.
 
 ## The declared inventory
 
@@ -119,9 +119,11 @@ runs.
 
 Every digest is the **multi-architecture image index** digest, verified to be
 identical under `--platform linux/amd64` (CI) and `--platform linux/arm64`
-(local development). Resolve one with:
+(local development). The following is schematic, not executable shell: replace
+the angle-bracket placeholders with the repository and tag being reviewed.
+Registry lookup is a separate maintainer action, not part of the offline check.
 
-```
+```text
 dagger core container from --address <repository>:<tag> image-ref
 ```
 

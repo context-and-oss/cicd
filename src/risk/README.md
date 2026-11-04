@@ -6,38 +6,71 @@ Returns findings as committed JSON artifacts; Validate gates CI against them.
 
 ## Install
 
+Remote references require authorized read access while the repository is private;
+anonymous fetch is conditional on an explicitly approved public distribution.
+An authorized read-only source checkout can instead use `-m ./src/risk` from
+its root. Source credentials are separate from model/proxy authentication.
+
 ```bash
 dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3
 ```
 
 ## Usage
 
+Before using the CLI proxy, install Node.js and the Claude CLI, authenticate the
+CLI through its supported login flow, and confirm it supports the restricted
+flags listed below. Export the proxy, generate the token and start it in a
+separate terminal; run the scan with the same token in its environment only after
+the proxy is ready. The default CLI endpoint uses Docker Desktop's
+`host.docker.internal:4000`; Linux setups must configure a reachable proxy URL
+through `--llm-url` instead. The model receives source contents: review the
+collection policy below before scanning. The explicit URL must be reachable
+from the Dagger module container: its `localhost` is not the host terminal's.
+Choose one scan option, not all three.
+
 ```bash
 # Step 1 — scan (run locally, commit the output)
 # Option A: Claude CLI proxy (no API key needed — uses your CLI subscription)
-dagger -m ./src/risk call proxy export --path ./claude-proxy.js
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call proxy export --path ./claude-proxy.js
 export CICD_RISK_PROXY_TOKEN="$(openssl rand -hex 32)"   # the proxy refuses to start without it
-node claude-proxy.js &   # keep running
-dagger -m ./src/risk call scan --source . --use-claude-cli \
+node claude-proxy.js     # keep running; use a second terminal for the scan
+# In that second terminal, with the same token in the environment:
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call scan --source . --use-claude-cli \
   --llm-token env:CICD_RISK_PROXY_TOKEN export --path .
 
 # Option B: native dag.LLM() (requires ANTHROPIC_API_KEY)
-ANTHROPIC_API_KEY=sk-ant-... dagger -m ./src/risk call scan --source . export --path .
+# Set ANTHROPIC_API_KEY securely in the environment, not in shell arguments.
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call scan --source . export --path .
 
-# Option C: any OpenAI-compatible gateway (--llm-token is optional, sent as a bearer token)
-dagger -m ./src/risk call scan --source . --llm-url http://my-proxy:4000 export --path .
+# Option C: explicit OpenAI-compatible URL (Docker Desktop; same running proxy/token)
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call scan --source . --llm-url http://host.docker.internal:4000 \
+  --llm-token env:CICD_RISK_PROXY_TOKEN export --path .
 
-# Step 2 — review and edit decisions.json (set status: approved / accepted_risk / rejected)
+```
 
-# Step 3 — validate in CI (reads committed findings.json + decisions.json)
+Review all generated files for accuracy and sensitive content, then commit
+`findings.json`, `decisions.json` and `scan-manifest.json`. An authorized human
+owns the decisions (`approved`, `accepted_risk` or `rejected`); generation is
+not review or approval.
+
+```bash
+# Validate in CI (set SHA and REPO_URL; requires Dagger and jq)
+set -eu
+rm -f ./evidence.json
 dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call validate \
   --source=. --fail-on=HIGH \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
-  export --path=evidence.json
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
+  export --path=./evidence.json || exit 1
+jq -e '.passed == true' ./evidence.json >/dev/null || exit 1
 
-# Render a markdown report
-dagger -m ./src/risk call report --source . export --path risk-report.md
+# Render a markdown report (inspection, not a gate)
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call report --source . export --path risk-report.md
 ```
+
+Export success alone does not enforce `validate`'s verdict; missing/malformed
+JSON must fail, as above. Retain warnings, errors, accepted-risk records and
+examined/scope metadata. `passed` does not prove that all source, infrastructure
+or risks were assessed, or that human review occurred.
 
 ## Functions
 
@@ -135,7 +168,7 @@ Scan produces three files you commit to the repo:
 - **`decisions.json`** — scaffold for human review: accept, reject, or suppress each finding
 - **`scan-manifest.json`** — audit trail: which files were sent to the LLM, their sizes, and the LLM mode used. Paths only, no content.
 
-CI reads `findings.json` + `decisions.json` via `validate`; the manifest is for human/incident-response review. Missing files pass with a warning (safe for first run).
+CI reads `findings.json` + `decisions.json` via `validate`; the manifest is for human/incident-response review. Missing files pass with a warning for bootstrap; that is not proof of an AI scan or human review.
 
 ### Deterministic OPA policy overrides
 

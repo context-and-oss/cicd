@@ -80,7 +80,16 @@ INVENTORY_FILENAME = "repo-inventory.json"
 #
 # A shape missing here is a pin nothing reads: the bumper never moves it and the
 # skew check never sees it lag, so it reads as current while naming an old release.
+# The shared-template examples use an ADO repository mapping, not an @v ref.
+# Match its named repository and ref together. Only mapping metadata may occur
+# between them: never cross a new repository or rewrite an unrelated tag.
+ADO_RESOURCE_PIN_PREFIX = (
+    r"(?m:^[ \t]*name:[ \t]*[\"']?context-and-oss/cicd[\"']?[ \t]*(?:#[^\n]*)?\n"
+    r"(?:[ \t]*(?:(?:endpoint|type):[^\n]*|#[^\n]*)?[ \t]*\n)*"
+    r"[ \t]*ref:[ \t]*[\"']?refs/tags/v)"
+)
 PIN_REWRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile("(" + ADO_RESOURCE_PIN_PREFIX + r")\d+\.\d+\.\d+"), r"\g<1>{v}"),
     (re.compile(r"(github\.com/context-and-oss/cicd/[A-Za-z0-9/_\-]+@v)\d+\.\d+\.\d+"), r"\g<1>{v}"),
     (re.compile(r"(context-and-oss/cicd/\.github/workflows/[A-Za-z0-9_\-]+\.yml@v)\d+\.\d+\.\d+"), r"\g<1>{v}"),
     (re.compile(r"(context-and-oss/cicd/\.github/actions/[A-Za-z0-9_\-]+@v)\d+\.\d+\.\d+"), r"\g<1>{v}"),
@@ -88,10 +97,23 @@ PIN_REWRITE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 # Captures every pinned version token in an active surface. Group 1 = the X.Y.Z.
 VERSION_SCAN = re.compile(
-    r"(?:github\.com/context-and-oss/cicd/[A-Za-z0-9/_\-]+"
+    r"(?:(?:github\.com/context-and-oss/cicd/[A-Za-z0-9/_\-]+"
     r"|context-and-oss/cicd/\.github/workflows/[A-Za-z0-9_\-]+\.yml"
-    r"|context-and-oss/cicd/\.github/actions/[A-Za-z0-9_\-]+)@v(\d+\.\d+\.\d+)"
+    r"|context-and-oss/cicd/\.github/actions/[A-Za-z0-9_\-]+)@v|"
+    + ADO_RESOURCE_PIN_PREFIX + r")(\d+\.\d+\.\d+)"
 )
+
+def version_pins(text: str) -> list[tuple[str, int]]:
+    """Read every supported pin with the version token's actual line number.
+
+    ADO resource mappings span lines; per-line regex calls cannot see them.
+    Release handoff and consistency checks share this reader.
+    """
+    return [
+        (match.group(1), text.count("\n", 0, match.start(1)) + 1)
+        for match in VERSION_SCAN.finditer(text)
+    ]
+
 
 # `dagger ... -m github.com/context-and-oss/cicd/<path>@v<ver> call <cmd>`
 REMOTE_CALL_SCAN = re.compile(
@@ -687,9 +709,8 @@ def check_pin_consistency(inv: Inventory, *, tolerate_pending: bool = False) -> 
         path = inv.root / rel
         if not _readable(path):
             continue
-        for lineno, line in enumerate(path.read_text().splitlines(), 1):
-            for ver in VERSION_SCAN.findall(line):
-                seen.setdefault(ver, []).append(f"{rel}:{lineno}")
+        for ver, lineno in version_pins(path.read_text()):
+            seen.setdefault(ver, []).append(f"{rel}:{lineno}")
     if len(seen) <= 1:
         return []
 

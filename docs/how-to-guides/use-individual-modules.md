@@ -3,6 +3,18 @@
 Use individual modules when you want one capability without adopting the full
 pre-commit or commit pipeline.
 
+First read [availability and source access](../../README.md#availability-and-source-access):
+the repository is currently private; remote examples are conditional on authorized
+access. Use a separate authorized source checkout and local `-m` paths when needed.
+Default SAST rules have [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+
+The standalone commands below are **inspection examples**, not CI gates. For a gate,
+remove the specific previous output before export, stop on any execution/export
+failure, and grade each fresh required envelope with `jq -e '.passed == true'`.
+Read warnings, errors, suppressions and per-source scope/examined metadata too;
+passing does not establish complete coverage. `include` selects quality languages,
+not directories or the scope of every scanner.
+
 ## Quality
 
 Run linting and unit tests:
@@ -72,7 +84,7 @@ Run a passive OWASP ZAP baseline scan against a live target:
 ```bash
 dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
   --target https://staging.example.com \
-  --full=false \
+  --mode baseline \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
@@ -80,7 +92,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
   export --path ./evidence-web-security.json
 ```
 
-Only use `--full=true` against environments you own and control.
+Use `--mode full` only against environments you own and are authorized to attack.
 
 ## Risk
 
@@ -96,7 +108,14 @@ dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call validate \
   export --path ./evidence-risk.json
 ```
 
-Generate those files during a local review:
+AI discovery is opt-in and requires configured LLM access (native
+`ANTHROPIC_API_KEY` or an explicitly configured proxy). It sends selected source
+files in full up to the prompt budget; `scan-manifest.json` records the selection.
+Review [authentication and data scope](run-pipeline-locally.md#ai-risk-scan-risk-module-only)
+and [what reaches the model](../../src/risk/README.md#what-the-scan-sends-to-the-model)
+before running it. Policy-only `validate` does not perform AI discovery.
+
+Generate those files during an authorized local review:
 
 ```bash
 dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.3 call scan \
@@ -109,7 +128,7 @@ the decisions in CI.
 
 ## Build and SBOM
 
-Build an OCI image and generate a CycloneDX SBOM:
+Build an OCI image (this command alone does not retain an SBOM):
 
 ```bash
 dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call build \
@@ -117,7 +136,12 @@ dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call build \
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
   --repo-url "https://github.com/your-org/your-repo"
+```
 
+The following is a **separate standalone inventory of Alpine**, not of the
+application image above:
+
+```bash
 dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call sbom \
   --image alpine:3.19 \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -127,7 +151,9 @@ dagger -m github.com/context-and-oss/cicd/src/build@v5.1.3 call sbom \
 ```
 
 Use a custom Dockerfile path or platform with `--dockerfile` and `--platform`
-when calling `build`.
+when calling `build`. For application-image evidence, pass the actual returned
+`Container` from `Build` into `Sbom` and `ScanImage` in your Dagger module, or
+use the [commit composite](use-complete-pipeline.md), which connects them.
 
 ## Notifications
 
@@ -186,6 +212,8 @@ jobs:
 
       - name: Run source security scan
         run: |
+          set -euo pipefail
+          rm -f ./evidence-security.json
           dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
             --src . \
             --fail-on HIGH \
@@ -248,7 +276,9 @@ steps:
   # nobody read.
 
   - bash: |
+      set -euo pipefail
       mkdir -p ./out
+      rm -f ./out/evidence-security.json
       dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
         --src . \
         --fail-on HIGH \
@@ -267,8 +297,11 @@ steps:
     condition: always()
 ```
 
-The modules are fetched from the public cicd repository, so no GitHub
-credential is needed on either platform.
+For Azure Repos, an owner must configure target-branch **Build validation** for
+this pipeline; YAML `pr:` alone does not establish PR validation. Verify a real PR
+run and required policy. For GitHub-hosted source, YAML PR triggers apply subject
+to platform access settings. Module-source authorization remains separate from
+feed and PR-comment credentials.
 
 ## Related
 

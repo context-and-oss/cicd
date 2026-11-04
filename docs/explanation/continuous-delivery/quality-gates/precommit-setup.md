@@ -10,18 +10,30 @@ and as the CI gate that runs on every push.
 The precommit composite runs quality, security, and risk checks in a single Dagger call.
 Developers run this before pushing to catch issues while context is fresh.
 
-**Prerequisites:** Docker Desktop running, Dagger CLI installed.
+**Prerequisites:** an authorized cicd source checkout, Docker running, Dagger CLI
+and `jq` installed. Run from the checkout root; this local `-m` form does not
+require an anonymous module fetch. Source access must be arranged separately
+while hosting is private.
+
+The default SAST rules are fetched at runtime under restrictive, non-Apache
+terms; review [the runtime licensing boundary](../../../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20)
+for internal-use, hosted-service and redistribution limits.
 
 ```bash
-# First time — generate internal SDK
-cd src/composites/precommit && dagger develop
+(
+  set -euo pipefail
+  # First time — generate internal SDK without changing the caller's directory
+  (cd src/composites/precommit && dagger develop)
 
-# Run against your working directory
-dagger -m ./src/composites/precommit call run \
-  --src . \
-  --fail-on HIGH \
-  --commit-sha local --branch main --repo-url https://example.com \
-  export --path ./out/precommit-evidence
+  # Clean stale output, export fresh evidence, then enforce its verdict
+  rm -rf -- ./out/precommit-evidence
+  dagger -m ./src/composites/precommit call run \
+    --src . \
+    --fail-on HIGH \
+    --commit-sha local --branch main --repo-url https://example.com \
+    export --path ./out/precommit-evidence
+  jq -e '.passed == true' ./out/precommit-evidence/combined-evidence.json >/dev/null
+)
 ```
 
 → Full step-by-step instructions: **[Run the pipeline locally](../../../how-to-guides/run-pipeline-locally.md)**

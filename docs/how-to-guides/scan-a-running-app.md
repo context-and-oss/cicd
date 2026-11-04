@@ -14,6 +14,15 @@ rule this composite follows is
 cicd never deploys the thing it scans is
 [ADR-001](../decisions/ADR-001-artifact-shapes.md).
 
+## Source access prerequisite
+
+The repository is currently private. Remote examples, installer actions and reusable
+workflows require separately authorized access; anonymous fetching applies only
+after authorized publication and availability verification. See
+[availability and source access](../../README.md#availability-and-source-access)
+for the separate authorized checkout/local-`-m` alternative. A local path must point
+to that cicd checkout, not to absent `src/` directories in your application.
+
 ## One question: who starts the app?
 
 Everything else follows from the answer.
@@ -102,17 +111,18 @@ scan job that has to run inside an existing workflow.
 Copy
 [`templates/azure-devops/dast.yml`](https://github.com/context-and-oss/cicd/blob/main/templates/azure-devops/dast.yml)
 to `.pipelines/dast.yml` instead. Same three shapes, same cadence, same two
-timeouts. The modules are public and need no credential; the optional
-`TEAMS_WEBHOOK` is the one
-[set-up-azure-devops-auth.md](set-up-azure-devops-auth.md) already describes.
+timeouts. Module-source access is separate from optional notification credentials;
+[set-up-azure-devops-auth.md](set-up-azure-devops-auth.md) describes those surfaces.
 
 Two differences worth knowing before you copy it. There is no reusable workflow
 on this side — ADO has no `workflow_call`, so the template *is* the pipeline and
 you own every line of it once copied. And **it does not gate**: the composites
 exit 0 on a tripped gate, the verdict lives in `combined-evidence.json`, and the
 step that reads it ships commented out under a `GATE GOES HERE` banner. Until
-you uncomment it, the pipeline attacks your application and then goes green
-whatever it finds. That is worse here than on the commit lane, because DAST's
+you add a fresh-output, fail-closed verdict check, findings do not fail this
+advisory pipeline. Clean prior outputs and stop on scan/package export failures
+before grading; uncommenting a verdict step alone does not establish freshness.
+That is worse here than on the commit lane, because DAST's
 `passed: false` also covers *a target that was never reached* — a scan that hit
 nothing produces a report of zero alerts, byte-identical to a scan of a
 genuinely clean app.
@@ -128,6 +138,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # Requires authorized action access; see the source-access prerequisite.
+      - name: Install Dagger
+        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.3
+        with:
+          version: 0.20.8
 
       - name: Start the app in dev mode
         run: |
@@ -145,19 +161,39 @@ jobs:
 
       - name: DAST
         run: |
+          set -euo pipefail
+          rm -f ./dast-scan.json
+          rm -rf ./dast-evidence
           dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3 call scan \
             --app=service --service=tcp://localhost:5000 \
             --port=5000 --health-path=/health \
             --mode=baseline --fail-on=HIGH \
-            --commit-sha=$GITHUB_SHA --branch=${GITHUB_REF_NAME} \
-            --repo-url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY \
+            --commit-sha="$GITHUB_SHA" --branch="$GITHUB_REF_NAME" \
+            --repo-url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             export --path=./dast-scan.json
           dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3 call package \
             --evidence=./dast-scan.json \
-            --commit-sha=$GITHUB_SHA --branch=${GITHUB_REF_NAME} \
-            --repo-url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY \
+            --commit-sha="$GITHUB_SHA" --branch="$GITHUB_REF_NAME" \
+            --repo-url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             export --path ./dast-evidence
+          jq -e '.passed == true' ./dast-evidence/combined-evidence.json > /dev/null
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-evidence
+          path: ./dast-evidence/
+
+      - name: Stop the app
+        if: always()
+        run: docker compose -f docker-compose.dev.yml down -v
 ```
+
+Export success is not the verdict. The script cleans previous outputs, stops on
+either export failure, then grades the fresh combined envelope. A passing verdict
+is not complete scope: preserve warnings, errors and examined metadata. These
+checks report on their own cadence, not as merge validation.
 
 Two things people get wrong here.
 
@@ -173,16 +209,20 @@ response fails the run at **every** threshold, `--fail-on NONE` included.
 For an API, swap the mode and hand it the document:
 
 ```bash
-dagger -m ./src/composites/dast call scan \
+set -euo pipefail
+rm -f ./dast-scan.json
+rm -rf ./dast-evidence
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3 call scan \
   --app=service --service=tcp://localhost:5000 --port=5000 \
   --mode=api --api-spec-path=/swagger/v1/swagger.json \
   --fail-on=HIGH \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./dast-scan.json
-dagger -m ./src/composites/dast call package \
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3 call package \
   --evidence=./dast-scan.json \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path ./dast-evidence
+jq -e '.passed == true' ./dast-evidence/combined-evidence.json > /dev/null
 ```
 
 `--api-spec-path` is a path **on the running app** — cicd fetches it from the
@@ -194,16 +234,20 @@ One container, boots on its own, needs nothing beside it. This is the only shape
 whose evidence may say the scanned code is this commit's code.
 
 ```bash
-dagger -m ./src/composites/dast call scan \
+set -euo pipefail
+rm -f ./dast-scan.json
+rm -rf ./dast-evidence
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3 call scan \
   --app=container --src=. --dockerfile=Dockerfile \
   --port=8080 --health-path=/healthz \
   --mode=baseline --fail-on=HIGH \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./dast-scan.json
-dagger -m ./src/composites/dast call package \
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.3 call package \
   --evidence=./dast-scan.json \
-  --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path ./dast-evidence
+jq -e '.passed == true' ./dast-evidence/combined-evidence.json > /dev/null
 ```
 
 cicd builds the image from your Dockerfile, runs it as a service, probes
@@ -223,7 +267,8 @@ writes:
 | File | What it holds |
 |------|---------------|
 | `combined-evidence.json` | the envelope: `findings[]`, `findingsBySeverity`, `warnings[]`, `errors[]`, `passed` |
-| `findings.sarif` | the same findings for GitHub code scanning |
+| `findings.sarif` | bundle-format file; normally no source-located DAST runs, so not uploaded to Code Scanning |
+| `parts/` | native per-producer reports containing runtime endpoint details |
 | `comment.md` | the rendered PR comment |
 | `sbom.cdx.json` | present but **empty** — a DAST run produces no components |
 

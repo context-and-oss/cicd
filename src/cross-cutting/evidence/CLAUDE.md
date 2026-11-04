@@ -16,8 +16,12 @@ func (m *Evidence) Wrap(
 
 ## Run locally
 
+Inspection only, from an authorized checkout's root. CI callers must clean stale
+output, fail on export failure, and enforce the fresh combined JSON verdict;
+aggregation alone does not fail the caller for a failed evidence gate.
+
 ```sh
-cd src/cross-cutting/evidence && dagger develop   # once
+(cd src/cross-cutting/evidence && dagger develop)   # once
 
 # Usually called via a composite, but can be called directly:
 dagger -m ./src/cross-cutting/evidence call wrap \
@@ -68,13 +72,11 @@ dagger -m ./src/cross-cutting/evidence call wrap \
 ## Size, and the 128 MiB wall
 
 Dagger serialises a module function's return value into an output file capped at
-128 MiB, and applies the same cap to `File.Contents` on the way in. That wall is
-close: a formatter reporting one fixable issue per line, over a solution with
-inconsistent line endings, produced just over 128 MiB of bundle in a consumer's run and
-`Wrap` returned `read function output file: file size 134250496 exceeds limit
-134217728` instead of a verdict, an artifact, or any statement of what had been
-found. (134250496 is the limit plus one 32 KiB read chunk — it is what the
-engine always reports on overflow, not a measurement of the payload.)
+128 MiB, and applies the same cap to `File.Contents` on the way in. A formatter
+reporting one fixable issue per line can make a bundle exceed it, preventing
+`Wrap` from returning a verdict or artifact. The overflow diagnostic
+`read function output file: file size 134250496 exceeds limit 134217728`
+uses the limit plus one 32 KiB read chunk, not a measurement of the payload.
 
 Three rules follow, and none of them are stylistic:
 
@@ -84,9 +86,8 @@ Three rules follow, and none of them are stylistic:
   `WithNewFile` encodes the content inside the returned Directory's ID, so the
   bundle's size becomes the limit on whether the function can return at all.
   Written to the workdir, content moves through the engine filesystem and the ID
-  stays a small reference. Verified end-to-end: a 228 MiB bundle (149 MiB
-  `findings.sarif`) exports, and `.File("combined-evidence.json").Contents()`
-  still reads back.
+  stays a small reference. The combined envelope must still fit the read limit
+  when downstream consumers call `.File("combined-evidence.json").Contents()`.
 - **`combined.Findings` is capped** at `maxCombinedFindings`, with the
   truncation written into `combined.Warnings` naming the row count, the rule the
   kept rows were chosen by, and where the omitted rows still live. The counts
@@ -99,10 +100,9 @@ Three rules follow, and none of them are stylistic:
   then tool, rule, path, line, message. The class is tagged in `mergeFindings`
   from `envelope.moduleName`, never from a tool-name table, and
   `TestFindingClassCoversEveryModule` holds `findingClassOf` to the modules the
-  tree declares. Severity alone was measured to keep almost a thousand whitespace rows and
-  drop every MEDIUM SAST finding on a run that hit the cap; the parts order
-  decided which. notify's 25-row table is the head of this same list and does
-  not re-sort.
+  tree declares. Severity alone can keep whitespace rows while dropping SAST
+  findings at the same severity; relying on parts order would decide which.
+  notify's 25-row table is the head of this same list and does not re-sort.
 - **An input envelope still cannot exceed the cap.** A producer inlines its
   `evidence.json` into a File ID, so it hits its own output limit at roughly
   96 MiB of content and `Wrap` cannot read more than 128 MiB of one. The read

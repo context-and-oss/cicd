@@ -19,10 +19,15 @@ file to edit and the exact change to make.
 1. An existing GitHub Actions or Azure DevOps pipeline in the repo.
 2. Docker + the Dagger CLI available on the runner (the templates install the
    CLI for you).
-3. **Outbound access to GitHub from the runner.** The cicd modules are fetched
-   from the public repository; no credential is needed on either platform.
-   Azure DevOps PR comments need the one-time setup in
+3. **Authorized module-source access.** The repository is currently private;
+   remote examples require separately authorized read access. Anonymous fetches
+   apply only after authorized publication and availability verification. See
+   [availability and source access](../../README.md#availability-and-source-access)
+   for the separate-checkout/local-`-m` path. Feed tokens do not grant this access.
+   Azure DevOps PR comments need the separate setup in
    [set up ADO authentication](set-up-azure-devops-auth.md).
+4. Review the runtime [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20)
+   before executing SAST, including through composites.
 
 ## Which path fits my repo?
 
@@ -63,6 +68,7 @@ Install Dagger, then call the module:
           version: 0.20.8
       - name: cicd security scan (shadow)
         run: |
+          rm -f ./evidence-security.json
           dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
             --src . --fail-on HIGH \
             --commit-sha "$GITHUB_SHA" \
@@ -77,6 +83,8 @@ Azure DevOps — add a step to your `azure-pipelines.yml`:
   # Install Dagger first: copy the "Install Dagger CLI" step from
   # templates/azure-devops/commit.yml (checksum-verified, no sudo).
   - bash: |
+      set -euo pipefail
+      rm -f ./evidence-security.json
       dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
         --src . --fail-on HIGH \
         --commit-sha "$(Build.SourceVersion)" \
@@ -89,16 +97,19 @@ Azure DevOps — add a step to your `azure-pipelines.yml`:
 Open `evidence-security.json` — pass/fail, findings by severity, embedded
 SARIF. Compare against your existing step's output.
 
-The shadow job does not gate on purpose: `dagger call` exits 0 whatever the
-verdict, so a failing scan leaves your pipeline green while you compare. The
-verdict is the envelope's `passed` field; `errors[]` names any scanner that
-could not run, and a scanner that could not run never reads as passed, even
-with `--fail-on NONE`.
+The shadow job deliberately does not grade the verdict: a successful export
+can contain `passed: false`. Execution/export failures can still fail the job.
+Read `errors[]`, `warnings[]` and per-source scope, examined and rule metadata
+alongside `passed`; a passing threshold is not full coverage. `NONE` suppresses
+findings, not scanner non-runs.
 
 ## Step 3: Cut over — delete the replaced step
 
-Once cicd's evidence matches (or beats) your old step, **remove the legacy
-step** it replaces. For a coding agent, the concrete edit is:
+Remove a legacy step only after its equivalent scope, policy and enforcement
+are configured **and verified**. A source snapshot does not replace a history
+secrets scan or live credential verification; a coverage ratchet does not replace
+a minimum; licence warn mode does not replace a blocking policy. Preserve those
+protections until parity is demonstrated. For the verified replacement:
 
 > In `<your pipeline file>`, delete the `<Semgrep/CodeQL/gitleaks/npm-audit>`
 > step, keep the `cicd-security` job from Step 2, and add a step after the
@@ -122,16 +133,16 @@ Repeat Steps 1–3 for the next stage, in rough value order:
 
 When most stages are cicd-owned, collapse them into the composite caller
 (`precommit.yml` + `commit.yml` from `templates/`) so you run one gate instead
-of N jobs — [Use the complete pipeline](use-complete-pipeline.md). At that
-point your hand-rolled pipeline is gone and the caller stub is all that remains.
+of N jobs — [Use the complete pipeline](use-complete-pipeline.md). Retain
+consumer-owned protections that the composites do not equivalently enforce.
 
 ## Order of operations (agent checklist)
 
-1. Confirm the runner can reach GitHub (the modules are public; no secret).
+1. Confirm authorized read access to the module source and platform sharing policy.
 2. Identify the legacy step to replace via the [step-mapping reference](../reference/step-mapping.md).
 3. Add the cicd call **alongside** (Step 2) — never delete first.
 4. Compare evidence output against the legacy step.
-5. Delete the legacy step only after parity (Step 3).
+5. Delete only the legacy protection whose scope, policy and enforcement have verified parity (Step 3).
 6. Repeat for the next stage; collapse into the composite once most are covered.
 
 ## Related

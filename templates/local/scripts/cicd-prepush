@@ -46,9 +46,10 @@ src="${CICD_SRC:-.}"
 out_path="${CICD_OUT:-./out/prepush-evidence}"
 fail_on="${CICD_FAIL_ON:-${FAIL_ON:-HIGH}}"
 
-# Advisory has to be distinguishable at the gate, not only in the threshold
-# handed to the composite — NONE still fails the verdict for a step that could
-# not run, and advisory must not block on that either.
+# Advisory changes the finding threshold to NONE and suppresses the final
+# evidence-verdict block, including evidence-reported non-runs. It does not
+# preserve the normal HIGH verdict or suppress setup, diff, execution, missing
+# evidence or JSON parsing failures.
 mode="blocking"
 case "${CICD_PREPUSH_MODE:-}" in
   advisory)
@@ -63,6 +64,13 @@ case "${CICD_PREPUSH_MODE:-}" in
     ;;
 esac
 
+# The remote default needs separately authorized read-only source access while
+# the repository is private. An authorized separate checkout can be selected
+# through CICD_PRECOMMIT_MODULE; see README.md#availability-and-source-access.
+# Default SAST rules have Semgrep Rules License restrictions; see
+# THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20.
+# This runner does not explicitly clear its export destination. Before relying
+# on it as a fresh-output gate, use a new/clean CICD_OUT for each invocation.
 if [ -n "${CICD_PRECOMMIT_MODULE:-}" ]; then
   module="${CICD_PRECOMMIT_MODULE}"
 elif [ -f "./src/composites/precommit/dagger.json" ]; then
@@ -164,6 +172,7 @@ args=(
   --repo-url "$repo_url"
 )
 
+# Quality language selector only: not a directory filter or an all-scanner scope.
 if [ -n "${CICD_INCLUDE:-}" ]; then
   include_values="${CICD_INCLUDE//,/ }"
   for language in $include_values; do

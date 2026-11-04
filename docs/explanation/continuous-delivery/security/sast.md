@@ -2,6 +2,14 @@
 
 Static analysis examines source code without executing it (white-box testing).
 
+cicd uses Semgrep for SAST, Gitleaks for source secrets and Trivy for dependency
+vulnerabilities. The default SAST rules are fetched at runtime, not bundled or
+relicensed as Apache-2.0. The restrictive Semgrep Rules License distinguishes
+internal use from hosted-service operation and redistribution: read
+[the licensing boundary](../../../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20)
+and the [upstream terms](https://semgrep.dev/legal/rules-license). A checked-in
+custom rules config must have terms suitable for your use.
+
 ---
 
 ## Overview

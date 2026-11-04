@@ -122,7 +122,9 @@ func NewProcessor(useModern bool) PaymentProcessor {
 
 ## Ghost Tracking
 
-The **ghost naming convention** makes hidden code discoverable and manageable through the platform.
+The **ghost naming convention** can make hidden code easier to inventory with
+consumer-owned tooling. It does not disable code, and this is not a cicd discovery
+or configuration API.
 
 By prefixing hidden code with `ghost-`, you enable:
 
@@ -130,7 +132,8 @@ By prefixing hidden code with `ghost-`, you enable:
 - **Visibility**: tooling reports on the dark launch inventory
 - **Management**: Track, review, and graduate hidden features
 
-See [Ghost Tracking](ghost-tracking.md) for naming conventions and platform commands.
+See [Ghost Tracking](ghost-tracking.md) for naming conventions and explicitly
+illustrative tooling designs, not executable cicd commands.
 
 ---
 

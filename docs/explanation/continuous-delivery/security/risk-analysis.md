@@ -67,8 +67,12 @@ Validate runs two OPA passes via conftest:
 2. **infra file scanning** — runs OPA rules against Dockerfiles, ARM templates, and
    pipeline YAML files directly (policy in `risk/policy/infra/`)
 
-The `--fail-on` threshold controls which severity levels block the pipeline (`CRITICAL`,
-`HIGH`, `MEDIUM`, `LOW`, or `NONE` to never block).
+The `--fail-on` threshold controls which finding severities fail the evidence
+verdict (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, or `NONE`). `NONE` suppresses failures
+over findings, never a non-run. A CI caller must grade the fresh envelope's
+`passed` value rather than assume exporting it enforced a gate. Deterministic
+validation of recorded decisions supplies no human identity verification or
+release approval.
 
 Deterministic infra findings can be accepted only with exact synthetic keys in
 `decisions.json`: `policy:<policy-id>:<repo-relative-file>:<resource>`. For example:

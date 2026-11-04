@@ -6,9 +6,11 @@ function signature and evidence field below is a decision captured ahead of impl
 work can proceed without re-interviewing. Names and signatures here are proposals and will change
 when the code is written. TBD items are explicitly marked, and no phase has a delivery date.
 
-For what is **actually shipped and released today** — the Stage 2 pre-commit source gate and the
-Stage 4 commit stage with its `container|archive|none` artifact tail — see
-[CHANGELOG.md](CHANGELOG.md#shipped). Do not pin, call, or wire anything named on this page: none of
+For what is **implemented today** — the Stage 2 source gate, the commit
+composite's `container|archive|none` artifact tail, and independent running-app
+DAST — see the [module map](README.md#module-reference) and
+[implementation reference](docs/reference/index.md). The [changelog](CHANGELOG.md)
+separates the clean bootstrap from still-unverified publication/release behaviour. Do not pin, call, or wire anything named on this page: none of
 it exists at any tag.
 
 Phase 1 (Stages 2 and 4) is delivered and is not described here.

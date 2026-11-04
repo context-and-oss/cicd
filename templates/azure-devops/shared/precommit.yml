@@ -6,8 +6,16 @@
 # `pr: autoCancel: true` as templates/azure-devops/precommit.yml states it.
 #
 # ─── First-time setup ──────────────────────────────────────────
-# The cicd modules are fetched from the public GitHub repository, so
-# no GitHub credential is needed. For PR comments, see the auth guide:
+# The repository is currently private. YAML service-connection access does not
+# automatically authorize Dagger's separate module fetch. Establish authorized
+# read-only module-source access; feed/comment tokens do not grant it. See
+# README.md#availability-and-source-access for separate-checkout/local -m use.
+# Anonymous fetches apply only after authorized publication and verification.
+# For Azure Repos, configure required target-branch Build validation selecting
+# this pipeline; YAML pr: alone does not establish PR validation. Verify a PR run.
+# Default SAST rules have Semgrep Rules License restrictions; see
+#   THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20
+# For PR comments, see the separate auth guide:
 #   docs/how-to-guides/set-up-azure-devops-auth.md
 # ─────────────────────────────────────────────────────────────────
 #
@@ -19,7 +27,11 @@
 #   - Pipeline artifact: audit-evidence (combined-evidence.json, findings.sarif,
 #     sbom.cdx.json, comment.md)
 #
-# ─── This pipeline gates ─────────────────────────────────────────
+# ─── This pipeline reads the verdict ─────────────────────────────
+# On reused agents, clear prior audit outputs before execution and ensure every
+# export failure stops execution before relying on freshness. The current run
+# step does not explicitly clean its export destination. Required branch-policy
+# enforcement must be configured and verified separately.
 # The composite is a producer: it exits 0 on a tripped gate exactly as on a
 # clean run, and the verdict is `passed` inside combined-evidence.json. The
 # "Gate on the evidence verdict" step below reads it and fails the build on

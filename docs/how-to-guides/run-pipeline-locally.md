@@ -24,12 +24,20 @@ check, because a gate that cannot read a verdict has not passed.
 
 ## First-time setup
 
+The source-development and fixture commands below assume the root of a separately
+[authorized cicd source checkout](../../README.md#availability-and-source-access),
+not your application repository. The repository is currently private. For an
+application, copy the local templates from that checkout and set
+`CICD_PRECOMMIT_MODULE` to its absolute `src/composites/precommit` path when remote
+access is unavailable. Dependencies may still require authorized read access.
+Default SAST rules have [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+
 Each Dagger module generates its own internal Go SDK. Run this once per module, and again
 if you change `dagger.json`:
 
 ```bash
 # Individual module
-cd src/risk && dagger develop
+(cd src/risk && dagger develop)
 
 # All modules at once
 make develop-all
@@ -43,8 +51,12 @@ Use the checked-in runner when you want the same Dagger composite that CI uses,
 with local Git metadata filled in for you:
 
 ```bash
-./scripts/cicd-prepush
+rm -rf ./out/prepush-evidence && ./scripts/cicd-prepush
 ```
+
+The runner itself does not explicitly clear its export destination. Use a new or
+clean `CICD_OUT` for every invocation before treating it as fresh evidence. The
+copied hook alone does not establish that freshness; retain required CI checks.
 
 The runner writes evidence to `./out/prepush-evidence` and defaults to a blocking
 `HIGH` gate. It reads `passed` from `combined-evidence.json` and exits non-zero
@@ -54,13 +66,17 @@ The errors matter as much as the findings: a step that *could not run* leaves no
 finding at all, so a gate that trips with zero findings is only explainable by
 the error list.
 
-To collect evidence without blocking, run advisory mode:
+To suppress the final evidence-verdict block, run advisory mode:
 
 ```bash
 CICD_PREPUSH_MODE=advisory ./scripts/cicd-prepush
 ```
 
-Advisory prints the same verdict and the same lists, and always exits `0`.
+Advisory changes the finding threshold to `NONE`; it does **not** preserve the
+normal HIGH verdict. Once valid evidence is read it suppresses the final
+verdict-based block, including an evidence-reported non-run. Missing tools,
+unreachable Docker, diff failures, incomplete execution, missing evidence and
+invalid JSON still exit non-zero. It is not an always-successful hook.
 
 To opt into the hook in this repo:
 
@@ -115,8 +131,10 @@ you — you never pass `--diff` by hand:
   validating before you commit still runs scoped.
 - **Clean tree on the default branch** — no diff, so the gates audit everything
   (on the default branch you want the full picture).
-- **No remote / shallow clone / base unresolved** — no diff, full audit; the run
-  prints `Change scope: full audit (no diff base resolved)` so it is never silent.
+- **No base resolves** — no diff, full audit; the run prints
+  `Change scope: full audit (no diff base resolved)`.
+- **A selected base has no merge base, or diff fails** — execution stops,
+  including in advisory mode. A shallow clone is not silently treated as a full audit.
 
 The base is auto-detected (`origin/HEAD`, then `origin/main`, then `main`).
 Override it, or force a full audit, with one env var:
@@ -126,25 +144,36 @@ CICD_DIFF_BASE=origin/develop ./scripts/cicd-prepush   # diff against a differen
 CICD_DIFF_BASE=none ./scripts/cicd-prepush             # force a full-repo audit
 ```
 
-For application repositories, copy the local templates and then opt in manually:
+For application repositories, run from the application root, with `CICD_SOURCE`
+pointing to the separate authorized cicd checkout. Copy templates, then opt in:
 
 ```bash
 mkdir -p scripts .githooks
-cp templates/local/scripts/cicd-prepush scripts/cicd-prepush
-cp templates/local/githooks/pre-push .githooks/pre-push
+cp "$CICD_SOURCE/templates/local/scripts/cicd-prepush" scripts/cicd-prepush
+cp "$CICD_SOURCE/templates/local/githooks/pre-push" .githooks/pre-push
 chmod +x scripts/cicd-prepush .githooks/pre-push
 git config core.hooksPath .githooks
 ```
 
-When copied into an application repo, the runner calls the released remote
-`composites/precommit` module unless `CICD_PRECOMMIT_MODULE` overrides it.
+When copied into an application repo, the runner defaults to the remote
+`composites/precommit` coordinate unless `CICD_PRECOMMIT_MODULE` overrides it.
+That default requires source access; for a separate checkout use:
+
+```bash
+CICD_PRECOMMIT_MODULE="$CICD_SOURCE/src/composites/precommit" ./scripts/cicd-prepush
+```
+
+`CICD_INCLUDE` selects quality languages only, not directories or every scanner.
+`CICD_SRC` selects the supplied source tree; a narrowed tree is not a repository-wide
+audit. Inspect warnings and per-source scope/examined metadata even on passing runs.
 
 ---
 
 ## Run individual modules
 
-These commands match exactly what the `module-test` CI job runs.
-Run them from the **repo root**.
+These are **inspection examples**, not CI gates. Run them from the **cicd source
+checkout root**. To gate, remove prior outputs, stop on export failures and grade
+each fresh required envelope with `jq -e '.passed == true'`.
 
 ```bash
 SHA="local"
@@ -193,7 +222,7 @@ The `composites/precommit` module wires quality + security + risk + evidence agg
 into a single call. This is what Stage 2 runs in CI.
 
 ```bash
-cd src/composites/precommit && dagger develop   # once
+(cd src/composites/precommit && dagger develop)   # once
 
 dagger -m ./src/composites/precommit call run \
   --src ./testdata/go-app \
@@ -246,12 +275,16 @@ dagger -m ./src/composites/precommit call run \
 
 ## AI risk scan (risk module only)
 
-`validate` reads existing findings. `scan` generates them — it requires an LLM connection.
+`validate` reads existing findings without AI discovery. `scan` is opt-in and
+requires configured LLM access. It sends selected source files in full up to the
+prompt budget; `scan-manifest.json` records the selection. Review
+[what reaches the model](../../src/risk/README.md#what-the-scan-sends-to-the-model)
+and authorize that submission before invoking it.
 
 **Option A — Claude API key (simplest)**
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+# Set ANTHROPIC_API_KEY through your approved local secret mechanism; do not commit it.
 
 dagger -m ./src/risk call scan \
   --source . \
@@ -287,13 +320,15 @@ its ignore rules live in metadata Dagger does not mount.
 > `--llm-url http://localhost:4000 --llm-token env:CICD_RISK_PROXY_TOKEN`
 > instead of `--use-claude-cli`.
 
-After scanning, review `decisions.json` and then validate:
+After scanning, review `decisions.json`, then export and gate fresh validation:
 
 ```bash
+mkdir -p ./out && rm -f ./out/evidence-risk.json &&
 dagger -m ./src/risk call validate \
   --source . --fail-on HIGH \
   --commit-sha local --branch main --repo-url https://example.com \
-  export --path ./out/evidence-risk.json
+  export --path ./out/evidence-risk.json &&
+jq -e '.passed == true' ./out/evidence-risk.json > /dev/null
 ```
 
 ---
@@ -304,7 +339,7 @@ Internal packages and module pure helpers are tested with plain `go test`:
 
 ```bash
 # Internal shared packages
-cd src/internal && go test ./...
+(cd src/internal && go test ./...)
 
 # Every module's pure helpers, in one command — the canonical runner. Walks
 # the defended inventory, runs each module's complete -tags unit_test suite,
@@ -319,7 +354,7 @@ workspace and refuses before compiling.
 
 ```bash
 # risk module pure helpers (parsing, scoring, rendering)
-cd src/risk && GOWORK=off go test -tags unit_test ./...
+(cd src/risk && GOWORK=off go test -tags unit_test ./...)
 ```
 
 ---
@@ -329,9 +364,9 @@ cd src/risk && GOWORK=off go test -tags unit_test ./...
 List every callable function in a module without running anything:
 
 ```bash
-dagger functions -m ./risk
-dagger functions -m ./quality
-dagger functions -m ./composites/precommit
+dagger functions -m ./src/risk
+dagger functions -m ./src/quality
+dagger functions -m ./src/composites/precommit
 ```
 
 ---

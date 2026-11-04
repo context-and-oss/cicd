@@ -6,8 +6,13 @@ parameter at each of the three layers (workflow → composite → module), the
 version — pick a shape, pick a cadence, read the output — see
 [Scan a running app (DAST)](../how-to-guides/scan-a-running-app.md).
 
-DAST is wired into no composite and is not a merge gate. It runs on its own
-cadence from its own workflow, and nothing in `precommit` or `commit` calls it.
+DAST has its own composite and is wired into no **other** composite. It is not
+the commit/precommit merge gate: it runs on its own cadence and neither calls it.
+Scan only explicitly authorized targets with traffic limits appropriate to the
+environment; baseline generates requests too, and API/full modes send attack
+traffic. Remote module/workflow references need authorized read access while the
+source repository is private. Anonymous fetch is conditional on explicitly
+approved public distribution and subsequent verification, not assumed here.
 
 ## The three shapes
 
@@ -147,11 +152,18 @@ baseline, which structurally cannot find them.
 
 ## Composite: `src/composites/dast` → `scan`, then `package`
 
-`scan` returns the raw evidence `File`. Export it immediately to the host.
+`scan` returns the scan evidence `File`. Export it immediately to the host.
 `package` accepts that detached file in a fresh
 Dagger call and returns the audit `Directory` (`combined-evidence.json`,
 `findings.sarif`, `comment.md`, `sbom.cdx.json`). This two-call boundary keeps
 a runner-backed Service out of the graph the CLI later exports.
+
+Successful export is not gate enforcement. A CI caller must clean stale output,
+fail on either export failure, and require `jq -e '.passed == true'` for both
+the fresh scan envelope and `combined-evidence.json`. Missing/malformed evidence
+is failure. See the [complete composite caller](../../src/composites/dast/README.md#usage).
+Retain warnings, non-runs, rule settings and examined/provenance metadata even
+on a pass; `passed` does not mean clean or full-scope analysis.
 
 ### `scan`
 

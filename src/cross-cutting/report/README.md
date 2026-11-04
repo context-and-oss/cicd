@@ -1,12 +1,15 @@
 # cross-cutting/report
 
-Extracts the native tool report embedded in any evidence envelope and returns it as a
-standalone file. No containers, no tool invocations — pure Go JSON parsing.
+Extracts an embedded report payload from an evidence envelope and returns it as a
+standalone file. A `genericReport` may be a cicd-owned wrapper rather than a native
+tool document. No containers, no tool invocations — pure Go JSON parsing.
 
 Works with evidence produced by any module (`security/`, `quality/`, `build/`) since all
 share the same evidence envelope schema.
 
 ## Install
+
+Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/cross-cutting/report` from its root.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3
@@ -31,11 +34,24 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3 call r
   --evidence ./vuln-evidence.json \
   export --path=./vuln.cdx.json
 
-# Extract ZAP JSON from a scan-web evidence file
+# Extract the cicd-owned dast/1.0 payload from scan-web evidence
 dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3 call report \
   --evidence ./web-evidence.json \
-  export --path=./zap-report.json
+  export --path=./dast-report.json
 ```
+
+For a compact ZAP alert document, explicitly extract the nested object:
+
+```bash
+set -eu
+rm -f ./zap-report.json
+jq -e '.zapReport | select(type == "object")' ./dast-report.json > ./zap-report.json || exit 1
+```
+
+This is report inspection, not verdict enforcement. The `dast/1.0` payload is
+not raw ZAP output: `zapReport` omits request/response bodies, headers and
+per-instance evidence captures. Keep the original envelope for verdict, scope,
+warnings and non-run metadata. See the [DAST reference](../../../docs/reference/dast.md#the-dast10-payload).
 
 ## Output format
 
@@ -45,7 +61,7 @@ The output filename depends on which report field is populated in the envelope:
 |----------------|-----------------|--------|-------------------|
 | `sarifReport` | `report.sarif` | SARIF 2.1.0 | GitHub Advanced Security `upload-sarif`, IDE integrations |
 | `cyclonedxReport` | `report.cdx.json` | CycloneDX | Dependency tracking, SBOM consumers |
-| `genericReport` | `report.json` | Tool-specific JSON | ZAP, markdownlint, others |
+| `genericReport` | `report.json` | Producer-specific JSON (DAST: cicd-owned `dast/1.0`) | Payload-aware consumers |
 
 Priority order: `sarifReport` → `cyclonedxReport` → `genericReport`. Returns an error if
 none of the fields are populated.
@@ -63,5 +79,5 @@ none of the fields are populated.
 - `extract_test.go` — one case per report field, a payload with none, and an envelope that is not JSON
 
 ```sh
-cd src/cross-cutting/report && GOWORK=off go test -tags unit_test ./...
+(cd src/cross-cutting/report && GOWORK=off go test -tags unit_test ./...)
 ```

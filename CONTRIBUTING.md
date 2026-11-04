@@ -10,7 +10,9 @@ consumer-facing recipes.
 ## Prerequisites
 
 - Go 1.26.2 (`go.work` and every `src/*/go.mod` pin it)
-- Python 3 — the `scripts/` tooling uses the standard library only
+- Python 3 — the Python tooling imports only the standard library
+- Node.js 18 or later for the risk proxy's loopback tests in the script/unit suites
+- Git and jq for repository and evidence helpers; GitHub CLI (`gh`) for release checks
 - The Dagger CLI at the version `DAGGER_VERSION` names in `.github/workflows/ci.yml`
 - A running Docker daemon, for anything that calls `dagger`
 
@@ -47,9 +49,10 @@ suite on a clean checkout.
 
 ## Adding a module
 
-Every entry function returns `(*dagger.File, error)` holding an evidence envelope; the
-one exception is `build.Build`, which returns a container so downstream steps share the
-same lazy image. Run `make sync-schema` after any change to
+Evidence-producing checks return `(*dagger.File, error)` holding an envelope.
+Resource functions can return containers or directories; aggregation, packaging,
+transport and rendering have their own declared result types. `build.Build`
+returns a container so downstream steps share the same lazy image. Run `make sync-schema` after any change to
 `src/internal/evidence/schema.go`. The step-by-step list — `dagger init`, the inventory
 entry, the CI matrix cell, the composite wiring, the image pin — is in
 [CLAUDE.md](CLAUDE.md#adding-a-new-module).
@@ -75,9 +78,15 @@ Run `make test-scripts` after touching anything under `scripts/`.
 
 ## Every change carries an intent artifact
 
-The repo runs its own precommit composite against itself
-([`.github/workflows/dogfood-precommit.yml`](.github/workflows/dogfood-precommit.yml)), and that
-composite includes the intent gate. On a pull request the gate is scoped to the diff: it looks for a
+This is an author/reviewer obligation even when automation does not inspect intent.
+The separate [dogfood workflow](.github/workflows/dogfood-precommit.yml) runs the
+precommit composite with intent enforcement for the changes its filters include.
+Markdown/capsule-only changes can take the lightweight documentation CI path;
+that path checks surface/capsule validity, not intent rules, and required `ci`
+does not aggregate the separate dogfood check. Do not read a documentation-only
+green check as proof that intent ran.
+
+When dogfood runs, its composite includes the intent gate. On a pull request the gate is scoped to the diff: it looks for a
 file the change touches matching one of the patterns in `defaultGlobs`
 ([`src/cross-cutting/intent/main.go`](src/cross-cutting/intent/main.go)) — `.capsules/*.yaml|yml`,
 `specs/*.md`, `docs/specs/*.md`, `*.intent.md`, `.changes/*.md`, `changes/*.md` — and a change that
@@ -103,9 +112,11 @@ today's surface.
 
 ## Releases
 
-The tree contains release automation, but destination settings, credentials,
-bootstrap tags and the release/review loop have not been proven for this import.
-Do not treat the source repository's release history as destination evidence.
+The canonical repository has independent clean history and a `v5.1.3`
+bootstrap tag/release. That establishes a source baseline, not a completed
+ordinary human-reviewed source/release cycle or public availability. Check
+current destination settings and credential effectiveness independently;
+existing permissions and successful CI are not human approval.
 
 ### How it works
 
@@ -171,14 +182,14 @@ The release pipeline computes the next version from a reachable tag, and
 clone without one. This guard prevents a bump from a base nobody chose; it
 is not proof that any existing pin resolves in the destination.
 
-A later, separately approved import must use a reviewed parentless source
-commit, not old Git history or copied GitHub state. Module coordinates retain
-the intended canonical namespace and this candidate proposes coherent v5.1.2
-pins; neither that proposal nor the planned cutover creates a tag or release. Before enabling destination automation, the
-maintainer must approve the bootstrap version, confirm that pins match it, and
-plan how the reviewed root commit and its matching tag/release will be made
-available. Do not enable push-triggered release workflows before that baseline
-exists, and do not remove the missing-tag guard to get past bootstrap.
+For this canonical repository the clean-source bootstrap already exists at
+`v5.1.3`; do not repeat an import or retarget that released reference. A new
+independent destination still needs a reviewed clean history and an approved
+bootstrap version whose tag actually resolves to the intended source. Do not
+import retired private history or assume that copying files also copies GitHub
+settings, tags or release credentials. Confirm managed pins and the approved
+baseline before enabling release automation. Keep the missing-tag guard: a
+bootstrap is an explicit operation, not a fallback version.
 
 The following are verification obligations, not claims that settings exist:
 
@@ -248,8 +259,10 @@ claim they passed while the repository was private.
   vulnerability reporting is enabled and a test report reaches the
   maintainers. [SECURITY.md](SECURITY.md) and
   [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) both send reports there.
-- [ ] **One reviewed parentless import commit**, tagged and released at the
-  approved bootstrap version its pins name; no old Git/GitHub state imported.
+- [ ] **Independent reviewed clean history**, with the approved bootstrap tag
+  and release resolving to the intended commit and managed pins. The canonical
+  baseline is `v5.1.3`; a new destination must verify its own baseline without
+  importing retired private Git/GitHub history.
 - [ ] **Anonymous module fetch — after publication.** From a machine with no GitHub credentials,
   `dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 functions`
   (the version the pins name) resolves the tag.
@@ -269,4 +282,10 @@ claim they passed while the repository was private.
 
 ### Emergency manual release
 
-Use **Actions → Release (manual override)** (`.github/workflows/release.yml`) when CI is broken and you need to cut a hotfix outside the normal flow. Supply the version explicitly.
+Use **Actions → Release (manual override)** (`.github/workflows/release.yml`)
+when automatic CD/version selection cannot finish and an operator must choose
+the version. This is not a CI or human-review bypass: delivery still uses a
+release-pins PR and must satisfy every applicable check and genuine approval.
+Run from `main`, choose a version above the current release, and verify the
+merged source, subsequent checks, matching pins/tag and release. A stalled
+review is not permission to weaken protections.

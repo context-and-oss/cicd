@@ -39,7 +39,7 @@ func (m *Notify) AdoBuildComment(
 ## Run locally
 
 ```sh
-cd src/notify && dagger develop   # once
+(cd src/notify && dagger develop)   # once, from repository root
 
 # preview Teams card without posting
 dagger -m ./src/notify call build-card \
@@ -82,7 +82,7 @@ deliberately **no** public input that can redirect a notification.
 Run the protocol suite with no Dagger session:
 
 ```sh
-cd src/notify && go test -tags unit_test ./...
+(cd src/notify && go test -tags unit_test ./...)
 ```
 
 ## The rendering seam

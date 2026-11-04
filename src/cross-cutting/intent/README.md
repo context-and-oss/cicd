@@ -7,11 +7,14 @@ artifacts (a spec under `specs/`, a capsule under `.capsules/`, any
 deterministic prose rules to each one. No containers, no network, no model:
 pure Go over the source directory and a diff.
 
-The gate is opt-in at the orchestrators (`--require-intent` on `stage-2` and
-the composites). Switched off, it still reports an envelope saying so, because
+The gate is opt-in through `--require-intent` on `stage-2` and
+`composites/precommit`. `composites/commit` has no input to enable intent.
+Switched off, it still reports an envelope saying so, because
 an opt-in gate that is off produces exactly what a gate that passed produces.
 
 ## Install
+
+Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/cross-cutting/intent` from its root.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3
@@ -27,6 +30,8 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3
 
 ```bash
 # Gate one pull request: scope to its diff, fail on any error-severity finding
+set -eu
+rm -f ./intent-evidence.json /tmp/change.diff
 git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ origin/main...HEAD > /tmp/change.diff
 dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3 call check \
   --src . \
@@ -34,9 +39,10 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3 call c
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
   --repo-url https://github.com/example/repo \
-  export --path=./intent-evidence.json
+  export --path=./intent-evidence.json || exit 1
+jq -e '.passed == true' ./intent-evidence.json >/dev/null || exit 1
 
-# Audit every artifact in the tree (no diff): the fallback for a push with no base
+# Inspection only, not a CI gate: audit every artifact without a diff
 dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.3 call check \
   --src . \
   --commit-sha local --branch main --repo-url https://example.com \
@@ -85,7 +91,7 @@ New/copied/renamed artifacts retain whole-artifact coupling. Header-only or
 binary patches also retain the full check, since they supply no previous text.
 Malformed, truncated or overlapping textual hunks, or hunks inconsistent with
 the supplied current artifact, are refused rather than treated as an empty edit
-(even with `--fail-on NONE`). Repeating a historical reference while changing its
+(even with the standalone threshold `--fail-on never`). Repeating a historical reference while changing its
 claims remains a human review responsibility. See
 [Couple the edit, not the artifact's history](../../../specs/couple-the-edit-not-the-artifacts-history.md).
 
@@ -111,5 +117,5 @@ narrowing applies to coupling only, not to presence or the other prose rules.
 - `*_test.go` — one file per concern: rules, extraction, scope, fail-on, not-required, machine origin; `nonrun_matrix_test.go` holds the diffs and artifact searches that must never pass
 
 ```sh
-cd src/cross-cutting/intent && GOWORK=off go test -tags unit_test ./...
+(cd src/cross-cutting/intent && GOWORK=off go test -tags unit_test ./...)
 ```

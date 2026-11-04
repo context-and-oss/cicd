@@ -24,7 +24,7 @@ func (m *Contract) VerifyPipeline(
 ## Run locally
 
 ```sh
-cd src/cross-cutting/contract && dagger develop   # once
+(cd src/cross-cutting/contract && dagger develop)   # once, from repository root
 
 # verify a module's signature
 dagger -m ./src/cross-cutting/contract call verify-signature \
@@ -40,7 +40,7 @@ make verify-pipeline MANIFEST=pipeline.json
 
 ```sh
 make verify-contracts   # verifies all modules listed in CONTRACT_STEPS
-make verify-pipeline MANIFEST=<file>
+make verify-pipeline MANIFEST=pipeline.json  # replace with your existing manifest path
 ```
 
 ## Key files

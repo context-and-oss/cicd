@@ -31,8 +31,11 @@
 # provenance line beats no scan. Full guide:
 # https://github.com/context-and-oss/cicd/blob/main/docs/how-to-guides/scan-a-running-app.md
 #
-# No secret is required: the cicd modules are fetched from the public
-# repository. TEAMS_WEBHOOK is optional.
+# The repository is currently private. Verify authorized reusable-workflow,
+# action and module-source access separately from optional TEAMS_WEBHOOK.
+# See README.md#availability-and-source-access for local-source alternatives.
+# Anonymous fetches apply only after authorized publication and verification.
+# Omit the optional webhook mapping when it is not needed.
 #
 # ─── Stay up to date (Renovate) ─────────────────────────────────────
 # Renovate tracks the `uses:` ref below automatically. To enable:
@@ -161,7 +164,9 @@ jobs:
   #                        sbom.cdx.json, comment.md). The mode is in the name.
   #                        sbom.cdx.json is present but EMPTY — a DAST run
   #                        produces no component inventory; do not read it as
-  #                        one. 90-day retention.
+  #                        one. 90-day retention. findings.sarif normally has no
+  #                        source-located DAST runs and is not uploaded to Code
+  #                        Scanning; read combined evidence, comment.md and parts/.
   #   passed               "true" only when the scan ran and found nothing at
   #                        or above fail-on. "false" also covers a scan that
   #                        could not run — a target that was never reached

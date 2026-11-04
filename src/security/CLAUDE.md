@@ -37,8 +37,15 @@ func (m *Security) ScanSbom(
 
 ## Run locally
 
+Local inspection/shadow examples only, from an authorized checkout's root.
+Default SAST rules are restrictively licensed; review the
+[runtime rule notice](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+For CI, clean stale outputs, fail on export failure and enforce
+`jq -e '.passed == true'` on each required fresh envelope; see the
+[complete source gate example](README.md#scan-source).
+
 ```sh
-cd src/security && dagger develop   # once
+(cd src/security && dagger develop)   # once
 
 # source scan
 dagger -m ./src/security call scan-source \
@@ -223,9 +230,8 @@ registry. `semgrepPlanFor` replaces every pinned pack named with one
 `semgrep/semgrep-rules` checkout at `semgrepRulesCommit`, staged once, plus
 the runtime-adapted `gha-curl-pipe-shell` when a named pack carried the upstream
 one (left out of every manifest while it still fails to parse; `p/secrets`
-never had it). The registry served 725 rules for `p/security-audit` on
-2026-10-21 and 225 three days later, both reading zero findings; the manifest
-freezes the 725. The other two were captured on 2026-10-24.
+never had it). The manifests freeze selected rule identities so registry drift
+cannot silently narrow a named pinned pack while still reporting zero findings.
 
 - **A staged file is not a pack.** The owasp files carry three pickle rules
   owasp does not include; an all-pinned plan passes them as `--exclude-rule`.
