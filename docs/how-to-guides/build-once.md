@@ -7,9 +7,10 @@ artifact checks see the output being retained.
 
 This guide describes the implemented inputs at the managed release pins shown
 in the starters. Use the same verified revision for the workflow, modules and
-artifact verifier; an older pin does not gain new inputs without an upgrade. The repository is
-currently private; verify authorized source/workflow access separately from feed
-credentials, as described under [availability and source access](../../README.md#availability-and-source-access).
+artifact verifier; an older pin does not gain new inputs without an upgrade.
+Public modules support anonymous fetching; private copies require read-only access.
+Verify source/workflow access separately from feed credentials, as described under
+[availability and source access](../../README.md#availability-and-source-access).
 Source checks execute SAST with runtime
 [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
 A passing bundle does not imply full-scope or dependency assurance in application

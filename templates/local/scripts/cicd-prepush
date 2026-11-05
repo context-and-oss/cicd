@@ -64,9 +64,9 @@ case "${CICD_PREPUSH_MODE:-}" in
     ;;
 esac
 
-# The remote default needs separately authorized read-only source access while
-# the repository is private. An authorized separate checkout can be selected
-# through CICD_PRECOMMIT_MODULE; see README.md#availability-and-source-access.
+# Public modules support anonymous fetching; private copies need read-only
+# source access. A separate checkout can be selected through CICD_PRECOMMIT_MODULE;
+# see README.md#availability-and-source-access. Verify the referenced release.
 # Default SAST rules have Semgrep Rules License restrictions; see
 # THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20.
 # This runner does not explicitly clear its export destination. Before relying

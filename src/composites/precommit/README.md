@@ -10,7 +10,10 @@ Default SAST fetches rules under the restrictive **Semgrep Rules License v1.0**,
 
 ## Install
 
-Remote references require authorized read access while the source repository is private; anonymous fetching applies only after an explicitly approved public distribution. Alternatively, use an authorized read-only source checkout with `-m ./src/composites/precommit` from its root. Package-feed credentials are separate; do not use a writer credential as a fetch fallback.
+Public modules support anonymous fetching; private copies require read-only
+source access. Verify the referenced release, or use `-m ./src/composites/precommit`
+from a separate source checkout's root. Package-feed credentials are separate;
+do not use a writer credential as a source-fetch fallback.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.4

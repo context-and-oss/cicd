@@ -1,11 +1,11 @@
 # How-to Guides
 
-Task-oriented recipes for common operations. The repository is currently private;
-remote module and workflow examples require authorized access. See
+Task-oriented recipes for common operations. Use published releases and verify
+source/workflow access: public modules support anonymous fetching, while private
+copies need read-only access. See
 [availability and source access](../../README.md#availability-and-source-access)
-for the separate authorized source checkout/local-`-m` alternative. Anonymous
-fetches apply only after authorized publication and availability verification.
-Each guide distinguishes application commands from source-checkout examples.
+for the separate source-checkout/local-`-m` alternative. Each guide distinguishes
+application commands from source-checkout examples.
 
 ## Getting started and adoption
 

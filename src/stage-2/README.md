@@ -17,10 +17,9 @@ rules through `--sast-rulesets ./your-config.yml`.
 
 ## Install
 
-Remote references require authorized read access while the repository is private;
-anonymous fetch is conditional on an explicitly approved public distribution.
-An authorized read-only source checkout can use `-m ./src/stage-2` from its root.
-Source credentials are separate from package feeds.
+Public modules support anonymous fetching; private copies require read-only
+source access. Verify the referenced release, or use `-m ./src/stage-2` from a
+separate source checkout's root. Source credentials are separate from package feeds.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.4

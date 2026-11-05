@@ -5,10 +5,9 @@
 # and adjust the variables below. You own this file once copied.
 #
 # ─── First-time setup ──────────────────────────────────────────
-# The repository is currently private. Establish separately authorized read-only
-# module-source access; feed and PR-comment tokens do not grant it. See
-# README.md#availability-and-source-access for separate-checkout/local -m use.
-# Anonymous fetches apply only after authorized publication and verification.
+# Public modules support anonymous fetching; private copies need read-only
+# source access. Feed and PR-comment tokens do not grant it. Verify the release.
+# README.md#availability-and-source-access covers separate-checkout/local -m use.
 # For Azure Repos, configure required target-branch Build validation selecting
 # this pipeline; YAML pr: alone does not establish PR validation. Verify a PR run.
 # Default SAST rules have Semgrep Rules License restrictions; see

@@ -12,10 +12,10 @@
 #   archive             — you ship a zip/dir (set build-cmd + output-path)
 #   none                — source-only repo (library / infra); no build
 #
-# The repository is currently private. Verify authorized reusable-workflow,
-# action and module-source access; feed/notification tokens do not grant it.
-# See README.md#availability-and-source-access for local-source alternatives.
-# Anonymous fetches apply only after authorized publication and verification.
+# Verify the referenced release and platform access for workflows/actions.
+# Public modules support anonymous fetching; private copies need read-only
+# source access, not feed/notification tokens. See
+# README.md#availability-and-source-access for local-source alternatives.
 # Omit unused optional secret mappings when adopting. Named mappings avoid
 # secrets: inherit; see templates/github-actions/precommit.yml.
 # Default SAST rules have Semgrep Rules License restrictions; see

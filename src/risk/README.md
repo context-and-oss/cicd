@@ -6,10 +6,10 @@ Returns findings as committed JSON artifacts; Validate gates CI against them.
 
 ## Install
 
-Remote references require authorized read access while the repository is private;
-anonymous fetch is conditional on an explicitly approved public distribution.
-An authorized read-only source checkout can instead use `-m ./src/risk` from
-its root. Source credentials are separate from model/proxy authentication.
+Public modules support anonymous fetching; private copies require read-only
+source access. Verify the referenced release, or use `-m ./src/risk` from a
+separate source checkout's root. Source credentials are separate from
+model/proxy authentication.
 
 ```bash
 dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.4

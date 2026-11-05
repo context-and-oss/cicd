@@ -4,11 +4,10 @@
 # Copy this file to your repository at .pipelines/commit.yml
 # and adjust the variables below. You own this file once copied.
 #
-# The repository is currently private. Remote module fetches require separately
-# authorized read-only source access; feed/comment tokens do not grant it.
-# For a separate authorized checkout and local -m paths, see
+# Public modules support anonymous fetching; private copies need read-only
+# source access. Feed/comment tokens do not grant source access. Verify the
+# referenced release, or use a separate checkout and local -m paths; see
 #   README.md#availability-and-source-access
-# Anonymous fetches apply only after authorized publication and verification.
 # Default SAST rules have Semgrep Rules License restrictions; see
 #   THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20
 # Optional secrets and troubleshooting:

@@ -11,9 +11,9 @@ Composes: [build](../build) + [security](../security)
 
 ## Install
 
-Remote references require authorized read access while the repository is private;
-anonymous fetch is conditional on an explicitly approved public distribution.
-An authorized read-only source checkout can use `-m ./src/stage-4` from its root.
+Public modules support anonymous fetching; private copies require read-only
+source access. Verify the referenced release, or use `-m ./src/stage-4` from a
+separate source checkout's root.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.4

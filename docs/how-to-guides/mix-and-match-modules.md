@@ -4,8 +4,8 @@ Use these combinations when the complete pipeline is too much for a repository,
 or when different stages need different gates.
 
 Read [availability and source access](../../README.md#availability-and-source-access)
-first: the repository is currently private; remote coordinates require authorized
-read access. Default SAST rules have [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+first: public modules support anonymous fetching; private copies require read-only
+access, and platform policy controls workflow/action access. Default SAST rules have [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
 Keep existing minimum-coverage, licence, history-secrets and live-verification
 protections until equivalent scope and blocking policy are configured and verified.
 

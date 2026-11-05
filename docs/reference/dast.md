@@ -10,9 +10,9 @@ DAST has its own composite and is wired into no **other** composite. It is not
 the commit/precommit merge gate: it runs on its own cadence and neither calls it.
 Scan only explicitly authorized targets with traffic limits appropriate to the
 environment; baseline generates requests too, and API/full modes send attack
-traffic. Remote module/workflow references need authorized read access while the
-source repository is private. Anonymous fetch is conditional on explicitly
-approved public distribution and subsequent verification, not assumed here.
+traffic. Public modules support anonymous fetching; private copies require
+read-only source access. Verify the referenced release and the platform's
+workflow/action access policy; source access is separate from notification secrets.
 
 ## The three shapes
 

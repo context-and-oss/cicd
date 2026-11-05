@@ -75,10 +75,10 @@ Do not remove an existing image scan merely because source evidence passed. See
 
 ## Auth is platform-specific
 
-The source repository remains private. Versioned remote module references need
-authorized read access; anonymous fetch is an option only after explicitly
-approved public distribution and subsequent access verification. Alternatively,
-use an authorized read-only source checkout and a local module path, such as
+Public modules support anonymous fetching; private forks or mirrors require
+read-only source access. Verify the referenced release and platform access for
+reusable workflows and actions. Alternatively, use a separate source checkout
+and a local module path, such as
 `-m ./src/composites/commit` from that checkout's root, with `--src` pointing at
 the source to assess. Do not fall back to writer credentials or copy credentials
 into the checkout.

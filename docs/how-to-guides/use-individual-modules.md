@@ -4,8 +4,8 @@ Use individual modules when you want one capability without adopting the full
 pre-commit or commit pipeline.
 
 First read [availability and source access](../../README.md#availability-and-source-access):
-the repository is currently private; remote examples are conditional on authorized
-access. Use a separate authorized source checkout and local `-m` paths when needed.
+public modules support anonymous fetching; private copies require read-only access.
+Use a separate source checkout and local `-m` paths when needed.
 Default SAST rules have [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
 
 The standalone commands below are **inspection examples**, not CI gates. For a gate,

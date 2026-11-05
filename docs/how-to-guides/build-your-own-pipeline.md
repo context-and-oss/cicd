@@ -5,11 +5,10 @@ needs a different order, a different gate, extra deployment logic, or another
 reporting channel.
 
 Read [availability and source access](../../README.md#availability-and-source-access)
-first: this repository is currently private. Remote installs and installer actions
-require separately authorized access. For private local development, install from
-module paths in a separate authorized checkout; do not copy credentials or use a
-writer token. Anonymous imports apply only after authorized publication and verified
-release availability. Default SAST rules have
+first: public modules support anonymous fetching; private copies require read-only
+access. Verify the release and platform access for installer actions. For local
+development, install from module paths in a separate checkout; do not copy
+credentials or use a writer token as a source-access fallback. Default SAST rules have
 [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
 
 ## Start with a local Dagger module
@@ -212,10 +211,10 @@ jobs:
           path: ./audit-evidence/
 ```
 
-Once the approved namespace is public and the referenced release exists, these
-modules can be imported without a git token. Neither availability nor a release
-is established by this import candidate. Private-source access must be separately
-authorized and read-only; a feed or comment credential is not module authorization.
+Public modules can be imported without a Git source credential. Verify that the
+referenced release exists and is accessible. Private copies require separately
+authorized read-only source access; a feed or comment credential does not grant
+module-source access.
 If you want PR comments or job-summary markdown, import `notify` and add a
 generated comment file to the returned directory, following the composite modules.
 
