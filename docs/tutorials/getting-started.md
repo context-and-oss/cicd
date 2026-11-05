@@ -4,11 +4,11 @@
 You can use the complete pipelines, call one module at a time, or compose your
 own flow from the same building blocks.
 
-**Source access first:** the repository is currently private. Remote module,
-action and reusable-workflow examples require authorized access; anonymous use
-applies only after authorized publication and availability verification. See
+**Source access:** public modules can be fetched anonymously; private copies
+require read-only access. Verify the referenced release and the hosting platform's
+workflow/action access policy. See
 [availability and source access](../../README.md#availability-and-source-access)
-for separate read-only checkout/local-`-m` use. Feed and notification tokens do not
+for separate source-checkout/local-`-m` use. Feed and notification tokens do not
 grant module access. Default SAST rules have
 [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
 

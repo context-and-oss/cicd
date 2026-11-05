@@ -8,7 +8,9 @@ own deployment.
 
 ## Install
 
-Remote references require authorized read access while the repository is private; anonymous fetch is conditional on a future explicitly approved public distribution. An authorized read-only source checkout can instead use `-m ./src/build` from its root. Source access and package-feed credentials are separate.
+Public modules support anonymous fetching; private copies require read-only
+source access. Verify the referenced release, or use `-m ./src/build` from a
+separate source checkout's root. Source credentials are separate from package feeds.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/build@v5.1.4

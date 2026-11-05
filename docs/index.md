@@ -1,10 +1,10 @@
 # Documentation
 
-The repository is currently private. Remote module, action and reusable-workflow
-examples are conditional on authorized access, not a promise of public availability.
-See [availability and source access](../README.md#availability-and-source-access)
-for separate read-only source-checkout/local-module use. Anonymous fetching applies
-only after authorized publication and verification of the referenced release.
+Use published releases for remote module, action and reusable-workflow examples.
+Public modules can be fetched anonymously; private copies require read-only access,
+and workflow/action access follows the hosting platform's policy. See
+[availability and source access](../README.md#availability-and-source-access)
+for the separate source-checkout/local-module alternative.
 
 ## Getting started
 

@@ -1,10 +1,10 @@
 # Set up Azure DevOps authentication
 
-This guide separates module-source access from **PR-comment delivery**. The
-repository is currently private; remote module fetches require separately
-authorized read access. Feed and comment tokens do not grant that access. See
+This guide separates module-source access from **PR-comment delivery**. Public
+modules support anonymous fetching; private copies require authorized read-only
+source access. Feed and comment tokens do not grant that access. See
 [availability and source access](../../README.md#availability-and-source-access)
-for the separate-checkout/local-`-m` path and conditional future anonymous use.
+for release/access prerequisites and the separate-checkout/local-`-m` path.
 Never reuse writer credentials or copy them into an application repository.
 Everything here is what
 `templates/azure-devops/precommit.yml` and `commit.yml` reference today — this

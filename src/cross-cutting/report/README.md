@@ -9,7 +9,9 @@ share the same evidence envelope schema.
 
 ## Install
 
-Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/cross-cutting/report` from its root.
+Public modules support anonymous fetching; private copies require read-only
+source access. Verify the referenced release, or use `-m ./src/cross-cutting/report`
+from a separate source checkout's root.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.4

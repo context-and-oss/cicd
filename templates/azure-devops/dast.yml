@@ -4,10 +4,9 @@
 # Copy this file to your repository at .pipelines/dast.yml and adjust the
 # variables below. You own this file once copied.
 #
-# The repository is currently private. Module fetching requires separately
-# authorized read-only source access, not feed/notification credentials. See
-# README.md#availability-and-source-access for separate-checkout/local -m use.
-# Anonymous fetches apply only after authorized publication and verification.
+# Public modules support anonymous fetching; private copies need read-only
+# source access, not feed/notification credentials. Verify the referenced release.
+# README.md#availability-and-source-access covers separate-checkout/local -m use.
 # Optional secrets and troubleshooting:
 #   docs/how-to-guides/set-up-azure-devops-auth.md
 #

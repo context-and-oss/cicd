@@ -7,8 +7,8 @@ SBOM, secrets scan of the built output, witnessed test coverage with a
 ratchet gate. No Dockerfile is needed in your source (Docker still runs Dagger).
 
 Read [availability and source access](../../README.md#availability-and-source-access)
-first: the repository is currently private, and remote examples require authorized
-access. Local `./src/...` examples require an authorized cicd source checkout.
+first: public modules support anonymous fetching, while private copies require
+read-only access. Local `./src/...` examples require a cicd source checkout.
 Default SAST rules have [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
 Keep existing coverage minima, blocking licence policy, history-secrets and live
 credential-verification protections until equivalent checks are configured and

@@ -37,12 +37,12 @@ cp templates/github-actions/precommit.yml .github/workflows/precommit.yml
 cp templates/github-actions/commit.yml .github/workflows/commit.yml
 ```
 
-The repository is currently private. These remote workflow/action coordinates
-require authorized platform access and are not generally available public
-integrations. See [availability and source access](../../README.md#availability-and-source-access)
-for authorized read-only checkout/local-module use. Anonymous fetches apply only
-after explicit publication authorization and release availability verification.
-Package-feed and notification credentials do not grant module-source access.
+Verify that the referenced release exists and platform policy permits these
+reusable workflows and actions. Public modules support anonymous fetching;
+private copies require read-only source access. See
+[availability and source access](../../README.md#availability-and-source-access)
+for separate source-checkout/local-module use. Package-feed and notification
+credentials do not grant module-source access.
 
 Optional secrets (omit them unless needed):
 

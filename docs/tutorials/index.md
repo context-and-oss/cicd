@@ -3,8 +3,8 @@
 Learning-oriented guides for people who are new to these pipeline modules.
 Before running remote examples, read
 [availability and source access](../../README.md#availability-and-source-access):
-the repository is currently private, and module authorization is separate from
-package-feed or notification credentials.
+public modules support anonymous fetching; private copies need read-only access.
+Module-source access is separate from package-feed or notification credentials.
 
 | Tutorial | What it covers |
 |----------|----------------|

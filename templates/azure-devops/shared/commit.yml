@@ -6,11 +6,10 @@
 # `trigger: batch: false` as templates/azure-devops/commit.yml states it:
 # a batched build gives the commits it folded no evidence of their own.
 #
-# The repository is currently private. The YAML service connection does not
-# automatically authorize Dagger's separate module fetch. Establish separately
-# authorized read-only source access; feed/comment tokens do not grant it.
+# YAML service-connection access is separate from Dagger's module fetching.
+# Public modules support anonymous fetching; private copies need read-only
+# source access, not feed/comment tokens. Verify the referenced release.
 # See README.md#availability-and-source-access for local -m alternatives.
-# Anonymous fetches apply only after authorized publication and verification.
 # Default SAST rules have Semgrep Rules License restrictions; see
 #   THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20
 # Optional secrets and troubleshooting:

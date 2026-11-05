@@ -19,11 +19,11 @@ file to edit and the exact change to make.
 1. An existing GitHub Actions or Azure DevOps pipeline in the repo.
 2. Docker + the Dagger CLI available on the runner (the templates install the
    CLI for you).
-3. **Authorized module-source access.** The repository is currently private;
-   remote examples require separately authorized read access. Anonymous fetches
-   apply only after authorized publication and availability verification. See
+3. **Module-source access.** Public modules support anonymous fetching; private
+   copies require read-only access. Verify the release and platform workflow/action
+   access policy. See
    [availability and source access](../../README.md#availability-and-source-access)
-   for the separate-checkout/local-`-m` path. Feed tokens do not grant this access.
+   for the separate-checkout/local-`-m` path. Feed tokens do not grant source access.
    Azure DevOps PR comments need the separate setup in
    [set up ADO authentication](set-up-azure-devops-auth.md).
 4. Review the runtime [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20)

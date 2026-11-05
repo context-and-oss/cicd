@@ -16,11 +16,11 @@ cicd never deploys the thing it scans is
 
 ## Source access prerequisite
 
-The repository is currently private. Remote examples, installer actions and reusable
-workflows require separately authorized access; anonymous fetching applies only
-after authorized publication and availability verification. See
+Public modules support anonymous fetching; private copies require read-only
+source access. Verify the referenced release and platform access for installer
+actions and reusable workflows. See
 [availability and source access](../../README.md#availability-and-source-access)
-for the separate authorized checkout/local-`-m` alternative. A local path must point
+for the separate source-checkout/local-`-m` alternative. A local path must point
 to that cicd checkout, not to absent `src/` directories in your application.
 
 ## One question: who starts the app?

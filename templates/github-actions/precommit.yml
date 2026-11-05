@@ -16,10 +16,9 @@
 # ─────────────────────────────────────────────────────────────────────
 #
 # ─── Secrets ────────────────────────────────────────────────────────
-# The repository is currently private. Verify authorized reusable-workflow and
-# action access separately from module-source access; these are not generally
-# available public integrations. See README.md#availability-and-source-access.
-# Anonymous fetches apply only after authorized publication and verification.
+# Verify the referenced release and platform access for workflows/actions.
+# Public modules support anonymous fetching; private copies need read-only
+# source access. See README.md#availability-and-source-access.
 # Feed/notification tokens below do not grant source access. Omit unused secret
 # mappings when adopting; all of these feature credentials are optional:
 # Default SAST rules have Semgrep Rules License restrictions; see

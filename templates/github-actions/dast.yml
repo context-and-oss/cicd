@@ -31,10 +31,10 @@
 # provenance line beats no scan. Full guide:
 # https://github.com/context-and-oss/cicd/blob/main/docs/how-to-guides/scan-a-running-app.md
 #
-# The repository is currently private. Verify authorized reusable-workflow,
-# action and module-source access separately from optional TEAMS_WEBHOOK.
-# See README.md#availability-and-source-access for local-source alternatives.
-# Anonymous fetches apply only after authorized publication and verification.
+# Verify the referenced release and platform access for workflows/actions.
+# Public modules support anonymous fetching; private copies need read-only
+# source access separately from optional TEAMS_WEBHOOK. See
+# README.md#availability-and-source-access for local-source alternatives.
 # Omit the optional webhook mapping when it is not needed.
 #
 # ─── Stay up to date (Renovate) ─────────────────────────────────────

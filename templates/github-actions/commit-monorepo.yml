@@ -1,10 +1,10 @@
 # Copy once per app, giving each caller a distinct workflow name and app-id.
 # These scripts belong to the consumer and include their own setup. This
 # template requires a release containing commit-monorepo.yml and app inputs.
-# The repository is currently private. Verify authorized workflow, action and
-# module-source access; feed tokens do not grant it. See
-# README.md#availability-and-source-access for separate-checkout/local -m use.
-# Anonymous fetches apply only after authorized publication and verification.
+# Verify the referenced release and platform access for workflows/actions.
+# Public modules support anonymous fetching; private copies need read-only
+# source access, not feed tokens. See README.md#availability-and-source-access
+# for separate-checkout/local -m use.
 # Omit unused optional feed secret mappings when adopting.
 # Source SAST uses rules with Semgrep Rules License restrictions; see
 # THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20.

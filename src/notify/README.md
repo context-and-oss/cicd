@@ -4,7 +4,9 @@ Posts pipeline status notifications to Microsoft Teams, GitHub PRs, and Azure De
 
 ## Install
 
-Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/notify` from its root. Source-access credentials are separate from notification secrets.
+Public modules support anonymous fetching; private copies require read-only
+source access. Verify the referenced release, or use `-m ./src/notify` from a
+separate source checkout's root. Source credentials are separate from notification secrets.
 
 ```
 dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.4

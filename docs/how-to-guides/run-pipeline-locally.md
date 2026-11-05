@@ -25,9 +25,10 @@ check, because a gate that cannot read a verdict has not passed.
 ## First-time setup
 
 The source-development and fixture commands below assume the root of a separately
-[authorized cicd source checkout](../../README.md#availability-and-source-access),
-not your application repository. The repository is currently private. For an
-application, copy the local templates from that checkout and set
+[cicd source checkout](../../README.md#availability-and-source-access),
+not your application repository. Public source can be fetched anonymously;
+private copies require read-only access. For an application, copy the local
+templates from that checkout and set
 `CICD_PRECOMMIT_MODULE` to its absolute `src/composites/precommit` path when remote
 access is unavailable. Dependencies may still require authorized read access.
 Default SAST rules have [Semgrep Rules License restrictions](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).

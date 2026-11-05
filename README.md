@@ -68,20 +68,21 @@ is the exhaustive "I run X today → it's Y in cicd" lookup.
 
 ### Availability and source access
 
-The repository is currently private. Remote module coordinates, reusable workflows,
-installer actions and the Renovate preset below are integration candidates, not a
-promise of anonymous access. Anonymous fetching is applicable only after explicit
-publication authorization and verification of the referenced release and files.
-A private repository may be used only through separately authorized read-only source
-access; package-feed and notification tokens do not grant module access. Do not
+Use a published release at the module coordinates below. Public repositories
+support anonymous module fetching; private forks or mirrors require authorized
+read-only source access. Verify that the referenced release and files exist and
+that GitHub Actions sharing/access policy permits any reusable workflows and
+installer actions you call. The Renovate preset also needs access to its source.
+
+Package-feed and notification tokens do not grant module-source access. Do not
 reuse a writer token or copy credentials into the application repository.
 
-For local use, obtain an authorized source checkout separately, outside the
+For local use, obtain a source checkout separately, outside the
 application tree being scanned, then replace the remote `-m` value with its absolute module path (for example,
 `-m "$CICD_SOURCE/src/security"`), keeping `--src .` pointed at your application.
 `CICD_SOURCE` is the path to that checkout. Remote dependencies may still require
-separately authorized read access. This does not make external reusable-workflow
-calls available; verify platform sharing/access policy separately.
+read access to their own repositories. A local module checkout does not grant
+access to remote reusable workflows or actions; verify platform policy separately.
 
 > **On Azure DevOps?** Module-source access and PR-comment access are separate:
 > see [Set up Azure DevOps authentication](docs/how-to-guides/set-up-azure-devops-auth.md).
