@@ -15,7 +15,7 @@ Default SAST fetches rules under the restrictive **Semgrep Rules License v1.0**,
 Remote references require authorized read access while the source repository is private; anonymous fetching applies only after an explicitly approved public distribution. Alternatively, use an authorized read-only source checkout and replace the remote `-m` value with its local module path. Package-feed credentials are separate; do not use a writer credential as a fetch fallback.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.4
 ```
 
 ## Usage
@@ -25,7 +25,7 @@ Run from your source root with `SHA` and `REPO_URL` set, Dagger and `jq` install
 ```bash
 set -eu
 rm -rf ./commit-evidence
-dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.3 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.4 call run \
   --src=. --artifact=container --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./commit-evidence || exit 1

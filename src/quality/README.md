@@ -10,7 +10,7 @@ Supports Go, Node.js, Python, and .NET. Returns an evidence envelope.
 Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/quality` from its root. Source access and package-feed credentials are separate.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.4
 ```
 
 ## Usage
@@ -20,7 +20,7 @@ Set `SHA` and `REPO_URL`; run with Dagger and `jq` from the source root:
 ```bash
 set -eu
 rm -f ./evidence.json
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.3 call check \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.4 call check \
   --src=. --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./evidence.json || exit 1

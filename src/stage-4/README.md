@@ -16,7 +16,7 @@ anonymous fetch is conditional on an explicitly approved public distribution.
 An authorized read-only source checkout can use `-m ./src/stage-4` from its root.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.4
 ```
 
 ## Usage
@@ -30,7 +30,7 @@ A pass does not imply full scope or clean results: keep warnings, non-runs,
 suppressions and examined metadata.
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.3 call run \
+dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.4 call run \
   --src=. --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL
 ```

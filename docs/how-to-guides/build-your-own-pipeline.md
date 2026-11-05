@@ -25,10 +25,10 @@ dagger init --sdk go --name app-ci
 Add dependencies on the modules you want:
 
 ```bash
-dagger install github.com/context-and-oss/cicd/src/quality@v5.1.3
-dagger install github.com/context-and-oss/cicd/src/security@v5.1.3
-dagger install github.com/context-and-oss/cicd/src/risk@v5.1.3
-dagger install github.com/context-and-oss/cicd/src/cross-cutting/evidence@v5.1.3
+dagger install github.com/context-and-oss/cicd/src/quality@v5.1.4
+dagger install github.com/context-and-oss/cicd/src/security@v5.1.4
+dagger install github.com/context-and-oss/cicd/src/risk@v5.1.4
+dagger install github.com/context-and-oss/cicd/src/cross-cutting/evidence@v5.1.4
 dagger develop
 cd ..  # return to the application root for the ./ci commands below
 ```
@@ -183,7 +183,7 @@ jobs:
 
       - name: Install Dagger
         # Checksum-verified download, no `curl install.sh | sh`.
-        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.3
+        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.4
         with:
           version: 0.20.8
 

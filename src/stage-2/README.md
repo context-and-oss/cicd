@@ -23,7 +23,7 @@ An authorized read-only source checkout can use `-m ./src/stage-2` from its root
 Source credentials are separate from package feeds.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.4
 ```
 
 ## Usage
@@ -35,7 +35,7 @@ For the complete clean/export/`jq -e '.passed == true'` recipe, use precommit
 linked above. Retain warnings, non-runs, suppressions and examined metadata.
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.3 call run \
+dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.4 call run \
   --src=. --include=go --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   --sast-rulesets=p/security-audit

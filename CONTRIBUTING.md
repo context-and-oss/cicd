@@ -264,7 +264,7 @@ claim they passed while the repository was private.
   baseline is `v5.1.3`; a new destination must verify its own baseline without
   importing retired private Git/GitHub history.
 - [ ] **Anonymous module fetch — after publication.** From a machine with no GitHub credentials,
-  `dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 functions`
+  `dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 functions`
   (the version the pins name) resolves the tag.
 - [ ] **A pull request from a fork — after publication** runs `ci` without secrets and reports its
   status.

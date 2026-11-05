@@ -7,7 +7,7 @@ Posts pipeline status notifications to Microsoft Teams, GitHub PRs, and Azure De
 Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/notify` from its root. Source-access credentials are separate from notification secrets.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.4
 ```
 
 ## Usage
@@ -18,7 +18,7 @@ for an offline preview use `build-card` instead.
 ```bash
 set -eu
 rm -f ./delivery-evidence.json
-dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.3 call teams \
+dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.4 call teams \
   --webhook-url=env:TEAMS_WEBHOOK \
   --summary=combined-evidence.json \
   --pipeline-name=precommit \

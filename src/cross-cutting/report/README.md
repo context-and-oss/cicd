@@ -12,7 +12,7 @@ share the same evidence envelope schema.
 Remote references require authorized read access while the repository is private; anonymous fetch is conditional on an explicitly approved public distribution. An authorized read-only source checkout can use `-m ./src/cross-cutting/report` from its root.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.4
 ```
 
 ## Functions
@@ -25,17 +25,17 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3
 
 ```bash
 # Extract SARIF from a scan-source evidence file (e.g. for GitHub Advanced Security upload-sarif)
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.4 call report \
   --evidence ./evidence.json \
   export --path=./results.sarif
 
 # Extract CycloneDX from a vuln scan or SBOM evidence file
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.4 call report \
   --evidence ./vuln-evidence.json \
   export --path=./vuln.cdx.json
 
 # Extract the cicd-owned dast/1.0 payload from scan-web evidence
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.3 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.4 call report \
   --evidence ./web-evidence.json \
   export --path=./dast-report.json
 ```

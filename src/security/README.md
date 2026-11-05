@@ -22,7 +22,7 @@ An authorized read-only source checkout can instead use `-m ./src/security`
 from its root. Source-access credentials are separate from package feeds.
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4
 ```
 
 ## Functions
@@ -52,7 +52,7 @@ and per-source outcomes: `passed` is not a claim of clean or full-scope analysis
 # Basic CI gate; set SHA and REPO_URL first, with Dagger and jq installed
 set -eu
 rm -f ./evidence.json
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-source \
   --src=. --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./evidence.json || exit 1
@@ -63,7 +63,7 @@ Alternative scoped inspection only; not equivalent to whole-repository coverage:
 
 ```bash
 # Inspect the declared subdirectory and exclusions
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-source \
   --src=. --path=src/api --exclude=vendor --exclude=generated \
   --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
@@ -145,7 +145,7 @@ dotnet restore --use-lock-file   # then commit the generated packages.lock.json
 If your packages come from a private feed, the restore needs to reach it:
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-source \
   --src=. --fail-on=HIGH \
   --nuget-feed-url=$NUGET_FEED_URL --nuget-token=env:NUGET_TOKEN \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
@@ -173,7 +173,7 @@ chosen policy in repository mode (set provenance variables first):
 ```bash
 set -eu
 rm -f ./license-evidence.json
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-licenses \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-licenses \
   --src=. --license-gate=gate --license-allow=permissive \
   --license-allow=notice --license-allow=unencumbered --fail-on=LOW \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
@@ -213,7 +213,7 @@ reports. It is wired into no composite; call it directly, on whatever schedule
 your release process needs.
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-sbom \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-sbom \
   --sbom=sbom.cdx.json --fail-on=NONE \
   --commit-sha=$RELEASE_SHA --branch=main --repo-url=$REPO_URL \
   export --path=vuln-current.json
@@ -245,14 +245,14 @@ for target lifecycle, API inputs and scope disclosures.
 
 ```bash
 # Passive baseline inspection (authorized target only)
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-web \
   --target=https://staging.example.com \
   --mode=baseline --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   export --path=web-evidence.json
 
 # Active full scan (attack payloads — test environments only)
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.3 call scan-web \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.4 call scan-web \
   --target=https://test.example.com \
   --mode=full --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
