@@ -411,7 +411,7 @@ steps:
       if [ -s "$CHANGE_DIFF_FILE" ]; then extra+=(--diff "$CHANGE_DIFF_FILE"); fi
       # Export into a clean destination on hosted and reused agents alike.
       rm -rf -- ./audit-evidence ./commit-build
-      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.4 call run \
+      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.5 call run \
         --src . \
         --artifact "${ARTIFACT:-container}" \
         --fail-on HIGH \

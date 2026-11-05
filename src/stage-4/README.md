@@ -16,7 +16,7 @@ source access. Verify the referenced release, or use `-m ./src/stage-4` from a
 separate source checkout's root.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.4
+dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.5
 ```
 
 ## Usage
@@ -30,7 +30,7 @@ A pass does not imply full scope or clean results: keep warnings, non-runs,
 suppressions and examined metadata.
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.4 call run \
+dagger -m github.com/context-and-oss/cicd/src/stage-4@v5.1.5 call run \
   --src=. --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL
 ```

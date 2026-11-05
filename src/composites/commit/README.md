@@ -18,7 +18,7 @@ and replace the remote `-m` value with its local module path. Package-feed
 credentials are separate; do not use a writer credential as a source-fetch fallback.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.4
+dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.5
 ```
 
 ## Usage
@@ -28,7 +28,7 @@ Run from your source root with `SHA` and `REPO_URL` set, Dagger and `jq` install
 ```bash
 set -eu
 rm -rf ./commit-evidence
-dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.4 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.5 call run \
   --src=. --artifact=container --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./commit-evidence || exit 1
