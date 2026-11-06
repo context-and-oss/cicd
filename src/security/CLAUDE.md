@@ -224,6 +224,12 @@ If you want `auto`'s breadth, name packs explicitly:
 
 ## Pinned default rules
 
+Both ordinary and inline scan commands disable Semgrep's optional engine-update
+probe. The engine is digest-pinned; a retried update/banner request must not
+consume the analysis deadline. This does not disable rule-source fetching or
+make explicit live packs offline, and it changes no scan scope or timeout. See
+[keep-local-semgrep-time-for-analysis](../../specs/keep-local-semgrep-time-for-analysis.md).
+
 `p/security-audit`, `p/owasp-top-ten` and `p/secrets` never reach the
 registry. `semgrepPlanFor` replaces every pinned pack named with one
 `--config /<top>` per top-level directory of their files in a

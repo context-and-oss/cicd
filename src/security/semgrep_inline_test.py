@@ -175,6 +175,32 @@ class InlineTests(unittest.TestCase):
                     analyse(root / 'plan', root, root / 'report', root / 'sarif', root / 'warnings')
             self.assertEqual((root / 'sarif').read_text(), baseline)
 
+    def test_inline_scan_disables_only_the_optional_update_probe(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'plan').write_text('{}')
+            (root / 'page.html').write_text('<script>first();</script><script>second();</script>')
+            (root / 'report').write_text('{"paths":{"scanned":["page.html"]}}')
+            (root / 'sarif').write_text('{"runs":[{}]}')
+            def fake_scan(command, cwd, **kwargs):
+                self.assertEqual(command[:2], ['semgrep', 'scan'])
+                self.assertIn('--disable-version-check', command)
+                self.assertIn('--metrics=off', command)
+                self.assertIn('--no-rewrite-rule-ids', command)
+                self.assertEqual(kwargs['timeout'], 300)
+                self.assertEqual(command[-1], 'scripts')
+                work = Path(cwd)
+                self.assertEqual((work / 'scripts/inline-0000.js').read_text(), 'first();\n;\nsecond();\n;\n')
+                (work / 'report.json').write_text('{"paths":{"scanned":["scripts/inline-0000.js"]}}')
+                (work / 'report.sarif').write_text(json.dumps({'runs': [{
+                    'tool': {'driver': {'rules': [{'id': DOM_ID}]}}, 'results': []}]}))
+                return SimpleNamespace(returncode=0)
+            with patch('semgrep_inline.rules_for_inline', return_value=[{'id': DOM_ID}]), \
+                 patch('semgrep_inline.subprocess.run', side_effect=fake_scan) as runner:
+                analyse(root / 'plan', root, root / 'report', root / 'sarif', root / 'warnings')
+            runner.assert_called_once()  # No batching, scope splitting or retry.
+
     def test_empty_static_html_needs_no_second_scanner(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

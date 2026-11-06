@@ -331,7 +331,7 @@ def analyse(plan_path, source_root, report_path, sarif_path, warnings_path):
             config.write_text(json.dumps({"rules": rules}))
             with (work / "stderr").open("wb") as stderr:
                 result = subprocess.run([
-                    "semgrep", "scan", "--no-rewrite-rule-ids", "--metrics=off",
+                    "semgrep", "scan", "--disable-version-check", "--no-rewrite-rule-ids", "--metrics=off",
                     "--config", str(config), "--json-output", str(work / "report.json"),
                     "--sarif-output", str(work / "report.sarif"), "scripts",
                 ], cwd=work, stdout=subprocess.DEVNULL, stderr=stderr, timeout=300)

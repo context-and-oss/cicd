@@ -204,7 +204,8 @@ if [ -s ` + semgrepPackErrPath + ` ]; then
   : > /tmp/report.sarif
   exit 0
 fi
-semgrep scan --sarif-output=/tmp/report.sarif --json-output=/tmp/report.json --metrics=off "$@" . >/tmp/semgrep.out 2>/tmp/semgrep.err
+# The engine is pinned; optional update-service retries must not consume scan time.
+semgrep scan --disable-version-check --sarif-output=/tmp/report.sarif --json-output=/tmp/report.json --metrics=off "$@" . >/tmp/semgrep.out 2>/tmp/semgrep.err
 code=$?
 echo "$code" > /tmp/semgrep.exit
 [ -f /tmp/report.sarif ] || : > /tmp/report.sarif
