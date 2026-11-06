@@ -4,7 +4,7 @@
 # Invoked by consumer repos via:
 #   jobs:
 #     precommit:
-#       uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.5
+#       uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.6
 #       secrets:
 #         TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
 #         NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}
@@ -629,7 +629,7 @@ jobs:
           # "could not compute", and the gates cannot tell those apart.
           if [ -n "${CHANGE_DIFF_FILE:-}" ]; then extra+=(--diff "$CHANGE_DIFF_FILE"); fi
 
-          run_with_disk_guard dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.5 call run \
+          run_with_disk_guard dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.6 call run \
             --src . \
             --fail-on "$FAIL_ON" \
             --commit-sha "${GITHUB_SHA}" \
