@@ -248,6 +248,14 @@ func TestTheSemgrepScriptAsksForTheAccounting(t *testing.T) {
 	}
 }
 
+func TestSemgrepScanDoesNotProbeForEngineUpdates(t *testing.T) {
+	// A pinned local scan must not spend its process budget on the optional
+	// update service. Keep this on the executable command, not in a comment.
+	if !strings.Contains(semgrepScript, "\nsemgrep scan --disable-version-check ") {
+		t.Fatal("semgrep scan no longer disables its optional version probe")
+	}
+}
+
 // TestTheScannedFileIsTruncatedBeforeTheScan. The count file is created empty
 // up front, so a semgrep that dies before writing anything leaves "did not
 // state" rather than a stale count from an earlier layer.
