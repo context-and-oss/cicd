@@ -12,7 +12,7 @@ source access. Verify the referenced release, or use `-m ./src/quality` from a
 separate source checkout's root. Source credentials are separate from package feeds.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.5
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.6
 ```
 
 ## Usage
@@ -22,7 +22,7 @@ Set `SHA` and `REPO_URL`; run with Dagger and `jq` from the source root:
 ```bash
 set -eu
 rm -f ./evidence.json
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.5 call check \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.6 call check \
   --src=. --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./evidence.json || exit 1

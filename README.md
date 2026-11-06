@@ -95,7 +95,7 @@ One command, one envelope — no pipeline changes required. You need the
 
 ```bash
 rm -f ./evidence.json &&
-dagger -m github.com/context-and-oss/cicd/src/security@v5.1.5 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.6 call scan-source \
   --src . --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
   --branch "$(git branch --show-current)" \
@@ -157,16 +157,16 @@ composites and templates wire them for you — but this is the map of what exist
 
 | Module | Address | What it does |
 |--------|---------|--------------|
-| `quality` | `github.com/context-and-oss/cicd/src/quality@v5.1.5` | Multi-language lint + unit tests |
-| `security` | `github.com/context-and-oss/cicd/src/security@v5.1.5` | SAST, secrets, vuln scan, image scan, DAST |
-| `risk` | `github.com/context-and-oss/cicd/src/risk@v5.1.5` | AI risk analysis + OPA policy gate |
-| `build` | `github.com/context-and-oss/cicd/src/build@v5.1.5` | OCI image build, SBOM |
-| `notify` | `github.com/context-and-oss/cicd/src/notify@v5.1.5` | Teams / GitHub / Azure DevOps notifications |
-| `stage-2` | `github.com/context-and-oss/cicd/src/stage-2@v5.1.5` | Pre-commit orchestrator — quality + security + risk |
-| `stage-4` | `github.com/context-and-oss/cicd/src/stage-4@v5.1.5` | Commit orchestrator — build + image scan |
-| `composites/precommit` | `github.com/context-and-oss/cicd/src/composites/precommit@v5.1.5` | Full pre-commit pipeline (Stage 2) |
-| `composites/commit` | `github.com/context-and-oss/cicd/src/composites/commit@v5.1.5` | Full commit pipeline — source gate + `--artifact container\|archive\|none` tail (Stage 2 + Stage 4, [ADR-005](docs/decisions/ADR-005-commit-stage-code-and-artifact.md)) |
-| `composites/dast` | `github.com/context-and-oss/cicd/src/composites/dast@v5.1.5` | Running-app DAST on its own cadence — `--app url\|service\|container`; not a merge gate ([reference](docs/reference/dast.md)) |
+| `quality` | `github.com/context-and-oss/cicd/src/quality@v5.1.6` | Multi-language lint + unit tests |
+| `security` | `github.com/context-and-oss/cicd/src/security@v5.1.6` | SAST, secrets, vuln scan, image scan, DAST |
+| `risk` | `github.com/context-and-oss/cicd/src/risk@v5.1.6` | AI risk analysis + OPA policy gate |
+| `build` | `github.com/context-and-oss/cicd/src/build@v5.1.6` | OCI image build, SBOM |
+| `notify` | `github.com/context-and-oss/cicd/src/notify@v5.1.6` | Teams / GitHub / Azure DevOps notifications |
+| `stage-2` | `github.com/context-and-oss/cicd/src/stage-2@v5.1.6` | Pre-commit orchestrator — quality + security + risk |
+| `stage-4` | `github.com/context-and-oss/cicd/src/stage-4@v5.1.6` | Commit orchestrator — build + image scan |
+| `composites/precommit` | `github.com/context-and-oss/cicd/src/composites/precommit@v5.1.6` | Full pre-commit pipeline (Stage 2) |
+| `composites/commit` | `github.com/context-and-oss/cicd/src/composites/commit@v5.1.6` | Full commit pipeline — source gate + `--artifact container\|archive\|none` tail (Stage 2 + Stage 4, [ADR-005](docs/decisions/ADR-005-commit-stage-code-and-artifact.md)) |
+| `composites/dast` | `github.com/context-and-oss/cicd/src/composites/dast@v5.1.6` | Running-app DAST on its own cadence — `--app url\|service\|container`; not a merge gate ([reference](docs/reference/dast.md)) |
 
 Each module has a `README.md` beside its source (for example
 [`src/quality/README.md`](src/quality/README.md)). Cross-cutting helpers

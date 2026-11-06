@@ -19,7 +19,7 @@ source access. Verify the referenced release, or use `-m ./src/cross-cutting/int
 from a separate source checkout's root.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.5
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.6
 ```
 
 ## Functions
@@ -35,7 +35,7 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.5
 set -eu
 rm -f ./intent-evidence.json /tmp/change.diff
 git diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ origin/main...HEAD > /tmp/change.diff
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.5 call check \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.6 call check \
   --src . \
   --diff /tmp/change.diff \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -45,7 +45,7 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.5 call c
 jq -e '.passed == true' ./intent-evidence.json >/dev/null || exit 1
 
 # Inspection only, not a CI gate: audit every artifact without a diff
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.5 call check \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/intent@v5.1.6 call check \
   --src . \
   --commit-sha local --branch main --repo-url https://example.com \
   export --path=./intent-evidence.json
