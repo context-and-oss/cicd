@@ -292,9 +292,22 @@ and appends a separately identified SARIF run before `redactSemgrepSARIF`.
 
 Source maps cover primary, related and flow locations, parser notifications and
 UTF-16 columns. Keep rule catalogues/indices per run and count original files only.
+The inline command requests `--time`: pinned Semgrep can report taint
+fixpoint timeouts there while `errors[]` and SARIF notices remain empty. The
+adapter reconstructs authored warning notices from validated locations, never
+copies raw diagnostic prose, then remaps them before publication. The Go notice
+reader discloses their counts and original files under the existing partial-scan
+warning policy. A loaded-rule catalogue and scanned-input list alone do not prove
+convergence. The ordinary pass does not yet request these timing-only diagnostics.
+See [report-inline-taint-convergence-limits](../../specs/report-inline-taint-convergence-limits.md).
+
 Internal failures are exit 125/non-runs, while malformed or unsupported markup is
 a partial-scan disclosure. A failing inline pass retains the original scan's
-findings. Classic blocks share document scope; modules and template scripts
+findings. Inline execution waits for the supported engine to finish; it has no
+adapter-specific elapsed-time cutoff. The caller's cancellation and execution
+limits still apply. Longer execution does not waive coverage validation or turn
+engine convergence warnings into complete-analysis claims. See
+[finish-inline-analysis-with-the-caller](../../specs/finish-inline-analysis-with-the-caller.md). Classic blocks share document scope; modules and template scripts
 remain separate. Templates can activate scripts when cloned, so their scripts are
 analysed. Do not turn JSON/import maps, external-script bodies or inert text
 contexts into JavaScript. Event-handler attributes and framework/server templates remain outside

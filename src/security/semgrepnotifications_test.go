@@ -101,6 +101,30 @@ func TestSemgrepNotificationsRealCapture(t *testing.T) {
 	}
 }
 
+func TestSemgrepFixpointTimeoutIsVisiblePartialCoverage(t *testing.T) {
+	raw := sarifWithNotifications(
+		`{"descriptor":{"id":"Fixpoint timeout"},"level":"warning","message":{"text":"raw diagnostic text must not be quoted"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"pages/panel.html"}}}]}`,
+		`{"descriptor":{"id":"Fixpoint timeout"},"level":"warning"}`,
+	)
+	warnings := semgrepNotificationWarnings(raw)
+	if len(warnings) != 1 {
+		t.Fatalf("want one partial warning, got %v", warnings)
+	}
+	for _, want := range []string{"2 taint fixpoint timeout(s)", "1 file(s)", "pages/panel.html", "1 naming no file", "floor, not a complete verdict"} {
+		if !strings.Contains(warnings[0], want) {
+			t.Errorf("missing %q in %q", want, warnings[0])
+		}
+	}
+	if strings.Contains(warnings[0], "raw diagnostic") {
+		t.Fatal("diagnostic source was copied into the warning")
+	}
+	errorNotice := sarifWithNotifications(`{"descriptor":{"id":"Fixpoint timeout"},"level":"error"}`)
+	notices := parseSemgrepNotifications(errorNotice)
+	if notices.FixpointTimeouts != 0 || len(notices.ErrorLevel) != 1 {
+		t.Fatal("an error-level diagnostic was demoted to a partial warning")
+	}
+}
+
 // TestSemgrepNotificationsCleanRunSaysNothing pins the negative control. A
 // disclosure on every clean run is noise, and the three clean shapes semgrep
 // can produce must all be silent.

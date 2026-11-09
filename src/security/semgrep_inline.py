@@ -310,6 +310,65 @@ def remap_sarif(document, maps, original_bases):
     return document
 
 
+def add_fixpoint_notifications(report, document, maps):
+    """Surface pinned-engine taint warnings absent from its SARIF/errors.
+
+    Reconstruct only authored text and typed locations. The upstream message
+    can contain source and is never copied. A catalogue and scanned-file list
+    do not prove every analysis converged; these retain the partial-warning
+    policy, not a new severity gate or an approval of the partial result.
+    """
+    timing = report.get('time')
+    if not isinstance(timing, dict) or not isinstance(timing.get('fixpoint_timeouts'), list):
+        raise InlineError('inline scanner did not supply readable analysis diagnostics')
+    warnings = timing['fixpoint_timeouts']
+    if not warnings:
+        return
+    runs = document.get('runs')
+    if not isinstance(runs, list) or len(runs) != 1 or not isinstance(runs[0], dict):
+        raise InlineError('inline diagnostics have ambiguous scan runs')
+    notes = []
+    inputs = {'scripts/' + name for name in maps}
+    for warning in warnings:
+        if not isinstance(warning, dict) or warning.get('error_type') != 'Fixpoint timeout' or warning.get('severity') != 'warn':
+            raise InlineError('inline scanner supplied an unknown analysis diagnostic')
+        note = {'descriptor': {'id': 'Fixpoint timeout'}, 'level': 'warning',
+                'message': {'text': 'Taint analysis stopped before convergence; findings are a floor, not a complete verdict.'}}
+        location = warning.get('location')
+        if location is not None:
+            if not isinstance(location, dict):
+                raise InlineError('inline diagnostic has an unreadable location')
+            path = location.get('path')
+            if not isinstance(path, str) or path not in inputs:
+                raise InlineError('inline diagnostic names an unknown extracted input')
+            physical = {'artifactLocation': {'uri': path}}
+            region = {}
+            for prefix in ('start', 'end'):
+                position = location.get(prefix)
+                if position is None:
+                    continue
+                if not isinstance(position, dict) or any(type(position.get(key)) is not int or position[key] < 1 for key in ('line', 'col')):
+                    raise InlineError('inline diagnostic has an invalid source position')
+                region[prefix + 'Line'], region[prefix + 'Column'] = position['line'], position['col']
+            if region:
+                if 'startLine' not in region:
+                    raise InlineError('inline diagnostic has no starting source position')
+                physical['region'] = region
+            note['locations'] = [{'physicalLocation': physical}]
+        notes.append(note)
+    invocations = runs[0].setdefault('invocations', [])
+    if not isinstance(invocations, list) or len(invocations) > 1:
+        raise InlineError('inline diagnostics have ambiguous scan invocations')
+    if not invocations:
+        invocations.append({'executionSuccessful': True})
+    if not isinstance(invocations[0], dict):
+        raise InlineError('inline diagnostic invocation is unreadable')
+    notifications = invocations[0].setdefault('toolExecutionNotifications', [])
+    if not isinstance(notifications, list):
+        raise InlineError('inline diagnostic notifications are unreadable')
+    notifications.extend(notes)
+
+
 def analyse(plan_path, source_root, report_path, sarif_path, warnings_path):
     plan = json.loads(plan_path.read_text())
     original_json = json.loads(report_path.read_text())
@@ -331,13 +390,14 @@ def analyse(plan_path, source_root, report_path, sarif_path, warnings_path):
             config.write_text(json.dumps({"rules": rules}))
             with (work / "stderr").open("wb") as stderr:
                 result = subprocess.run([
-                    "semgrep", "scan", "--disable-version-check", "--no-rewrite-rule-ids", "--metrics=off",
-                    "--config", str(config), "--json-output", str(work / "report.json"),
+                    "semgrep", "scan", "--disable-version-check",
+                    "--no-rewrite-rule-ids", "--metrics=off", "--time", "--config", str(config), "--json-output", str(work / "report.json"),
                     "--sarif-output", str(work / "report.sarif"), "scripts",
-                ], cwd=work, stdout=subprocess.DEVNULL, stderr=stderr, timeout=300)
+                ], cwd=work, stdout=subprocess.DEVNULL, stderr=stderr)
             if result.returncode not in (0, 1):
                 raise InlineError("inline JavaScript scanner did not complete")
-            scanned = json.loads((work / "report.json").read_text())["paths"]["scanned"]
+            profile = json.loads((work / "report.json").read_text())
+            scanned = profile["paths"]["scanned"]
             if {Path(p).name for p in scanned} != set(maps):
                 raise InlineError("inline JavaScript scanner omitted an extracted input")
             inline = json.loads((work / "report.sarif").read_text())
@@ -346,6 +406,7 @@ def analyse(plan_path, source_root, report_path, sarif_path, warnings_path):
             loaded = {r["id"].lower() for run in inline["runs"] for r in run["tool"]["driver"]["rules"]}
             if not {r["id"].lower() for r in rules} <= loaded:
                 raise InlineError("inline JavaScript scanner did not load its selected rules")
+            add_fixpoint_notifications(profile, inline, maps)
             bases = original["runs"][0].get("originalUriBaseIds", {})
             original["runs"].extend(remap_sarif(inline, maps, bases)["runs"])
             files = len({mapping.original for mapping in maps.values()})
