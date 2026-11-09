@@ -80,11 +80,12 @@ func nodeFeedWarnings(ctx context.Context, src *dagger.Directory, dir string, pm
 	if w := nodeFeedWarning(pm, true); w != "" {
 		out = append(out, w)
 	}
-	if routing == npmRoutingNpmrc {
-		if npmrc, ok := projectNpmrc(ctx, src, dir); ok {
-			if w := nodeFeedRoutingWarning(pm, routing, feedURL, npmrc); w != "" {
-				out = append(out, w)
-			}
+	if npmrc, ok := projectNpmrc(ctx, src, dir); ok {
+		if w := nodeFeedRoutingWarning(pm, routing, feedURL, npmrc); w != "" {
+			out = append(out, w)
+		}
+		if w := nodeFeedShadowWarning(pm, feedURL, npmrc); w != "" {
+			out = append(out, w)
 		}
 	}
 	return out
@@ -98,19 +99,17 @@ type readError struct {
 func (e *readError) Error() string { return "could not read " + e.path + ": " + e.err.Error() }
 
 // withNodeFeed points every Node package manager cicd can configure at the
-// private feed, the token bound as a secret to the feed's host only
-// (nodeFeedEnv). It is the one place the Node legs, Prepare and the consumer
-// command legs set it, so pnpm cannot again be missed at one of them.
+// private feed, the token bound as a secret and credentialed to the feed's host
+// only (nodeFeedConfig). It is the one place the Node legs, Prepare and the
+// consumer command legs set it, so pnpm cannot again be missed at one of them.
 func withNodeFeed(ctr *dagger.Container, feedURL, routing string, token *dagger.Secret) *dagger.Container {
 	if feedURL == "" || token == nil {
 		return ctr
 	}
-	env, secretKeys := nodeFeedEnv(feedURL, routing)
-	for _, kv := range env {
+	f := nodeFeedConfig(feedURL, routing)
+	ctr = ctr.WithNewFile(f.npmrcPath, f.npmrc)
+	for _, kv := range f.env {
 		ctr = ctr.WithEnvVariable(kv[0], kv[1])
 	}
-	for _, k := range secretKeys {
-		ctr = ctr.WithSecretVariable(k, token)
-	}
-	return ctr
+	return ctr.WithSecretVariable(f.secretVar, token)
 }
