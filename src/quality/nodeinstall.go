@@ -346,37 +346,86 @@ func (r installRecord) name() string {
 	return r.label
 }
 
-// nodeFeedEnv is the configuration that points a Node install at the private
-// feed: plain variables, and the names the token is bound to as a secret.
+// npmFeedTokenVar is the variable the npm feed token is bound to as a secret,
+// and npmFeedUserconfig the cicd-owned npmrc that references it. Only the
+// reference `${CICD_NPM_FEED_TOKEN}` is ever written to the file; npm and pnpm
+// both expand it when they read the file, so the token lives in the secret
+// variable alone and never in a file or a layer.
 //
-// npm reads NPM_CONFIG_*. pnpm 11 does not — measured against pnpm 11.19.0
-// with a local registry logging requests, NPM_CONFIG_REGISTRY was ignored and
-// PNPM_CONFIG_REGISTRY plus PNPM_CONFIG_//<dart>/:_authToken sent
-// `Authorization: Bearer`. Both are set, both nerf-darted, so the token goes
-// to the feed's host and nowhere else.
+// The token used to be bound straight to the config key, as the variable
+// `NPM_CONFIG_//<dart>:_authToken` (plus a `PNPM_CONFIG_` twin). That name is
+// not a shell identifier, and every consumer command leg — prepare-cmd,
+// test-cmd, app commands, the archive build — runs through `sh -c`. dash, the
+// `sh` of Debian- and Ubuntu-based images (node:*, the .NET SDK images), drops
+// such a variable from the environment it hands its children, so npm started
+// from the command never saw the token and fetched anonymously: a 401 from the
+// feed, reported as a failed install. The measurement that blessed the old name
+// had exec'd npm directly, which is the one path that keeps it. Measured
+// through dash `sh -c` against a local registry logging headers, npm and
+// pnpm 11.19.0 both: the old variable sent no Authorization header; this file
+// sent `Authorization: Bearer`, also from a bash started by that dash.
+const (
+	npmFeedTokenVar   = "CICD_NPM_FEED_TOKEN"
+	npmFeedUserconfig = "/etc/cicd/npmrc"
+	npmFeedTokenRef   = "${" + npmFeedTokenVar + "}"
+)
+
+// nodeFeed is the configuration that points a Node install at the private
+// feed: plain variables, a cicd-owned npmrc, and the one variable the token is
+// bound to as a secret.
+type nodeFeed struct {
+	env       [][2]string
+	npmrcPath string
+	npmrc     string
+	secretVar string
+}
+
+// nodeFeedConfig builds the nodeFeed for a feed URL and routing mode.
+//
+// The token is scoped to the feed's host by nerf dart, so it goes there and
+// nowhere else. The npmrc is installed as the *user* config through both
+// NPM_CONFIG_USERCONFIG and PNPM_CONFIG_USERCONFIG. The global config would
+// leave a user's own ~/.npmrc in place, but pnpm 11.19.0 ignored a
+// globalconfig pointed at the same file (measured, same local registry), and a
+// token pnpm cannot see is the bug this replaces. The cost is that the user
+// config of the image is not read while cicd's is in force, and an
+// `npm config set` in one consumer command writes to cicd's file, which the
+// next leg rewrites. The project's .npmrc, where install configuration
+// belongs, is read as before — and it outranks the user config, so a
+// credential line of its own for the feed's host now wins over cicd's
+// (nodeFeedShadowWarning says so).
+//
+// npm reads NPM_CONFIG_REGISTRY. pnpm 11 does not — measured against pnpm
+// 11.19.0 with a local registry logging requests, NPM_CONFIG_REGISTRY was
+// ignored and PNPM_CONFIG_REGISTRY was honoured. Both are set: they are valid
+// names, so they survive the shell.
 //
 // Yarn gets nothing. Berry's YARN_NPM_AUTH_TOKEN is not scoped to a host: a
 // scope the project routes to another registry in .yarnrc.yml would be sent
 // the same token. nodeFeedWarning says the feed was not applied instead.
 //
 // With npmrc routing the registry variables are left out and only the token
-// is bound. The feed then serves only what the project's own .npmrc routes to
-// it (`@scope:registry=<feed>`), and everything else resolves from the public
-// registry. That is the mode for a feed that has no upstream to the public
-// registry, because pointing the whole install at such a feed fails every
-// public package with a 404. The routing has to come from the project's .npmrc
-// instead of from cicd: pnpm 11.19.0 ignored a scoped registry set through
-// PNPM_CONFIG_@scope:registry, NPM_CONFIG_@scope:registry or its lowercase
-// spellings (measured, same local registry), while it honoured the same line
-// in an .npmrc together with the token variable below.
-func nodeFeedEnv(feedURL, routing string) (env [][2]string, secretKeys []string) {
-	npmKey := npmAuthEnvKey(feedURL)
-	secretKeys = []string{npmKey, "PNPM_CONFIG_" + strings.TrimPrefix(npmKey, "NPM_CONFIG_")}
-	if routing == npmRoutingNpmrc {
-		return nil, secretKeys
+// is configured. The feed then serves only what the project's own .npmrc
+// routes to it (`@scope:registry=<feed>`), and everything else resolves from
+// the public registry. That is the mode for a feed that has no upstream to the
+// public registry, because pointing the whole install at such a feed fails
+// every public package with a 404. The routing has to come from the project's
+// .npmrc instead of from cicd: pnpm 11.19.0 ignored a scoped registry set
+// through PNPM_CONFIG_@scope:registry, NPM_CONFIG_@scope:registry or its
+// lowercase spellings (measured, same local registry), while it honoured the
+// same line in an .npmrc together with the token.
+func nodeFeedConfig(feedURL, routing string) nodeFeed {
+	f := nodeFeed{
+		env:       [][2]string{{"NPM_CONFIG_USERCONFIG", npmFeedUserconfig}, {"PNPM_CONFIG_USERCONFIG", npmFeedUserconfig}},
+		npmrcPath: npmFeedUserconfig,
+		npmrc:     npmNerfDart(feedURL) + ":_authToken=" + npmFeedTokenRef + "\n",
+		secretVar: npmFeedTokenVar,
 	}
-	reg := npmRegistryURL(feedURL)
-	return [][2]string{{"NPM_CONFIG_REGISTRY", reg}, {"PNPM_CONFIG_REGISTRY", reg}}, secretKeys
+	if routing != npmRoutingNpmrc {
+		reg := npmRegistryURL(feedURL)
+		f.env = append(f.env, [2]string{"NPM_CONFIG_REGISTRY", reg}, [2]string{"PNPM_CONFIG_REGISTRY", reg})
+	}
+	return f
 }
 
 // nodeFeedWarning names a feed credential the install did not use.
@@ -408,6 +457,53 @@ func nodeFeedRoutingWarning(pm nodePM, routing, feedURL, npmrc string) string {
 		"`@<scope>:registry=` followed by the feed URL to the .npmrc beside package.json"
 }
 
+// nodeFeedShadowWarning names a credential in the project's .npmrc that wins
+// over cicd's. cicd's token lives in the user config (nodeFeedConfig) and a
+// project .npmrc outranks it, so a project line that credentials the feed's
+// host — typically `//<host>/:_authToken=${SOME_VAR}` with a variable cicd
+// never sets — is what npm sends instead, the unexpanded text included, and
+// the feed answers 401. pnpm 11.19.0 skipped such a line while its variable
+// was unset and sent cicd's token (measured), but sends the line's value as
+// soon as it resolves.
+//
+// It counts a token for the feed's own dart, and any credential for a dart
+// below it, because npm picks the credential of the most specific dart that
+// has one and reads the token before any other kind.
+func nodeFeedShadowWarning(pm nodePM, feedURL, npmrc string) string {
+	if feedURL == "" || pm.name == "yarn" {
+		return ""
+	}
+	want := npmNerfDart(feedURL)
+	for _, line := range strings.Split(npmrc, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "//") {
+			continue
+		}
+		key, _, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		i := strings.LastIndex(key, ":")
+		if i < 0 {
+			continue
+		}
+		dart, field := npmNerfDart(key[:i]), key[i+1:]
+		switch {
+		case dart == want && field == "_authToken":
+		case dart != want && strings.HasPrefix(dart, want) &&
+			(field == "_authToken" || field == "_auth" || field == "_password" || field == "username"):
+		default:
+			continue
+		}
+		return "the project's .npmrc sets its own credential for the private feed (" + key + "), and a project .npmrc " +
+			"outranks the user config cicd puts the feed token in, so npm sends that credential instead of cicd's token " +
+			"(pnpm too, whenever the line's value resolves). Remove that line from the .npmrc beside package.json and " +
+			"keep only the registry routing"
+	}
+	return ""
+}
+
 // npmrcRoutesTo reports whether an .npmrc sends any registry, scoped or not,
 // where the feed token applies. That is decided the way npm matches a token
 // to a request: by nerf dart, and for the dart's path and every path below it,
@@ -416,7 +512,7 @@ func nodeFeedRoutingWarning(pm nodePM, routing, feedURL, npmrc string) string {
 // on a correct file would teach people to ignore it.
 func npmrcRoutesTo(npmrc, feedURL string) bool {
 	dart := func(u string) string {
-		return strings.TrimSuffix(strings.TrimPrefix(npmAuthEnvKey(u), "NPM_CONFIG_"), ":_authToken")
+		return npmNerfDart(u)
 	}
 	want := dart(feedURL)
 	for _, line := range strings.Split(npmrc, "\n") {

@@ -663,12 +663,25 @@ challenges with `401 WWW-Authenticate: Basic`, that config answered with
 `Basic Og==`, base64 of `":"`, an empty user and an empty password. It also
 hard-coded the source name `internal`, shadowing the consumer's own source and
 any `packageSourceMapping` pointing at it. Both now go through `feeds.go`
-(`npmAuthEnvKey`, `npmRegistryURL`, `nugetCredentialedConfig`,
+(`npmNerfDart`, `npmRegistryURL`, `nugetCredentialedConfig`,
 `nugetCredentialsElement`), untagged so the exact bytes are unit-tested, and the
 NuGet config body is shared with the BYO path — `byotest.go` had the correct
 rendering all along, which is how one credential ended up with two behaviours.
 Both halves are proven on the wire (Authorization headers, not unit tests) in
 [specs/apply-the-private-feed-credential.md](../../specs/apply-the-private-feed-credential.md).
+
+Proven on the wire with npm exec'd directly was still not proof for a consumer
+command, which runs through `sh -c`. On a Debian-based image `sh` is dash, and
+dash drops every environment entry whose name is not a shell identifier, so
+`NPM_CONFIG_//<dart>:_authToken` vanished before npm started and the token
+again read as no credential. **A credential reaches a consumer command only
+under a name the shell keeps.** The npm token is now the secret variable
+`CICD_NPM_FEED_TOKEN`, referenced as `${CICD_NPM_FEED_TOKEN}` from a cicd-owned
+npmrc that `NPM_CONFIG_USERCONFIG` and `PNPM_CONFIG_USERCONFIG` point at
+(`nodeFeedConfig`, `nodeinstall.go`); the file holds the reference, never the
+value. The regression runs through the real dash, with a control row that must
+lose the old name, so a test that only execs npm cannot pass in its place. See
+[specs/bind-the-npm-feed-token-under-a-name-the-shell-keeps.md](../../specs/bind-the-npm-feed-token-under-a-name-the-shell-keeps.md).
 
 ## …and a working credential must not go over the wrong transport
 

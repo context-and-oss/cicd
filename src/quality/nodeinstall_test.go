@@ -4,6 +4,7 @@ package main
 
 import (
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -215,23 +216,42 @@ func TestInstallRecordMessages(t *testing.T) {
 	}
 }
 
-// The token is bound for npm and for pnpm, both to the feed's host only.
-// pnpm 11 reads no NPM_CONFIG_* (measured), so npm's names alone would
-// silently leave a pnpm install on the public registry.
-func TestNodeFeedEnv(t *testing.T) {
-	env, secrets := nodeFeedEnv("pkgs.example.com/feed/npm/registry/", "")
-	want := map[string]string{"NPM_CONFIG_REGISTRY": "https://pkgs.example.com/feed/npm/registry/", "PNPM_CONFIG_REGISTRY": "https://pkgs.example.com/feed/npm/registry/"}
-	if len(env) != len(want) {
-		t.Fatalf("env = %q", env)
+// The token is configured for npm and for pnpm, both to the feed's host only,
+// and it is bound under a name a shell keeps. pnpm 11 reads no NPM_CONFIG_*
+// registry (measured), so npm's names alone would silently leave a pnpm install
+// on the public registry.
+func TestNodeFeedConfig(t *testing.T) {
+	f := nodeFeedConfig("pkgs.example.com/feed/npm/registry/", "")
+	want := map[string]string{
+		"NPM_CONFIG_REGISTRY":    "https://pkgs.example.com/feed/npm/registry/",
+		"PNPM_CONFIG_REGISTRY":   "https://pkgs.example.com/feed/npm/registry/",
+		"NPM_CONFIG_USERCONFIG":  npmFeedUserconfig,
+		"PNPM_CONFIG_USERCONFIG": npmFeedUserconfig,
 	}
-	for _, kv := range env {
+	if len(f.env) != len(want) {
+		t.Fatalf("env = %q", f.env)
+	}
+	for _, kv := range f.env {
 		if want[kv[0]] != kv[1] {
 			t.Errorf("%s = %q, want %q", kv[0], kv[1], want[kv[0]])
 		}
 	}
-	wantSecrets := []string{"NPM_CONFIG_//pkgs.example.com/feed/npm/registry/:_authToken", "PNPM_CONFIG_//pkgs.example.com/feed/npm/registry/:_authToken"}
-	if strings.Join(secrets, "|") != strings.Join(wantSecrets, "|") {
-		t.Errorf("secret keys = %q, want %q", secrets, wantSecrets)
+	if f.npmrcPath != npmFeedUserconfig {
+		t.Errorf("npmrc path = %q, want %q", f.npmrcPath, npmFeedUserconfig)
+	}
+	if got, want := f.npmrc, "//pkgs.example.com/feed/npm/registry/:_authToken=${CICD_NPM_FEED_TOKEN}\n"; got != want {
+		t.Errorf("npmrc = %q, want %q", got, want)
+	}
+	// Every name cicd binds must survive `sh -c`: dash drops a variable whose
+	// name is not a shell identifier, which is the bug this shape replaced.
+	ident := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	for _, kv := range append(f.env, [2]string{f.secretVar, ""}) {
+		if !ident.MatchString(kv[0]) {
+			t.Errorf("%q is not a shell identifier: dash would drop it before npm starts", kv[0])
+		}
+	}
+	if f.secretVar != npmFeedTokenVar || !strings.Contains(f.npmrc, "${"+f.secretVar+"}") {
+		t.Errorf("npmrc %q does not reference the secret variable %q", f.npmrc, f.secretVar)
 	}
 	if w := nodeFeedWarning(nodePM{name: "yarn", berry: true}, true); !strings.Contains(w, "not applied to this yarn install") {
 		t.Errorf("yarn feed warning = %q", w)
@@ -269,18 +289,63 @@ func TestNodeScriptsParse(t *testing.T) {
 // the project's .npmrc decides which packages reach the feed. A registry
 // variable left behind would send every public package to a feed that cannot
 // serve it, which is the failure this mode exists to avoid.
-func TestNodeFeedEnvNpmrcRoutingBindsTheTokenOnly(t *testing.T) {
-	regEnv, regSecrets := nodeFeedEnv("https://npm.feed.example/", "registry")
-	env, secrets := nodeFeedEnv("https://npm.feed.example/", "npmrc")
-	if len(env) != 0 {
-		t.Errorf("npmrc routing set %q, want no registry variables", env)
+func TestNodeFeedConfigNpmrcRoutingBindsTheTokenOnly(t *testing.T) {
+	reg := nodeFeedConfig("https://npm.feed.example/", "registry")
+	f := nodeFeedConfig("https://npm.feed.example/", "npmrc")
+	for _, kv := range f.env {
+		if strings.HasSuffix(kv[0], "_REGISTRY") {
+			t.Errorf("npmrc routing set %s, want no registry variables", kv[0])
+		}
 	}
-	if len(regEnv) != 2 {
-		t.Errorf("registry routing env = %q, want both registry variables", regEnv)
+	n := 0
+	for _, kv := range reg.env {
+		if strings.HasSuffix(kv[0], "_REGISTRY") {
+			n++
+		}
 	}
-	want := []string{"NPM_CONFIG_//npm.feed.example/:_authToken", "PNPM_CONFIG_//npm.feed.example/:_authToken"}
-	if strings.Join(secrets, "|") != strings.Join(want, "|") || strings.Join(regSecrets, "|") != strings.Join(want, "|") {
-		t.Errorf("secret keys = %q (registry %q), want %q", secrets, regSecrets, want)
+	if n != 2 {
+		t.Errorf("registry routing env = %q, want both registry variables", reg.env)
+	}
+	const want = "//npm.feed.example/:_authToken=${CICD_NPM_FEED_TOKEN}\n"
+	if f.npmrc != want || reg.npmrc != want {
+		t.Errorf("npmrc = %q (registry %q), want %q", f.npmrc, reg.npmrc, want)
+	}
+}
+
+func TestNodeFeedShadowWarning(t *testing.T) {
+	const feed = "https://npm.feed.example/team/"
+	cases := []struct {
+		name, npmrc string
+		pm          nodePM
+		want        bool
+	}{
+		{name: "no file", npmrc: ""},
+		{name: "routing only", npmrc: "@example-org:registry=https://npm.feed.example/team/\n"},
+		{name: "commented token", npmrc: "# //npm.feed.example/team/:_authToken=${NODE_AUTH_TOKEN}\n"},
+		{name: "token for the feed", npmrc: "//npm.feed.example/team/:_authToken=${NODE_AUTH_TOKEN}\n", want: true},
+		{name: "token for the feed, spaced", npmrc: "  //npm.feed.example/team/:_authToken = x\r\n", want: true},
+		{name: "credential below the feed", npmrc: "//npm.feed.example/team/sub/:_auth=x\n", want: true},
+		// The less specific dart loses to cicd's, and a non-token credential on
+		// the same dart loses to its token: npm reads the token first.
+		{name: "token for the host only", npmrc: "//npm.feed.example/:_authToken=x\n"},
+		{name: "basic auth on the same dart", npmrc: "//npm.feed.example/team/:_auth=x\n"},
+		{name: "other host", npmrc: "//other.example/team/:_authToken=x\n"},
+		{name: "yarn is warned elsewhere", npmrc: "//npm.feed.example/team/:_authToken=x\n", pm: nodePM{name: "yarn"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pm := c.pm
+			if pm.name == "" {
+				pm = npmDefault
+			}
+			w := nodeFeedShadowWarning(pm, feed, c.npmrc)
+			if (w != "") != c.want {
+				t.Fatalf("warning = %q, want warned=%v", w, c.want)
+			}
+			if w != "" && strings.Contains(w, "x\n") {
+				t.Errorf("warning echoes the credential value: %q", w)
+			}
+		})
 	}
 }
 
