@@ -61,7 +61,7 @@ permissions:
 
 jobs:
   precommit:
-    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.6
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.7
     secrets:
       TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
       NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}

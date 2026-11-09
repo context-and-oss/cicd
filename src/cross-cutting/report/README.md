@@ -14,7 +14,7 @@ source access. Verify the referenced release, or use `-m ./src/cross-cutting/rep
 from a separate source checkout's root.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.6
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.7
 ```
 
 ## Functions
@@ -27,17 +27,17 @@ dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.6
 
 ```bash
 # Extract SARIF from a scan-source evidence file (e.g. for GitHub Advanced Security upload-sarif)
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.6 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.7 call report \
   --evidence ./evidence.json \
   export --path=./results.sarif
 
 # Extract CycloneDX from a vuln scan or SBOM evidence file
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.6 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.7 call report \
   --evidence ./vuln-evidence.json \
   export --path=./vuln.cdx.json
 
 # Extract the cicd-owned dast/1.0 payload from scan-web evidence
-dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.6 call report \
+dagger -m github.com/context-and-oss/cicd/src/cross-cutting/report@v5.1.7 call report \
   --evidence ./web-evidence.json \
   export --path=./dast-report.json
 ```
