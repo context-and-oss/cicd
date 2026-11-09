@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // npm-feed-routing values. The empty string is the registry mode, so a caller
@@ -70,6 +71,12 @@ func validateNpmFeedRouting(routing, npmFeedURL string) error {
 // behind this file did precisely that.
 func validateFeedCredentials(npmFeedURL string, hasNpmToken bool, nugetFeedURL string, hasNugetToken bool) error {
 	if hasNpmToken {
+		// The URL becomes a line of cicd's npmrc (nodeFeedConfig), and a
+		// scheme-less one is never parsed by feedTransportOK: a line break in it
+		// would write a second configuration line beside the credential.
+		if strings.ContainsFunc(strings.TrimSpace(npmFeedURL), func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+			return fmt.Errorf("--npm-feed-url (%q) contains whitespace or a control character; pass the feed URL alone", npmFeedURL)
+		}
 		if err := feedTransportOK("npm-feed-url", npmFeedURL, schemeOptional); err != nil {
 			return err
 		}
@@ -97,18 +104,19 @@ func npmRegistryURL(feedURL string) string {
 	return "https://" + strings.TrimPrefix(u, "//")
 }
 
-// npmAuthEnvKey builds the environment variable that carries the feed token,
-// i.e. `NPM_CONFIG_` + npm's "nerf dart" for the registry + `:_authToken`.
+// npmNerfDart is npm's "nerf dart" for a feed: `//` + host+path with **no
+// scheme** + `/`. It is the key prefix npm (and pnpm) match a credential to a
+// request by, so `npmNerfDart(u) + ":_authToken"` is the npmrc key that carries
+// the feed token.
 //
-// The dart is host+path with **no scheme and no trailing slash**, which is the
-// opposite shape from the one NPM_CONFIG_REGISTRY needs — and cicd used to
-// build both from the same string by concatenation:
+// The dart is the opposite shape from the one NPM_CONFIG_REGISTRY needs — and
+// cicd used to build both from the same string by concatenation:
 //
 //	WithSecretVariable("NPM_CONFIG_//"+feedUrl+"/:_authToken", feedToken)
 //
 // With the scheme-bearing URL that NPM_CONFIG_REGISTRY demands, that yields
-// `NPM_CONFIG_//https://host/path//:_authToken`. npm deliberately does not
-// normalise config keys that begin with `//` (@npmcli/config: "don't normalize
+// `//https://host/path//:_authToken`. npm deliberately does not normalise
+// config keys that begin with `//` (@npmcli/config: "don't normalize
 // nerf-darted keys"), so the key is stored verbatim, never matches the dart npm
 // computes for the request, and the token is silently dropped. Measured against
 // npm 11.16.0 with a local registry logging headers: the concatenated spelling
@@ -117,13 +125,13 @@ func npmRegistryURL(feedURL string) string {
 //
 // The same `//` guard is why the path must be passed through untouched: a
 // feed path containing `_packaging` (every Azure Artifacts feed does) would be
-// rewritten to `-packaging` by npm's normal env-key handling.
-func npmAuthEnvKey(feedURL string) string {
+// rewritten to `-packaging` by npm's normal key handling.
+func npmNerfDart(feedURL string) string {
 	dart := strings.TrimSpace(feedURL)
 	if i := strings.Index(dart, "://"); i >= 0 {
 		dart = dart[i+3:]
 	}
 	dart = strings.TrimPrefix(dart, "//")
 	dart = strings.TrimRight(dart, "/")
-	return "NPM_CONFIG_//" + dart + "/:_authToken"
+	return "//" + dart + "/"
 }

@@ -14,8 +14,8 @@ import (
 // between npm sending `Authorization: Bearer <token>` and sending no
 // Authorization header at all, measured against npm 11.16.0 with a local
 // registry that logged its request headers.
-func TestNpmAuthEnvKey(t *testing.T) {
-	const want = "NPM_CONFIG_//pkgs.dev.azure.com/org/_packaging/feed/npm/registry/:_authToken"
+func TestNpmNerfDart(t *testing.T) {
+	const want = "//pkgs.dev.azure.com/org/_packaging/feed/npm/registry/"
 
 	cases := []struct {
 		name string
@@ -48,22 +48,22 @@ func TestNpmAuthEnvKey(t *testing.T) {
 	}, {
 		name: "plain public registry",
 		url:  "https://registry.npmjs.org/",
-		want: "NPM_CONFIG_//registry.npmjs.org/:_authToken",
+		want: "//registry.npmjs.org/",
 	}, {
 		name: "port is part of the dart",
 		url:  "http://registry.example:8081/repository/npm-fixture/",
-		want: "NPM_CONFIG_//registry.example:8081/repository/npm-fixture/:_authToken",
+		want: "//registry.example:8081/repository/npm-fixture/",
 	}}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := npmAuthEnvKey(c.url)
+			got := npmNerfDart(c.url)
 			if got != c.want {
-				t.Fatalf("npmAuthEnvKey(%q)\n got %q\nwant %q", c.url, got, c.want)
+				t.Fatalf("npmNerfDart(%q)\n got %q\nwant %q", c.url, got, c.want)
 			}
 			// npm only skips key normalisation — the step that would turn
 			// `_packaging` into `-packaging` — for keys starting with `//`.
-			if !strings.HasPrefix(strings.TrimPrefix(got, "NPM_CONFIG_"), "//") {
+			if !strings.HasPrefix(got, "//") {
 				t.Fatalf("key %q is not nerf-darted: npm would normalise it", got)
 			}
 			if strings.Contains(got, "://") {
@@ -73,8 +73,8 @@ func TestNpmAuthEnvKey(t *testing.T) {
 	}
 }
 
-// The regression itself: one URL has to serve both env vars, and the two want
-// different shapes. Assert them together so a future edit cannot fix one by
+// The regression itself: one URL has to serve the registry variable and the
+// credential key, and the two want different shapes. Assert them together so a future edit cannot fix one by
 // breaking the other.
 func TestNpmFeedEnvPairFromOneURL(t *testing.T) {
 	for _, url := range []string{
@@ -84,8 +84,8 @@ func TestNpmFeedEnvPairFromOneURL(t *testing.T) {
 		if got, want := npmRegistryURL(url), "https://pkgs.dev.azure.com/org/_packaging/feed/npm/registry"; !strings.HasPrefix(got, want) {
 			t.Errorf("npmRegistryURL(%q) = %q, want a scheme-bearing feed URL", url, got)
 		}
-		if got, want := npmAuthEnvKey(url), "NPM_CONFIG_//pkgs.dev.azure.com/org/_packaging/feed/npm/registry/:_authToken"; got != want {
-			t.Errorf("npmAuthEnvKey(%q) = %q, want %q", url, got, want)
+		if got, want := npmNerfDart(url), "//pkgs.dev.azure.com/org/_packaging/feed/npm/registry/"; got != want {
+			t.Errorf("npmNerfDart(%q) = %q, want %q", url, got, want)
 		}
 	}
 }
@@ -317,6 +317,10 @@ func TestValidateFeedCredentials(t *testing.T) {
 		{name: "loopback by name", npmURL: "http://localhost:5001/registry/", npmToken: true},
 		{name: "loopback v6", npmURL: "http://[::1]:5001/registry/", npmToken: true},
 		// A public host is not made safe by looking loopback-ish.
+		// The URL becomes a line of cicd's npmrc; a line break would add another.
+		{name: "line break in a scheme-less npm url", npmURL: "npm.feed.example/\nregistry=https://elsewhere.example/", npmToken: true, wantErr: true, wantMentions: "npm-feed-url"},
+		{name: "space in an npm url", npmURL: "https://npm.feed.example/a b/", npmToken: true, wantErr: true, wantMentions: "npm-feed-url"},
+		{name: "surrounding whitespace is trimmed, not refused", npmURL: "  https://npm.feed.example/\n", npmToken: true},
 		{name: "not actually loopback", npmURL: "http://localhost.example.com/registry/", npmToken: true, wantErr: true, wantMentions: "npm-feed-url"},
 	}
 
