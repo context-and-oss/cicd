@@ -47,11 +47,12 @@ import (
 	"strings"
 )
 
-// The two descriptor ids semgrep uses for the partial-work cases this file
-// classifies. Anything else is bucketed by level, never guessed at.
+// Native parser/rule-timeout descriptors and the inline adapter's projection
+// of timing-only fixpoint warnings. Anything else is bucketed by level.
 const (
-	semgrepNoticeSyntax  = "Syntax error"
-	semgrepNoticeTimeout = "Timeout"
+	semgrepNoticeSyntax   = "Syntax error"
+	semgrepNoticeTimeout  = "Timeout"
+	semgrepNoticeFixpoint = "Fixpoint timeout"
 )
 
 // semgrepNoticeListCap is how many names a warning spells out before "and N
@@ -101,6 +102,12 @@ type semgrepNotices struct {
 	// UnattributedTimeouts counts "Timeout" notifications naming no file.
 	UnattributedTimeouts int
 
+	// FixpointTimeouts counts taint scopes that stopped before convergence.
+	// A scope may involve several rules; this is not a rule/file pair count.
+	FixpointTimeouts             int
+	FixpointFiles                []string
+	UnattributedFixpointTimeouts int
+
 	// ErrorLevel holds the descriptor ids of every OTHER notification semgrep
 	// marked level "error" — a shape this module has not measured and so
 	// names rather than interprets.
@@ -113,7 +120,7 @@ type semgrepNotices struct {
 
 // any reports whether semgrep said anything at all.
 func (n semgrepNotices) any() bool {
-	return n.ParseFailures > 0 || n.Timeouts > 0 ||
+	return n.ParseFailures > 0 || n.Timeouts > 0 || n.FixpointTimeouts > 0 ||
 		len(n.ErrorLevel) > 0 || len(n.Unclassified) > 0
 }
 
@@ -161,6 +168,7 @@ func parseSemgrepNotifications(raw json.RawMessage) semgrepNotices {
 	}
 	seenFile := map[string]bool{}
 	seenTimedFile := map[string]bool{}
+	seenFixpointFile := map[string]bool{}
 	seenRule := map[string]bool{}
 	for _, run := range doc.Runs {
 		for _, inv := range run.Invocations {
@@ -202,6 +210,15 @@ func parseSemgrepNotifications(raw json.RawMessage) semgrepNotices {
 					if !seenTimedFile[file] {
 						seenTimedFile[file] = true
 						n.TimedOutFiles = append(n.TimedOutFiles, file)
+					}
+				case id == semgrepNoticeFixpoint && strings.EqualFold(note.Level, "warning"):
+					n.FixpointTimeouts++
+					file := firstLocationURI(note)
+					if file == "" {
+						n.UnattributedFixpointTimeouts++
+					} else if !seenFixpointFile[file] {
+						seenFixpointFile[file] = true
+						n.FixpointFiles = append(n.FixpointFiles, file)
 					}
 				case strings.EqualFold(note.Level, "error"):
 					n.ErrorLevel = append(n.ErrorLevel, orUnnamed(id))
@@ -329,6 +346,18 @@ func semgrepPartialScanWarning(n semgrepNotices) string {
 		parts = append(parts, s)
 	}
 
+	if n.FixpointTimeouts > 0 {
+		s := strconv.Itoa(n.FixpointTimeouts) + " taint fixpoint timeout(s) hit " +
+			strconv.Itoa(len(n.FixpointFiles)) + " file(s)"
+		if len(n.FixpointFiles) > 0 {
+			s += " (" + listCapped(n.FixpointFiles, semgrepNoticeListCap) + ")"
+		}
+		if n.UnattributedFixpointTimeouts > 0 {
+			s += ", " + strconv.Itoa(n.UnattributedFixpointTimeouts) + " naming no file"
+		}
+		parts = append(parts, s)
+	}
+
 	if len(n.ErrorLevel) > 0 {
 		parts = append(parts, strconv.Itoa(len(n.ErrorLevel))+
 			" error-level notification(s) semgrep raised (id(s): "+
@@ -346,6 +375,9 @@ func semgrepPartialScanWarning(n semgrepNotices) string {
 		msg += " Semgrep matches nothing in a region it could not parse and nothing for a rule " +
 			"that timed out, so those files' findings are a floor, not a verdict, and zero " +
 			"findings there is not a clean one."
+	}
+	if n.FixpointTimeouts > 0 {
+		msg += " Taint analysis stopped before convergence in those scopes; findings there are a floor, not a complete verdict."
 	}
 	if n.FirstParserMessage != "" {
 		msg += " First parser message: " + n.FirstParserMessage + "."
