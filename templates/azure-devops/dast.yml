@@ -469,7 +469,7 @@ steps:
       # ATTESTED, NOT AUTHENTICATED, THRESHOLD UNREACHABLE) reach the pipeline
       # log — default non-TTY progress hides stderr.
       evidence="${AGENT_TEMPDIRECTORY}/dast-evidence.json"
-      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.6 call scan \
+      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.7 call scan \
         --mode "$MODE" \
         --fail-on "$FAIL_ON" \
         --commit-sha "$(Build.SourceVersion)" \
@@ -483,7 +483,7 @@ steps:
         ''|'$('*) ;;
         *) delivery+=(--teams-webhook env:TEAMS_WEBHOOK) ;;
       esac
-      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.6 call package \
+      dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.7 call package \
         --evidence "$evidence" \
         --commit-sha "$(Build.SourceVersion)" \
         --branch "$BUILD_SOURCEBRANCHNAME" \
