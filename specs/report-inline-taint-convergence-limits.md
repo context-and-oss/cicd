@@ -8,8 +8,8 @@ These taint analyses stopped before convergence. Zero results in that situation
 must not appear without a partial-coverage disclosure merely because the CLI and
 catalogue look healthy.
 
-A concurrency experiment improved an independently authored smaller fixture but
-did not establish a full-workload capacity repair within the existing deadline.
+A concurrency experiment on an independently authored smaller fixture did not
+establish full-workload completion within the former adapter deadline.
 That scheduling change is not included here. This is a diagnostic correction,
 **not** a timeout fix or a completed consumer qualification.
 
