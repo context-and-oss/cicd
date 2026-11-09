@@ -9,7 +9,7 @@ source access. Verify the referenced release, or use `-m ./src/notify` from a
 separate source checkout's root. Source credentials are separate from notification secrets.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.7
+dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.8
 ```
 
 ## Usage
@@ -20,7 +20,7 @@ for an offline preview use `build-card` instead.
 ```bash
 set -eu
 rm -f ./delivery-evidence.json
-dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.7 call teams \
+dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.8 call teams \
   --webhook-url=env:TEAMS_WEBHOOK \
   --summary=combined-evidence.json \
   --pipeline-name=precommit \

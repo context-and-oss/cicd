@@ -52,7 +52,7 @@ permissions:
 
 jobs:
   commit:
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.7
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.8
     with:
       # runs-on: ubuntu-latest  # An organisation larger-runner label for more CPU.
       # node-project-limit: 4  # Raise explicitly for independent Node apps.

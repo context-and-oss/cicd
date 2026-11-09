@@ -22,7 +22,7 @@ source access. Verify the referenced release, or use `-m ./src/stage-2` from a
 separate source checkout's root. Source credentials are separate from package feeds.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.7
+dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.8
 ```
 
 ## Usage
@@ -34,7 +34,7 @@ For the complete clean/export/`jq -e '.passed == true'` recipe, use precommit
 linked above. Retain warnings, non-runs, suppressions and examined metadata.
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.7 call run \
+dagger -m github.com/context-and-oss/cicd/src/stage-2@v5.1.8 call run \
   --src=. --include=go --fail-on=HIGH \
   --commit-sha=$SHA --branch=main --repo-url=$REPO_URL \
   --sast-rulesets=p/security-audit

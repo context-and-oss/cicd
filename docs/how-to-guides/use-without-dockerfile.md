@@ -76,7 +76,7 @@ the migration is the changed path plus one added line:
 ```yaml
 jobs:
   commit: # was: commit-archive
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.7
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.8
     with:
       artifact: archive # the added line
       build-cmd: "npm ci && npm run build" # unchanged
@@ -172,7 +172,7 @@ Copy `templates/github-actions/commit.yml` into your repo's
 ```yaml
 jobs:
   commit:
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.7
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.8
     with:
       artifact: archive
       build-cmd: "npm ci && npm run build"
@@ -232,7 +232,7 @@ For example, in the precommit caller (also configure baseline seeding below):
 ```yaml
 jobs:
   precommit:
-    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.7
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.8
     with:
       test-cmd: "npm ci && npm run test:coverage"
       coverage-path: coverage/coverage-summary.json
@@ -256,7 +256,7 @@ Use `test-legs` instead: a JSON array of legs, each with its own command,
 language, container and coverage report.
 
 ```sh
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.7 call test \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.8 call test \
   --src . \
   --test-legs '[
     {"label":"web","language":"node","cmd":"npm ci && npm run test:coverage",
@@ -273,7 +273,7 @@ Or through the reusable workflow:
 ```yaml
 jobs:
   precommit:
-    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.7
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v5.1.8
     with:
       test-legs: |
         [{"label":"web","language":"node","cmd":"npm ci && npm run test:coverage",
@@ -335,7 +335,7 @@ a leg container, so it fails at fixture initialisation on every run. A leg can
 declare the dependency instead:
 
 ```sh
-dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.7 call test \
+dagger -m github.com/context-and-oss/cicd/src/quality@v5.1.8 call test \
   --src . \
   --test-legs '[
     {"label":"api","language":"dotnet","cmd":"dotnet test \"--collect:XPlat Code Coverage\" --results-directory /tmp/cicd-test-results",

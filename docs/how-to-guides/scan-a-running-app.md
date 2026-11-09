@@ -141,7 +141,7 @@ jobs:
 
       # Requires authorized action access; see the source-access prerequisite.
       - name: Install Dagger
-        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.7
+        uses: context-and-oss/cicd/.github/actions/install-dagger@v5.1.8
         with:
           version: 0.20.8
 
@@ -164,14 +164,14 @@ jobs:
           set -euo pipefail
           rm -f ./dast-scan.json
           rm -rf ./dast-evidence
-          dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.7 call scan \
+          dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8 call scan \
             --app=service --service=tcp://localhost:5000 \
             --port=5000 --health-path=/health \
             --mode=baseline --fail-on=HIGH \
             --commit-sha="$GITHUB_SHA" --branch="$GITHUB_REF_NAME" \
             --repo-url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             export --path=./dast-scan.json
-          dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.7 call package \
+          dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8 call package \
             --evidence=./dast-scan.json \
             --commit-sha="$GITHUB_SHA" --branch="$GITHUB_REF_NAME" \
             --repo-url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
@@ -212,13 +212,13 @@ For an API, swap the mode and hand it the document:
 set -euo pipefail
 rm -f ./dast-scan.json
 rm -rf ./dast-evidence
-dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.7 call scan \
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8 call scan \
   --app=service --service=tcp://localhost:5000 --port=5000 \
   --mode=api --api-spec-path=/swagger/v1/swagger.json \
   --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./dast-scan.json
-dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.7 call package \
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8 call package \
   --evidence=./dast-scan.json \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path ./dast-evidence
@@ -237,13 +237,13 @@ whose evidence may say the scanned code is this commit's code.
 set -euo pipefail
 rm -f ./dast-scan.json
 rm -rf ./dast-evidence
-dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.7 call scan \
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8 call scan \
   --app=container --src=. --dockerfile=Dockerfile \
   --port=8080 --health-path=/healthz \
   --mode=baseline --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./dast-scan.json
-dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.7 call package \
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8 call package \
   --evidence=./dast-scan.json \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path ./dast-evidence
