@@ -59,7 +59,7 @@ Once workflow access is established, a minimal caller is:
 ```yaml
 jobs:
   commit:
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.7
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.8
     # No optional secrets by default.
 ```
 
@@ -72,7 +72,7 @@ the reusable workflow declares can be listed. For example, opting into Teams:
 ```yaml
 jobs:
   commit:
-    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.7
+    uses: context-and-oss/cicd/.github/workflows/commit.yml@v5.1.8
     secrets:
       TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
 ```
@@ -166,7 +166,7 @@ resources:
       type: github
       name: context-and-oss/cicd
       endpoint: github-shared-pipelines
-      ref: refs/tags/v5.1.7
+      ref: refs/tags/v5.1.8
 
 extends:
   template: templates/azure-devops/shared/precommit.yml@cicdTemplates
@@ -187,7 +187,7 @@ resources:
       type: github
       name: context-and-oss/cicd
       endpoint: github-shared-pipelines
-      ref: refs/tags/v5.1.7
+      ref: refs/tags/v5.1.8
 
 extends:
   template: templates/azure-devops/shared/commit.yml@cicdTemplates
@@ -225,7 +225,7 @@ module-source access is established, export and grade a fresh bundle:
 
 ```bash
 rm -rf ./audit-evidence &&
-dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.7 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.8 call run \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -242,7 +242,7 @@ never published — each consumer repo owns its own deployment:
 
 ```bash
 rm -rf ./audit-evidence &&
-dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.7 call run \
+dagger -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.8 call run \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \

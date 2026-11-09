@@ -76,7 +76,7 @@ if [ -n "${CICD_PRECOMMIT_MODULE:-}" ]; then
 elif [ -f "./src/composites/precommit/dagger.json" ]; then
   module="./src/composites/precommit"
 else
-  module="github.com/context-and-oss/cicd/src/composites/precommit@v5.1.7"
+  module="github.com/context-and-oss/cicd/src/composites/precommit@v5.1.8"
 fi
 
 sha="${CICD_COMMIT_SHA:-$(git_value rev-parse HEAD)}"

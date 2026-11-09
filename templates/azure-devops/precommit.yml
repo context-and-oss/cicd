@@ -405,7 +405,7 @@ steps:
       # could not scope. An empty --diff used to stand in for both.
       CHANGE_DIFF_FILE="$(Agent.TempDirectory)/change.diff"
       if [ -s "$CHANGE_DIFF_FILE" ]; then extra+=(--diff "$CHANGE_DIFF_FILE"); fi
-      dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.7 call run \
+      dagger -m github.com/context-and-oss/cicd/src/composites/precommit@v5.1.8 call run \
         --src . \
         --fail-on HIGH \
         --commit-sha "$(Build.SourceVersion)" \
@@ -476,7 +476,7 @@ steps:
       esac
       # ADO_ORG is consumer-supplied, so it arrives via env: and is quoted here
       # rather than spliced in as an ADO macro.
-      dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.7 call ado \
+      dagger -m github.com/context-and-oss/cicd/src/notify@v5.1.8 call ado \
         --summary ./audit-evidence/combined-evidence.json \
         --pipeline-name precommit \
         --org "$ADO_ORG" \
