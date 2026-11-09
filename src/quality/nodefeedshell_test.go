@@ -40,10 +40,10 @@ func TestNodeFeedTokenReachesNpmThroughDash(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		mu.Lock()
-		switch {
-		case auth == "":
+		switch auth {
+		case "":
 			seen = append(seen, "none")
-		case auth == "Bearer "+token:
+		case "Bearer " + token:
 			seen = append(seen, "bearer")
 		default:
 			seen = append(seen, "other")
