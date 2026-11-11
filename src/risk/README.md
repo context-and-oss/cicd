@@ -12,7 +12,7 @@ separate source checkout's root. Source credentials are separate from
 model/proxy authentication.
 
 ```bash
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.8
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.2.0
 ```
 
 ## Usage
@@ -31,19 +31,19 @@ Choose one scan option, not all three.
 ```bash
 # Step 1 — scan (run locally, commit the output)
 # Option A: Claude CLI proxy (no API key needed — uses your CLI subscription)
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.8 call proxy export --path ./claude-proxy.js
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.2.0 call proxy export --path ./claude-proxy.js
 export CICD_RISK_PROXY_TOKEN="$(openssl rand -hex 32)"   # the proxy refuses to start without it
 node claude-proxy.js     # keep running; use a second terminal for the scan
 # In that second terminal, with the same token in the environment:
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.8 call scan --source . --use-claude-cli \
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.2.0 call scan --source . --use-claude-cli \
   --llm-token env:CICD_RISK_PROXY_TOKEN export --path .
 
 # Option B: native dag.LLM() (requires ANTHROPIC_API_KEY)
 # Set ANTHROPIC_API_KEY securely in the environment, not in shell arguments.
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.8 call scan --source . export --path .
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.2.0 call scan --source . export --path .
 
 # Option C: explicit OpenAI-compatible URL (Docker Desktop; same running proxy/token)
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.8 call scan --source . --llm-url http://host.docker.internal:4000 \
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.2.0 call scan --source . --llm-url http://host.docker.internal:4000 \
   --llm-token env:CICD_RISK_PROXY_TOKEN export --path .
 
 ```
@@ -57,14 +57,14 @@ not review or approval.
 # Validate in CI (set SHA and REPO_URL; requires Dagger and jq)
 set -eu
 rm -f ./evidence.json
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.8 call validate \
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.2.0 call validate \
   --source=. --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./evidence.json || exit 1
 jq -e '.passed == true' ./evidence.json >/dev/null || exit 1
 
 # Render a markdown report (inspection, not a gate)
-dagger -m github.com/context-and-oss/cicd/src/risk@v5.1.8 call report --source . export --path risk-report.md
+dagger -m github.com/context-and-oss/cicd/src/risk@v5.2.0 call report --source . export --path risk-report.md
 ```
 
 Export success alone does not enforce `validate`'s verdict; missing/malformed

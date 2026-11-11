@@ -71,7 +71,7 @@ checked there.
 
 ## Reusable workflow inputs
 
-`context-and-oss/cicd/.github/workflows/dast.yml@v5.1.8`. Every input is a string
+`context-and-oss/cicd/.github/workflows/dast.yml@v5.2.0`. Every input is a string
 with an empty default unless stated otherwise, and empty means *keep the
 module default* — the same contract `commit.yml` uses, for the zero-value
 reason above.

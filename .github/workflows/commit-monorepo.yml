@@ -269,7 +269,7 @@ jobs:
           # refused policy input into a silently narrowed allowlist.
           _license_flags --license-allow "$LICENSE_ALLOW" || exit 1
           _license_flags --license-exclude "$LICENSE_EXCLUDE" || exit 1
-          dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.1.8 call run \
+          dagger --progress=plain -m github.com/context-and-oss/cicd/src/composites/commit@v5.2.0 call run \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --src . --app-id "$APP_ID" --lint-legs "$LINT_LEGS" --test-legs "$TEST_LEGS" \
             --artifact "$ARTIFACT" \
