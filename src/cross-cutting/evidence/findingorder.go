@@ -2,6 +2,8 @@ package main
 
 import (
 	"cmp"
+	"encoding/json"
+	"slices"
 	"sort"
 )
 
@@ -97,6 +99,12 @@ func compareFindings(a, b classedFinding) int {
 		cmp.Compare(a.ArtifactPath, b.ArtifactPath),
 		cmp.Compare(a.Line, b.Line),
 		cmp.Compare(a.Message, b.Message),
+		cmp.Compare(a.Concern, b.Concern),
+		cmp.Compare(a.Category, b.Category),
+		slices.Compare(a.Subcategories, b.Subcategories),
+		cmp.Compare(a.Confidence, b.Confidence),
+		slices.Compare(a.WeaknessIDs, b.WeaknessIDs),
+		cmp.Compare(a.ClassificationSource, b.ClassificationSource),
 	)
 }
 
@@ -124,6 +132,13 @@ func orderFindings(in []classedFinding) []Finding {
 	return out
 }
 
+// findingWireKey includes every wire field, including optional lists. JSON is
+// deterministic for this struct and treats omitted and empty lists identically.
+func findingWireKey(f Finding) string {
+	key, _ := json.Marshal(f) // Finding contains only JSON-safe scalar/list fields.
+	return string(key)
+}
+
 // dedupeFindings drops exact repeats of a Finding, keeping the first occurrence.
 //
 // Every field of Finding participates in the key — including Line, which is why
@@ -139,13 +154,14 @@ func orderFindings(in []classedFinding) []Finding {
 // The class is NOT part of the key. It describes the producer, not the finding,
 // and keying on it would let a row stated by two modules through twice.
 func dedupeFindings(in []classedFinding) []classedFinding {
-	seen := make(map[Finding]bool, len(in))
+	seen := make(map[string]bool, len(in))
 	out := make([]classedFinding, 0, len(in))
 	for _, f := range in {
-		if seen[f.Finding] {
+		key := findingWireKey(f.Finding)
+		if seen[key] {
 			continue
 		}
-		seen[f.Finding] = true
+		seen[key] = true
 		out = append(out, f)
 	}
 	return out

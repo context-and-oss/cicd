@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -183,7 +184,7 @@ func TestMergeFindingsReadsModuleStatedFindings(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want the module's own: %+v", len(got), got)
 	}
-	if got[0] != stated {
+	if !reflect.DeepEqual(got[0], stated) {
 		t.Errorf("finding = %+v, want it carried through verbatim (%+v)", got[0], stated)
 	}
 	// Severity must survive as CRITICAL. Routing this through SARIF is what would

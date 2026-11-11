@@ -84,6 +84,36 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.8 call scan-source \
 | `nuget-feed-url` | string | `""` | Private NuGet feed index URL, used only by the lockfile-free .NET restore |
 | `nuget-token` | Secret | none | Token for `nuget-feed-url`. Never written to the evidence envelope. |
 
+#### Finding classification metadata
+
+Evidence schema 1.7 adds optional per-finding `concern`, `category`,
+`subcategories`, `confidence`, `weaknessIds` and `classificationSource`.
+For Semgrep, cicd projects an allowlisted subset of the **same invocation's**
+native rule metadata into SARIF result properties; the evidence aggregator
+carries it into `combined-evidence.json.findings`. Both ordinary and inline
+JavaScript scans use this path, including custom rules and compatibility reruns.
+
+- `concern: sast` declares the scan that produced the match. A custom style
+  rule can therefore have concern `sast` and category `style`: concern is not
+  proof of security relevance.
+- Known categories are `security`, `correctness`, `maintainability`, `style`
+  and `unknown`. Missing or unsupported metadata leaves the field absent
+  (unknown); category is never guessed from rule names or severity.
+- `subcategories` preserves the scanner's `audit`/`vuln` labels where supplied.
+  Neither label confirms that a particular occurrence is exploitable.
+- `confidence` is the rule's HIGH/MEDIUM/LOW value, when supplied. It is
+  independent of severity. SARIF `precision: very-high` is not used.
+- `weaknessIds` contains normalized CWE identifiers, without arbitrary prose.
+  `classificationSource: scanner-metadata` describes their origin, not an
+  independent verification. Unclassified findings remain present.
+
+No review decisions are invented, no findings are filtered, and severity,
+suppressions, counts and `fail-on` behaviour remain unchanged. Optional metadata
+that cannot be read leaves classification unknown rather than failing a scan.
+Other scanners and older evidence can omit these fields; absence is never clean.
+The native JSON is not exported as a new payload, and matched source remains
+subject to the existing SARIF redaction.
+
 #### Inline JavaScript and DOM text
 
 The default `p/security-audit` and `p/owasp-top-ten` scans also analyse ordinary

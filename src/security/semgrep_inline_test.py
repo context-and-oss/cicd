@@ -218,6 +218,45 @@ class InlineTests(unittest.TestCase):
                 analyse(root / 'plan', root, root / 'report', root / 'sarif', root / 'warnings')
             runner.assert_called_once()  # No batching, scope splitting or retry.
 
+    def test_inline_metadata_comes_from_its_own_scan_before_remapping(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'plan').write_text('{}')
+            (root / 'page.html').write_text('<script>run();</script>')
+            (root / 'report').write_text(json.dumps({
+                'paths': {'scanned': ['page.html']},
+                'results': [{'check_id': DOM_ID, 'extra': {'metadata': {'category': 'style'}}}],
+            }))
+            (root / 'sarif').write_text('{"runs":[{}]}')
+            def fake_scan(command, cwd, **kwargs):
+                work = Path(cwd)
+                (work / 'report.json').write_text(json.dumps({
+                    'paths': {'scanned': ['scripts/inline-0000.js']},
+                    'time': {'fixpoint_timeouts': []},
+                    'results': [{'check_id': DOM_ID, 'extra': {'metadata': {
+                        'category': 'security', 'confidence': 'LOW', 'subcategory': ['audit'],
+                    }}}],
+                }))
+                (work / 'report.sarif').write_text(json.dumps({'runs': [{
+                    'tool': {'driver': {'rules': [{'id': DOM_ID}]}},
+                    'results': [{'ruleId': DOM_ID, 'message': {'text': 'synthetic'},
+                        'locations': [{'physicalLocation': {
+                            'artifactLocation': {'uri': 'scripts/inline-0000.js'},
+                            'region': {'startLine': 1, 'startColumn': 1},
+                        }}]}],
+                }]}))
+                return SimpleNamespace(returncode=0)
+            with patch('semgrep_inline.rules_for_inline', return_value=[{'id': DOM_ID}]), \
+                 patch('semgrep_inline.subprocess.run', side_effect=fake_scan):
+                analyse(root / 'plan', root, root / 'report', root / 'sarif', root / 'warnings')
+            document = json.loads((root / 'sarif').read_text())
+            row = document['runs'][1]['results'][0]
+            self.assertEqual(row['properties']['cicdFindingMetadata']['category'], 'security')
+            self.assertEqual(row['properties']['cicdFindingMetadata']['confidence'], 'LOW')
+            self.assertEqual(row['properties']['cicdFindingMetadata']['subcategories'], ['audit'])
+            self.assertEqual(row['locations'][0]['physicalLocation']['artifactLocation']['uri'], 'page.html')
+
     def test_empty_static_html_needs_no_second_scanner(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

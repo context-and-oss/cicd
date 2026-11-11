@@ -83,6 +83,12 @@ dagger -m ./src/security call scan-sbom \
 - `scopepath.go` — **untagged**: `checkScopePath()`, the `--path` shape rule
   (`applyPathFilter` in `main.go` only applies it)
 - `sast.go` — Semgrep SAST runner
+- `semgrepmetadata.go` / `semgrep_metadata.py` — optional allowlisted projection
+  of native Semgrep rule metadata onto the same invocation's SARIF findings,
+  before redaction. Inline runs call the same projector before remapping.
+  Never copy arbitrary metadata/source, infer confidence from SARIF precision,
+  or let metadata change findings, severity or scan status. See
+  [finding metadata](README.md#finding-classification-metadata).
 - `semgrepredact.go` — withholds the matched source from every semgrep report
   before anything reads it: snippets, fixes, interpolated messages and the
   backtick-quoted source in parser notifications (untagged; see "Semgrep's matched source never reaches the envelope")

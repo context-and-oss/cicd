@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = "1.6.0"
+const SchemaVersion = "1.7.0"
 
 type Severity string
 

@@ -376,7 +376,8 @@ func sarifFindings(raw json.RawMessage) []Finding {
 					Status string `json:"status"`
 				} `json:"suppressions"`
 				Properties struct {
-					CICDSeverity string `json:"cicdSeverity"`
+					CICDSeverity    string          `json:"cicdSeverity"`
+					FindingMetadata json.RawMessage `json:"cicdFindingMetadata"`
 				} `json:"properties"`
 				Message struct {
 					Text string `json:"text"`
@@ -449,6 +450,7 @@ func sarifFindings(raw json.RawMessage) []Finding {
 				Rule:     r.RuleID,
 				Message:  r.Message.Text,
 			}
+			applyFindingMetadata(&f, r.Properties.FindingMetadata)
 			if len(r.Locations) > 0 {
 				phys := r.Locations[0].PhysicalLocation
 				f.ArtifactPath = phys.ArtifactLocation.URI
