@@ -209,6 +209,8 @@ semgrep scan --disable-version-check --sarif-output=/tmp/report.sarif --json-out
 code=$?
 echo "$code" > /tmp/semgrep.exit
 [ -f /tmp/report.sarif ] || : > /tmp/report.sarif
+# Optional metadata projection; never changes findings, severity or scan status.
+python3 ` + semgrepMetadataPath + ` --json /tmp/report.json --sarif /tmp/report.sarif 2>/dev/null || :
 if [ "$code" -le 1 ] && [ -f ` + semgrepInlinePlanPath + ` ]; then
   python3 ` + semgrepInlinePath + ` --plan ` + semgrepInlinePlanPath + ` --source /src \
     --json /tmp/report.json --sarif /tmp/report.sarif --warnings ` + semgrepInlineWarnings + ` \

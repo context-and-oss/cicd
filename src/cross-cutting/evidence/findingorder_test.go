@@ -57,16 +57,16 @@ func TestCapKeepsSecurityRowsAheadOfStyleRows(t *testing.T) {
 	if len(kept) != maxCombinedFindings {
 		t.Fatalf("kept %d rows, want %d", len(kept), maxCombinedFindings)
 	}
-	have := make(map[Finding]bool, len(kept))
+	have := make(map[string]bool, len(kept))
 	for _, f := range kept {
-		have[f] = true
+		have[findingWireKey(f)] = true
 	}
 	for _, want := range securityMediumRows {
-		if !have[want] {
+		if !have[findingWireKey(want)] {
 			t.Errorf("security MEDIUM row dropped under the cap: %s", want.Rule)
 		}
 	}
-	if have[low] {
+	if have[findingWireKey(low)] {
 		t.Error("a LOW row survived while MEDIUM rows were dropped: severity must win across tiers")
 	}
 	// The security rows are not merely present; they head the MEDIUM tier, so

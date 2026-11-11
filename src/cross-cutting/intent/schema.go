@@ -19,7 +19,7 @@ import (
 // 1.1.0 is the first version this repository can prove describes what it
 // ships. 1.0.0 named several different shapes over its life and no consumer
 // should treat it as identifying any one of them.
-const evidenceSchemaVersion = "1.6.0"
+const evidenceSchemaVersion = "1.7.0"
 
 type Severity string
 
@@ -185,6 +185,14 @@ type Finding struct {
 	Message      string   `json:"message"`
 	ArtifactPath string   `json:"artifactPath,omitempty"`
 	Line         int      `json:"line,omitempty"`
+	// Optional descriptive metadata, not a verification or a gate input.
+	// Absent category/confidence means unknown, never clean or high confidence.
+	Concern              Concern  `json:"concern,omitempty"`
+	Category             string   `json:"category,omitempty"`
+	Subcategories        []string `json:"subcategories,omitempty"`
+	Confidence           string   `json:"confidence,omitempty"`
+	WeaknessIDs          []string `json:"weaknessIds,omitempty"`
+	ClassificationSource string   `json:"classificationSource,omitempty"`
 }
 
 // TestCounts is the executed-test accounting for one suite.

@@ -16,6 +16,8 @@ import sys
 import tempfile
 from urllib.parse import quote, unquote, urlparse
 
+from semgrep_metadata import enrich_sarif
+
 DOM_ID = "cicd-rules.cicd.javascript.dom-text-to-html"
 JS_TYPES = frozenset({
     "", "application/ecmascript", "application/javascript",
@@ -406,6 +408,9 @@ def analyse(plan_path, source_root, report_path, sarif_path, warnings_path):
             loaded = {r["id"].lower() for run in inline["runs"] for r in run["tool"]["driver"]["rules"]}
             if not {r["id"].lower() for r in rules} <= loaded:
                 raise InlineError("inline JavaScript scanner did not load its selected rules")
+            # The inline scan has its own rule identities and native output.
+            # Enrich before remapping/appending; never borrow ordinary metadata.
+            enrich_sarif(profile, inline)
             add_fixpoint_notifications(profile, inline, maps)
             bases = original["runs"][0].get("originalUriBaseIds", {})
             original["runs"].extend(remap_sarif(inline, maps, bases)["runs"])

@@ -119,6 +119,7 @@ func runSemgrepOnce(ctx context.Context, src *dagger.Directory, args []string, p
 		// Bypass the semgrep image's entrypoint so sh runs the script.
 		WithoutEntrypoint().
 		WithNewFile(semgrepGHAAdapterPath, semgrepGHAAdapter).
+		WithNewFile(semgrepMetadataPath, semgrepMetadataScript).
 		WithNewFile(semgrepDOMRulePath, semgrepDOMRule).
 		WithNewFile(semgrepInlineWarnings, "[]")
 	if plan.Inline {
@@ -167,10 +168,10 @@ func runSemgrepOnce(ctx context.Context, src *dagger.Directory, args []string, p
 	runFailure := semgrepRunError(code, stderr, report)
 
 	// The count is read, not the list. semgrep's JSON names every file it
-	// scanned, which on a large repository is the biggest document this
-	// container produces and is worth nothing here beyond its length — so the
-	// length is taken in the container and a handful of bytes crosses the
-	// boundary instead of a list that has no other reader.
+	// scanned. Its length is taken in the container, where the optional
+	// metadata adapter also reads the native JSON. Only the count and the
+	// allowlisted SARIF projection cross the boundary, never the selected-file
+	// list or the native report's matched-source payload.
 	//
 	// Its absence is not an error. A scan whose SARIF is good and whose
 	// accounting could not be read is still a scan; the honest report of that

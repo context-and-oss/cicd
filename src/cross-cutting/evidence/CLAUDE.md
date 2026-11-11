@@ -41,6 +41,16 @@ dagger -m ./src/cross-cutting/evidence call wrap \
   its exit in `errors[]` and stays a pass; notify's lost card is `ERROR` with
   `warnings[]` only and stays a pass. See
   [specs/a-part-that-produced-no-result-fails-the-run.md](../../../specs/a-part-that-produced-no-result-fails-the-run.md).
+- `combined.findings` optionally carries per-finding concern, category,
+  subcategories, confidence, CWE identifiers and classification source (schema
+  1.7). `findingmetadata.go` reads the allowlisted `cicdFindingMetadata` SARIF
+  result property emitted by security; malformed/absent metadata leaves a
+  finding unclassified, never omitted. Explicit producer fields pass through.
+  No category/confidence is inferred from tool name, severity or SARIF precision.
+  These fields do not affect counts/gates or existing ordering priorities;
+  metadata is a final deterministic tiebreak, and list fields participate in
+  the serialized deduplication key. See
+  [finding metadata](../../security/README.md#finding-classification-metadata).
 - `findings.sarif` — SARIF 2.1.0 with all runs concatenated. `uniqueRunIdentities`
   then guarantees no two runs share GitHub Code Scanning's (tool driver name,
   `automationDetails.id`) identity — a collision fails the *entire* upload since

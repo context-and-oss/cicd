@@ -172,6 +172,33 @@
         "line": {
           "type": "integer",
           "minimum": 0
+        },
+        "concern": {
+          "$ref": "#/$defs/concern"
+        },
+        "category": {
+          "type": "string",
+          "description": "Descriptive rule category, not a verified vulnerability. Absent means unknown.",
+          "enum": ["security", "correctness", "maintainability", "style", "unknown"]
+        },
+        "subcategories": {
+          "type": "array",
+          "description": "Scanner rule context. audit and vuln are rule labels, never confirmation of an occurrence.",
+          "items": {"type": "string"}
+        },
+        "confidence": {
+          "type": "string",
+          "description": "Rule-author/scanner confidence, not SARIF precision or proof of exploitability. Absent means unknown.",
+          "enum": ["HIGH", "MEDIUM", "LOW"]
+        },
+        "weaknessIds": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^CWE-[1-9][0-9]*$"}
+        },
+        "classificationSource": {
+          "type": "string",
+          "description": "Origin of descriptive classification, not an independent verification.",
+          "enum": ["scanner-metadata"]
         }
       },
       "additionalProperties": false
@@ -338,7 +365,7 @@
       "properties": {
         "schemaVersion": {
           "type": "string",
-          "const": "1.6.0"
+          "const": "1.7.0"
         },
         "moduleName": {
           "type": "string"

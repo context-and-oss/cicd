@@ -1,0 +1,24 @@
+rules:
+  - id: synthetic-security-audit
+    languages: [javascript]
+    message: Synthetic security-sensitive operation needs review.
+    severity: ERROR
+    metadata:
+      category: security
+      subcategory: [audit]
+      confidence: LOW
+      cwe: ['CWE-79: Synthetic classification example']
+    pattern: securitySink($VALUE)
+  - id: synthetic-style
+    languages: [javascript]
+    message: Synthetic style preference.
+    severity: ERROR
+    metadata:
+      category: style
+      confidence: HIGH
+    pattern: styleSink($VALUE)
+  - id: synthetic-unknown
+    languages: [javascript]
+    message: Synthetic rule without classification metadata.
+    severity: ERROR
+    pattern: unknownSink($VALUE)

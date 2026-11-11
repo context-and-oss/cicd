@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -165,7 +166,7 @@ func TestParseZAPReportGivesEveryFindingItsURL(t *testing.T) {
 	if len(xss) != 2 {
 		t.Fatalf("got %d XSS rows, want 2", len(xss))
 	}
-	if xss[0] == xss[1] {
+	if reflect.DeepEqual(xss[0], xss[1]) {
 		t.Error("the two XSS findings are identical structs, so the dedupe will collapse them to one row")
 	}
 }
