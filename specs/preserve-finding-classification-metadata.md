@@ -6,6 +6,15 @@ A security-sensitive audit pattern and a style preference can both have Semgrep
 severity ERROR. Severity answers neither what kind of diagnostic it is nor how
 confident the rule author is. Reports need those dimensions independently.
 
+## Change locations and reason
+
+Because `src/cross-cutting/evidence/main.go` drops classification metadata, a
+report cannot distinguish security-review patterns from style diagnostics.
+`src/security/semgrep_metadata.py` projects the same scan's native metadata into
+SARIF, and `src/internal/evidence/schema.go` carries it through aggregation.
+The tests in `src/cross-cutting/evidence/findingmetadata_test.go` assert that
+classification survives without changing severity or counts.
+
 ## Bounded change
 
 Schema 1.7 adds optional finding concern, category, subcategories, confidence,
