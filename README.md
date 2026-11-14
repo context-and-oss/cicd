@@ -119,8 +119,9 @@ complete examination or absence of suppressed findings. Source scanning is not a
 full-history secrets audit or live credential verification; retain existing
 protections until equivalent scope and enforcement are configured and verified.
 
-> **Licence note — default SAST rules.** `scan-source` runs Semgrep with rules
-> fetched at run time from `semgrep/semgrep-rules`, which are licensed under the
+> **Licence note — default SAST rules.** `scan-source` runs Opengrep (the
+> LGPL-2.1 fork of the Semgrep engine, downloaded at run time and not
+> redistributed) with rules fetched at run time from `semgrep/semgrep-rules`, which are licensed under the
 > **Semgrep Rules License v1.0**, not Apache-2.0: internal business use only, no
 > redistribution and no offering them to others as a service. Running cicd as a
 > hosted service for others, or redistributing the fetched rules, needs a
@@ -191,7 +192,8 @@ testdata/                                       ← fixture apps the CI smokes r
   dotnet-app/  dotnet-app-nolock/  dotnet-mtp-app/   ← .NET: VSTest, no lockfile, MTP runner
   app-workspace/                                ← multi-app monorepo
   vuln-app/                                     ← deliberately vulnerable DAST target
-  semgrep-github-actions/                       ← workflow files for the SAST parser fixtures
+  semgrep-github-actions/                       ← workflow fixtures (*.fixture) for the SAST parser
+  zizmor-workflows/                             ← workflow fixtures for the zizmor leg
 docs/                                           ← Diataxis docs
 scripts/                                        ← release + repo-surface tooling
 default.json                                    ← the Renovate preset consumers extend
@@ -240,4 +242,4 @@ documents must exist in module source. CI runs it on every push and PR.
 cicd is licensed under the [Apache License, Version 2.0](LICENSE); see
 [NOTICE](NOTICE). Third-party material copied into this tree, and third-party
 content cicd fetches at run time under its own terms — notably the default
-Semgrep rules — is recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Semgrep rules and the Opengrep engine — is recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

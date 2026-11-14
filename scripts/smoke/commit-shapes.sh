@@ -141,7 +141,7 @@ assert_unique_identity() {
 #              (golangci-lint/eslint/pylint) and — for golangci-lint — is not a
 #              stable single-run name, so .languages is the robust cross-shape
 #              proof that quality ran (combined-evidence.json)
-#   SAST     → semgrep SARIF run (findings.sarif)
+#   SAST     → opengrep SARIF run (findings.sarif)
 #   secrets  → gitleaks SARIF run (findings.sarif)
 #   dep-vuln → non-empty CycloneDX components (sbom.cdx.json, Trivy-FS source scan)
 #   risk     → risk-validate finding, or the no-risk-files warning it emits on a
@@ -158,10 +158,10 @@ assert_source_gate() {
   echo "source-gate checks:"
   jassert "quality (${lang} lint+test)" "$combined" \
     "\"${lang}\" in (d.get(\"languages\") or [])" || rc=1
-  # Semgrep's SARIF driver name is "Semgrep OSS" (not "semgrep"), so match a
-  # case-insensitive substring rather than an exact name.
-  jassert "SAST (semgrep)"     "$sarif" \
-    'any("semgrep" in ((r.get("tool") or {}).get("driver",{}).get("name") or "").lower() for r in (d.get("runs") or []))' || rc=1
+  # Opengrep's SARIF driver name is "Opengrep", so match a case-insensitive
+  # substring rather than an exact name.
+  jassert "SAST (opengrep)"    "$sarif" \
+    'any("opengrep" in ((r.get("tool") or {}).get("driver",{}).get("name") or "").lower() for r in (d.get("runs") or []))' || rc=1
   jassert "secrets (gitleaks)" "$sarif" "$(sarif_has gitleaks)" || rc=1
   jassert "dependency-vuln (Trivy-FS SBOM)" "$sbom" 'len(d.get("components") or []) > 0' || rc=1
   jassert "risk (risk-validate)" "$combined" \

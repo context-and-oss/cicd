@@ -1,0 +1,47 @@
+# The rules cicd's ScanTaint runs with Opengrep's interfile analysis.
+#
+# Every rule in https://github.com/semgrep/semgrep-rules at commit
+# 16b9e6d45f10649f6a531ec4838ed9924372c3bc that sets `options.interfile: true`
+# and that p/security-audit or p/owasp-top-ten (the pinned manifests beside
+# this file) already carries. That flag is the rule author's statement that the
+# rule means more across functions and files; it is the selection, not a
+# judgement cicd made rule by rule. Rows are generated: load each staged rule
+# file, keep the rules whose options.interfile is true, and spell the id the
+# way the other manifests do. Same format:
+#
+#   <path in semgrep-rules> <rule id as semgrep reports it>
+#
+# 23 are taint-mode rules and 4 are search-mode (the hardcoded-secret express
+# and jose rules, and the directory-listing check). No C# rule at this commit
+# sets the flag, so a .NET tree gets nothing from ScanTaint.
+#
+# Every rule here must be loaded, or the scan is a non-run, as for the other
+# manifests. Bumping the semgrep-rules commit regenerates this file; see
+# specs/report-cross-file-taint-as-advice.md.
+go/gorm/security/audit/gorm-dangerous-methods-usage.yaml go.gorm.security.audit.gorm-dangerous-methods-usage.gorm-dangerous-method-usage
+go/jwt-go/security/jwt.yaml go.jwt-go.security.jwt.hardcoded-jwt-key
+go/lang/security/audit/md5-used-as-password.yaml go.lang.security.audit.md5-used-as-password.md5-used-as-password
+go/lang/security/filepath-clean-misuse.yaml go.lang.security.filepath-clean-misuse.filepath-clean-misuse
+go/lang/security/injection/tainted-sql-string.yaml go.lang.security.injection.tainted-sql-string.tainted-sql-string
+go/lang/security/injection/tainted-url-host.yaml go.lang.security.injection.tainted-url-host.tainted-url-host
+java/aws-lambda/security/tainted-sql-string.yaml java.aws-lambda.security.tainted-sql-string.tainted-sql-string
+java/aws-lambda/security/tainted-sqli.yaml java.aws-lambda.security.tainted-sqli.tainted-sqli
+java/lang/security/audit/tainted-session-from-http-request.yaml java.lang.security.audit.tainted-session-from-http-request.tainted-session-from-http-request
+java/lang/security/audit/xss/no-direct-response-writer.yaml java.lang.security.audit.xss.no-direct-response-writer.no-direct-response-writer
+java/spring/security/injection/tainted-file-path.yaml java.spring.security.injection.tainted-file-path.tainted-file-path
+java/spring/security/injection/tainted-sql-string.yaml java.spring.security.injection.tainted-sql-string.tainted-sql-string
+java/spring/security/injection/tainted-url-host.yaml java.spring.security.injection.tainted-url-host.tainted-url-host
+javascript/browser/security/open-redirect.yaml javascript.browser.security.open-redirect.js-open-redirect
+javascript/express/security/audit/express-check-directory-listing.yaml javascript.express.security.audit.express-check-directory-listing.express-check-directory-listing
+javascript/express/security/audit/express-libxml-noent.yaml javascript.express.security.audit.express-libxml-noent.express-libxml-noent
+javascript/express/security/audit/express-session-hardcoded-secret.yaml javascript.express.security.audit.express-session-hardcoded-secret.express-session-hardcoded-secret
+javascript/express/security/audit/express-third-party-object-deserialization.yaml javascript.express.security.audit.express-third-party-object-deserialization.express-third-party-object-deserialization
+javascript/express/security/audit/res-render-injection.yaml javascript.express.security.audit.res-render-injection.res-render-injection
+javascript/express/security/audit/xss/direct-response-write.yaml javascript.express.security.audit.xss.direct-response-write.direct-response-write
+javascript/express/security/express-expat-xxe.yaml javascript.express.security.express-expat-xxe.express-expat-xxe
+javascript/express/security/express-insecure-template-usage.yaml javascript.express.security.express-insecure-template-usage.express-insecure-template-usage
+javascript/express/security/express-jwt-hardcoded-secret.yaml javascript.express.security.express-jwt-hardcoded-secret.express-jwt-hardcoded-secret
+javascript/express/security/require-request.yaml javascript.express.security.require-request.require-request
+javascript/jose/security/jwt-hardcode.yaml javascript.jose.security.jwt-hardcode.hardcoded-jwt-secret
+javascript/lang/security/audit/code-string-concat.yaml javascript.lang.security.audit.code-string-concat.code-string-concat
+javascript/sequelize/security/audit/sequelize-injection-express.yaml javascript.sequelize.security.audit.sequelize-injection-express.express-sequelize-injection

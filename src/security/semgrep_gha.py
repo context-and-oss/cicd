@@ -68,8 +68,8 @@ def adapt(document):
 
 def read_document(raw):
     # JSON is a YAML subset and keeps synthetic host-side unit fixtures free
-    # of a new dependency. The existing pinned Semgrep image supplies PyYAML
-    # for the real upstream YAML; import failure is a non-run, never a fallback.
+    # of a new dependency. The PyYAML wheel opengrep.go pins and verifies
+    # parses the real upstream YAML; import failure is a non-run, never a fallback.
     try:
         return json.loads(raw)
     except json.JSONDecodeError:

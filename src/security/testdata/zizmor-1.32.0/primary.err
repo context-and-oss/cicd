@@ -1,0 +1,294 @@
+ INFO zizmor: 🌈 zizmor v1.32.0
+DEBUG collect_inputs: zizmor::registry::input: collecting all eligible inputs under '.'
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: performing generic directory collection because '.' is not a Git root
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::config: discovering config for local input `.` (root: `None`)
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}:discover_in_dir{path="." root=None}: zizmor::config: attempting config discovery for `.` (root: `None`)
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}:discover_in_dir{path="." root=None}:sad path: zizmor::config: config discovery: no root, falling back to search
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}:discover_in_dir{path="." root=None}:sad path: zizmor::config: found config candidate at `/src/zizmor.yml`
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering workflow input with key file://./ignoredir/.github/workflows/c.yml
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering action input with key file://./.github/actions/act1/action.yml
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering workflow input with key file://./.github/workflows/inject.yml
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering workflow input with key file://./.github/workflows/ignored.yml
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering workflow input with key file://./.github/workflows/broken.yml
+ WARN collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: failed to parse input: did not find expected ',' or ']' at line 5 column 1, while parsing a flow sequence at line 4 column 6
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering workflow input with key file://./.github/workflows/clean.yml
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering workflow input with key file://./.github/workflows/schemabad.yml
+ WARN collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: failed to validate file://./.github/workflows/schemabad.yml as workflow: input does not match expected validation schema
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering dependabot config input with key file://./.github/dependabot.yml
+DEBUG collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: registering workflow input with key file://./sub/.github/workflows/clean.yml
+DEBUG collect_inputs: zizmor::registry::input: collected a group with 7 inputs (actions lockfile=false)
+DEBUG zizmor::registry: skipping impostor-commit: can't run without a GitHub API token
+DEBUG zizmor::registry: skipping ref-confusion: can't run without a GitHub API token
+DEBUG zizmor::registry: skipping known-vulnerable-actions: can't run without a GitHub API token
+DEBUG zizmor::registry: skipping stale-action-refs: can't run without a GitHub API token
+DEBUG zizmor::registry: skipping ref-version-mismatch: can't run without a GitHub API token
+DEBUG audit: zizmor: scheduling artipacked on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling unsound-contains on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling unsound-ternary on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling excessive-permissions on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling dangerous-triggers on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling use-trusted-publishing on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling template-injection on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling hardcoded-container-credentials on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling self-hosted-runner on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling unpinned-uses on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling undocumented-permissions on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling insecure-commands on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling github-env on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling cache-poisoning on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling secrets-inherit on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling bot-conditions on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling overprovisioned-secrets on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling unredacted-secrets on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling forbidden-uses on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling obfuscation on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling unpinned-images on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling anonymous-definition on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling unsound-condition on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling dependabot-execution on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling dependabot-cooldown on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling concurrency-limits on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling archived-uses on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling typosquat-uses on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling misfeature on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling secrets-outside-env on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling superfluous-actions on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling github-app on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling unpinned-tools on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling adhoc-packages on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling insecure-url-scheme on file://./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling self-repository on file://./.github/actions/act1/action.yml
+DEBUG audit:audit{ident="dangerous-triggers" input=Action(file://./.github/actions/act1/action.yml)}: zizmor::audit: skipping: dangerous-triggers is disabled in config for group GroupID(".")
+DEBUG audit:audit{ident="template-injection" input=Action(file://./.github/actions/act1/action.yml)}: subfeature: attempting to locate Subfeature { after: 7, fragment: Raw("github.event.issue.title") } within "echo \"${{ github.event.issue.title }}\""
+ INFO audit: zizmor: 🌈 completed ./.github/actions/act1/action.yml
+DEBUG audit: zizmor: scheduling artipacked on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling unsound-contains on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling unsound-ternary on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling excessive-permissions on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling dangerous-triggers on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling use-trusted-publishing on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling template-injection on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling hardcoded-container-credentials on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling self-hosted-runner on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling unpinned-uses on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling undocumented-permissions on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling insecure-commands on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling github-env on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling cache-poisoning on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling secrets-inherit on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling bot-conditions on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling overprovisioned-secrets on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling unredacted-secrets on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling forbidden-uses on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling obfuscation on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling unpinned-images on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling anonymous-definition on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling unsound-condition on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling dependabot-execution on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling dependabot-cooldown on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling concurrency-limits on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling archived-uses on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling typosquat-uses on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling misfeature on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling secrets-outside-env on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling superfluous-actions on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling github-app on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling unpinned-tools on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling adhoc-packages on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling insecure-url-scheme on file://./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling self-repository on file://./.github/dependabot.yml
+DEBUG audit:audit{ident="dangerous-triggers" input=Dependabot(file://./.github/dependabot.yml)}: zizmor::audit: skipping: dangerous-triggers is disabled in config for group GroupID(".")
+ INFO audit: zizmor: 🌈 completed ./.github/dependabot.yml
+DEBUG audit: zizmor: scheduling artipacked on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unsound-contains on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unsound-ternary on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling excessive-permissions on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling dangerous-triggers on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling use-trusted-publishing on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling template-injection on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling hardcoded-container-credentials on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling self-hosted-runner on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unpinned-uses on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling undocumented-permissions on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling insecure-commands on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling github-env on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling cache-poisoning on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling secrets-inherit on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling bot-conditions on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling overprovisioned-secrets on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unredacted-secrets on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling forbidden-uses on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling obfuscation on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unpinned-images on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling anonymous-definition on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unsound-condition on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling dependabot-execution on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling dependabot-cooldown on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling concurrency-limits on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling archived-uses on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling typosquat-uses on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling misfeature on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling secrets-outside-env on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling superfluous-actions on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling github-app on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unpinned-tools on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling adhoc-packages on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling insecure-url-scheme on file://./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling self-repository on file://./.github/workflows/clean.yml
+DEBUG audit:audit{ident="dangerous-triggers" input=Workflow(file://./.github/workflows/clean.yml)}: zizmor::audit: skipping: dangerous-triggers is disabled in config for group GroupID(".")
+ INFO audit: zizmor: 🌈 completed ./.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling artipacked on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling unsound-contains on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling unsound-ternary on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling excessive-permissions on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling dangerous-triggers on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling use-trusted-publishing on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling template-injection on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling hardcoded-container-credentials on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling self-hosted-runner on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling unpinned-uses on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling undocumented-permissions on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling insecure-commands on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling github-env on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling cache-poisoning on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling secrets-inherit on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling bot-conditions on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling overprovisioned-secrets on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling unredacted-secrets on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling forbidden-uses on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling obfuscation on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling unpinned-images on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling anonymous-definition on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling unsound-condition on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling dependabot-execution on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling dependabot-cooldown on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling concurrency-limits on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling archived-uses on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling typosquat-uses on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling misfeature on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling secrets-outside-env on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling superfluous-actions on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling github-app on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling unpinned-tools on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling adhoc-packages on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling insecure-url-scheme on file://./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling self-repository on file://./.github/workflows/ignored.yml
+DEBUG audit:audit{ident="dangerous-triggers" input=Workflow(file://./.github/workflows/ignored.yml)}: zizmor::audit: skipping: dangerous-triggers is disabled in config for group GroupID(".")
+DEBUG audit:audit{ident="template-injection" input=Workflow(file://./.github/workflows/ignored.yml)}: subfeature: attempting to locate Subfeature { after: 7, fragment: Raw("github.event.head_commit.message") } within "echo \"${{ github.event.head_commit.message }}\""
+ INFO audit: zizmor: 🌈 completed ./.github/workflows/ignored.yml
+DEBUG audit: zizmor: scheduling artipacked on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling unsound-contains on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling unsound-ternary on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling excessive-permissions on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling dangerous-triggers on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling use-trusted-publishing on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling template-injection on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling hardcoded-container-credentials on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling self-hosted-runner on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling unpinned-uses on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling undocumented-permissions on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling insecure-commands on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling github-env on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling cache-poisoning on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling secrets-inherit on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling bot-conditions on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling overprovisioned-secrets on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling unredacted-secrets on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling forbidden-uses on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling obfuscation on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling unpinned-images on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling anonymous-definition on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling unsound-condition on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling dependabot-execution on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling dependabot-cooldown on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling concurrency-limits on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling archived-uses on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling typosquat-uses on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling misfeature on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling secrets-outside-env on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling superfluous-actions on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling github-app on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling unpinned-tools on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling adhoc-packages on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling insecure-url-scheme on file://./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling self-repository on file://./.github/workflows/inject.yml
+DEBUG audit:audit{ident="dangerous-triggers" input=Workflow(file://./.github/workflows/inject.yml)}: zizmor::audit: skipping: dangerous-triggers is disabled in config for group GroupID(".")
+DEBUG audit:audit{ident="template-injection" input=Workflow(file://./.github/workflows/inject.yml)}: subfeature: attempting to locate Subfeature { after: 7, fragment: Raw("github.event.pull_request.title") } within "echo \"${{ github.event.pull_request.title }}\""
+DEBUG audit:audit{ident="unpinned-uses" input=Workflow(file://./.github/workflows/inject.yml)}: subfeature: attempting to locate Subfeature { after: 0, fragment: Raw("actions/checkout@v4") } within "actions/checkout@v4"
+ INFO audit: zizmor: 🌈 completed ./.github/workflows/inject.yml
+DEBUG audit: zizmor: scheduling artipacked on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling unsound-contains on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling unsound-ternary on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling excessive-permissions on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling dangerous-triggers on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling use-trusted-publishing on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling template-injection on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling hardcoded-container-credentials on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling self-hosted-runner on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling unpinned-uses on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling undocumented-permissions on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling insecure-commands on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling github-env on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling cache-poisoning on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling secrets-inherit on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling bot-conditions on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling overprovisioned-secrets on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling unredacted-secrets on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling forbidden-uses on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling obfuscation on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling unpinned-images on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling anonymous-definition on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling unsound-condition on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling dependabot-execution on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling dependabot-cooldown on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling concurrency-limits on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling archived-uses on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling typosquat-uses on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling misfeature on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling secrets-outside-env on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling superfluous-actions on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling github-app on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling unpinned-tools on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling adhoc-packages on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling insecure-url-scheme on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling self-repository on file://./ignoredir/.github/workflows/c.yml
+DEBUG audit:audit{ident="dangerous-triggers" input=Workflow(file://./ignoredir/.github/workflows/c.yml)}: zizmor::audit: skipping: dangerous-triggers is disabled in config for group GroupID(".")
+ INFO audit: zizmor: 🌈 completed ./ignoredir/.github/workflows/c.yml
+DEBUG audit: zizmor: scheduling artipacked on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unsound-contains on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unsound-ternary on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling excessive-permissions on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling dangerous-triggers on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling use-trusted-publishing on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling template-injection on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling hardcoded-container-credentials on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling self-hosted-runner on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unpinned-uses on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling undocumented-permissions on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling insecure-commands on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling github-env on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling cache-poisoning on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling secrets-inherit on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling bot-conditions on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling overprovisioned-secrets on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unredacted-secrets on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling forbidden-uses on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling obfuscation on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unpinned-images on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling anonymous-definition on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unsound-condition on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling dependabot-execution on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling dependabot-cooldown on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling concurrency-limits on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling archived-uses on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling typosquat-uses on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling misfeature on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling secrets-outside-env on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling superfluous-actions on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling github-app on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling unpinned-tools on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling adhoc-packages on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling insecure-url-scheme on file://./sub/.github/workflows/clean.yml
+DEBUG audit: zizmor: scheduling self-repository on file://./sub/.github/workflows/clean.yml
+DEBUG audit:audit{ident="dangerous-triggers" input=Workflow(file://./sub/.github/workflows/clean.yml)}: zizmor::audit: skipping: dangerous-triggers is disabled in config for group GroupID(".")
+ INFO audit: zizmor: 🌈 completed ./sub/.github/workflows/clean.yml

@@ -47,14 +47,14 @@ dagger -m "./$MODULE" call scan-source --src "$probe" --fail-on NONE \
   export --path "$OUT"
 
 if ! jq -e '[.sarifReport.runs[]?
-      | select(.tool.driver.name | test("semgrep"; "i"))
+      | select(.tool.driver.name | test("opengrep"; "i"))
       | .results[]?
       | select(.ruleId | endswith("detected-aws-access-key-id-value"))] | length > 0' "$OUT" >/dev/null; then
-  echo "FAIL: semgrep did not report the probe key, so the redaction check below would prove nothing" >&2
+  echo "FAIL: opengrep did not report the probe key, so the redaction check below would prove nothing" >&2
   exit 1
 fi
 if ! jq -e --arg key "$key" 'tostring | contains($key) | not' "$OUT" >/dev/null; then
   echo "FAIL: the probe key survives into the evidence envelope" >&2
   exit 1
 fi
-echo "PASS: semgrep matched the probe key and it appears nowhere in the envelope"
+echo "PASS: opengrep matched the probe key and it appears nowhere in the envelope"

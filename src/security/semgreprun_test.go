@@ -6,18 +6,19 @@ import (
 )
 
 // TestSemgrepConfigFlagsRejectsAuto is the regression guard for the worst of the
-// silent false passes: the module's own default was "auto", semgrep refuses
-// --config auto while --metrics=off is set, and the old command turned that
-// exit-2 failure into an empty SARIF. SAST reported zero findings on every
-// default-configured consumer.
+// silent false passes: the module's own default was "auto", Semgrep OSS refused
+// --config auto while --metrics=off was set, and the old command turned that
+// exit-2 failure into an empty SARIF. Opengrep 2.0.0 exits 7 on it with zero
+// rules loaded, and a working "auto" would be a rule set the registry picks at
+// scan time, which the evidence cannot name.
 func TestSemgrepConfigFlagsRejectsAuto(t *testing.T) {
 	for _, in := range []string{"auto", " auto ", "p/security-audit,auto"} {
 		got, err := semgrepConfigFlags(in)
 		if err == nil {
 			t.Fatalf("semgrepConfigFlags(%q) = %v, want an error — auto scans nothing", in, got)
 		}
-		if !strings.Contains(err.Error(), "metrics") {
-			t.Errorf("error for %q should explain the metrics conflict, got: %v", in, err)
+		if !strings.Contains(err.Error(), "neither name nor reproduce") {
+			t.Errorf("error for %q should explain why a registry-chosen rule set is refused, got: %v", in, err)
 		}
 	}
 }
@@ -248,11 +249,50 @@ func TestTheSemgrepScriptAsksForTheAccounting(t *testing.T) {
 	}
 }
 
-func TestSemgrepScanDoesNotProbeForEngineUpdates(t *testing.T) {
-	// A pinned local scan must not spend its process budget on the optional
-	// update service. Keep this on the executable command, not in a comment.
-	if !strings.Contains(semgrepScript, "\nsemgrep scan --disable-version-check ") {
-		t.Fatal("semgrep scan no longer disables its optional version probe")
+// TestTheScanRunsOpengrepWithoutSemgrepOnlyFlags. Opengrep exits 2 on
+// --metrics and --disable-version-check rather than ignoring them, so carrying
+// either over from the Semgrep command line would turn every scan into a
+// non-run. Pinned on the executable command, not on a comment.
+func TestTheScanRunsOpengrepWithoutSemgrepOnlyFlags(t *testing.T) {
+	line := ""
+	for _, l := range strings.Split(semgrepScript, "\n") {
+		if strings.HasPrefix(l, opengrepBinPath+" scan ") {
+			line = l
+		}
+		// The verified file is the one that must run: a PATH lookup could
+		// resolve to any other opengrep the image happens to carry.
+		if strings.HasPrefix(strings.TrimSpace(l), "opengrep ") {
+			t.Errorf("the script runs opengrep by PATH lookup, not the verified %s: %s", opengrepBinPath, l)
+		}
+	}
+	if line == "" {
+		t.Fatalf("semgrepScript no longer runs %s scan:\n%s", opengrepBinPath, semgrepScript)
+	}
+	for _, refused := range []string{"--metrics", "--disable-version-check"} {
+		if strings.Contains(line, refused) {
+			t.Errorf("the scan command carries %s, which opengrep rejects: %s", refused, line)
+		}
+	}
+	if strings.Contains(semgrepScript, "\nsemgrep ") {
+		t.Error("semgrepScript still invokes a semgrep binary the scan image does not have")
+	}
+}
+
+// TestTheBinaryIsVerifiedBeforeAnythingRuns. The digest check must come
+// before the scan and before any helper, so no code from an unverified binary
+// ever executes, and a mismatch must stop the script with a non-run exit.
+func TestTheBinaryIsVerifiedBeforeAnythingRuns(t *testing.T) {
+	verify := strings.Index(semgrepScript, "cicd_check "+opengrepBinPath)
+	scan := strings.Index(semgrepScript, opengrepBinPath+" scan ")
+	helper := strings.Index(semgrepScript, "python3 ")
+	if verify < 0 || scan < 0 || helper < 0 {
+		t.Fatalf("script lost a step:\n%s", semgrepScript)
+	}
+	if verify > scan || verify > helper {
+		t.Error("the binary is checked after something already ran")
+	}
+	if !strings.Contains(semgrepScript, opengrepSHA256Env) {
+		t.Error("the script no longer compares against the pinned digest")
 	}
 }
 
@@ -261,11 +301,22 @@ func TestSemgrepScanDoesNotProbeForEngineUpdates(t *testing.T) {
 // state" rather than a stale count from an earlier layer.
 func TestTheScannedFileIsTruncatedBeforeTheScan(t *testing.T) {
 	truncate := strings.Index(semgrepScript, ": > /tmp/semgrep.scanned")
-	scan := strings.Index(semgrepScript, "semgrep scan ")
+	scan := strings.Index(semgrepScript, "opengrep scan ")
 	if truncate < 0 || scan < 0 {
 		t.Fatalf("script no longer has both steps:\n%s", semgrepScript)
 	}
 	if truncate > scan {
 		t.Error("the count file is truncated after the scan, so a dead scan can report a stale count")
+	}
+}
+
+// TestTheInlineHelperRunsTheVerifiedBinary. semgrep_inline.py starts its own
+// opengrep, so it must name the same absolute path opengrepVerifyScript
+// checked; a PATH lookup there would run an unverified engine on the inline
+// scripts while the ordinary pass ran the verified one.
+func TestTheInlineHelperRunsTheVerifiedBinary(t *testing.T) {
+	want := `ENGINE = "` + opengrepBinPath + `"`
+	if !strings.Contains(semgrepInlineScript, want) {
+		t.Fatalf("semgrep_inline.py no longer pins %s", want)
 	}
 }

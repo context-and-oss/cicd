@@ -1,0 +1,7 @@
+package main
+
+import "fmt"
+
+func E(id string) string {
+	return fmt.Sprintf("SELECT * FROM t WHERE id = %s", id)
+}

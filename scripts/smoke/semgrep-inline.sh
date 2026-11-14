@@ -44,7 +44,7 @@ column = len(line[:line.rfind('message')].encode('utf-16-le')) // 2 + 1
 assert module['locations'][0]['physicalLocation']['region']['startColumn'] == column
 assert 'inline-000' not in json.dumps(x), 'synthetic location escaped'
 assert not any('PARTIAL' in w for w in x.get('warnings', [])), x.get('warnings')
-source = next(s for s in x['sources'] if s['tool'] == 'semgrep')
+source = next(s for s in x['sources'] if s['tool'] == 'opengrep')
 assert source['findingsCount'] == 4 and source['rules']['count'] >= 726, source
 PY
 scan "$fixtures/unsafe" "$work/none.json" NONE
@@ -72,7 +72,7 @@ printf '%s\n' 'rules:' '  - id: custom-only' '    languages: [html]' '    messag
 dagger -m ./src/security call scan-source --src "$work/custom" --code-only \
   --sast-rulesets ./semgrep.yml --fail-on HIGH --commit-sha local --branch main \
   --repo-url https://example.com export --path "$work/custom.json"
-jq -e '.passed == true and .findingsCount == 0 and ([.sources[] | select(.tool == "semgrep")][0].rules.count == 1)' "$work/custom.json" >/dev/null
+jq -e '.passed == true and .findingsCount == 0 and ([.sources[] | select(.tool == "opengrep")][0].rules.count == 1)' "$work/custom.json" >/dev/null
 # The public composites must carry the same findings and fail the evidence gate.
 # No deployment or notification credentials are supplied.
 bash scripts/ci/dagger-develop.sh src/composites/commit

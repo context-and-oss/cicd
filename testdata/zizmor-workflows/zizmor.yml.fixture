@@ -1,0 +1,6 @@
+rules:
+  dangerous-triggers:
+    disable: true
+  artipacked:
+    ignore:
+      - inject.yml

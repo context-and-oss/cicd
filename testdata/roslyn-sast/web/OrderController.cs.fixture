@@ -1,0 +1,14 @@
+using Microsoft.AspNetCore.Mvc;
+
+namespace Fixture.Web;
+
+[ApiController]
+[Route("orders")]
+public class OrderController : ControllerBase
+{
+    [HttpGet("{name}")]
+    public string Get(string name)
+    {
+        return System.IO.File.ReadAllText("/data/orders/" + name);
+    }
+}

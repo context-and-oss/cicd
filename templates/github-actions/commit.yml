@@ -87,7 +87,7 @@ jobs:
       #
       # ─── source gate (all shapes) ─────────────────────────────────────
       # fail-on: HIGH
-      # The commit stage defaults to the heavy Semgrep pack
+      # The commit stage defaults to the heavy SAST pack
       # (p/security-audit,p/owasp-top-ten,p/secrets). Override or point at a
       # checked-in config; set empty to keep the composite default
       # (p/security-audit); "auto" is refused by the security module.

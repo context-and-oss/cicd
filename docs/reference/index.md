@@ -75,7 +75,7 @@ merge is fail-dominant. SBOMs appear under the envelope key
 | `commit.yml` | `platform` | — | container shape only: OCI platform the image is built for. Empty keeps the module default, `linux/amd64` |
 | `commit.yml` | `build-cmd` | — | consumer build command; required when `artifact=archive` |
 | `commit.yml` | `output-path` | — | artifact directory relative to src; required when `artifact=archive` |
-| `commit.yml` | `sast-rulesets`, `include`, `test-cmd`, `test-legs`, feeds | — | source-gate passthrough (heavy Semgrep pack by default) |
+| `commit.yml` | `sast-rulesets`, `include`, `test-cmd`, `test-legs`, feeds | — | source-gate passthrough (heavy SAST pack by default) |
 | `commit.yml` | `coverage-path` | empty | report written by `test-cmd`, e.g. `coverage/coverage-summary.json`; relative to the test working directory or absolute inside its container. With `test-legs`, use each leg's `coveragePath` instead; combining both is refused |
 | `commit.yml` | `coverage-gate` | empty | opt-in ratchet: empty fetches no baseline; `warn` or `gate` fetches one (see below). Other values fail the step |
 | `commit.yml` | `coverage-tolerance` | `1.0` | allowed pct-point drop; only used with `coverage-gate` |

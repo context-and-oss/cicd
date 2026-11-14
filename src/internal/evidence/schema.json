@@ -61,6 +61,11 @@
           "type": "integer",
           "minimum": 0,
           "description": "How many units existed in scope, when the tool knows. Absent when it cannot see its own denominator."
+        },
+        "partial": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many of the counted units the tool itself named as read only in part (a parser that gave up on a region, a rule that timed out). Findings there are a floor, not a verdict. Absent when the tool named none."
         }
       },
       "additionalProperties": false
@@ -365,7 +370,7 @@
       "properties": {
         "schemaVersion": {
           "type": "string",
-          "const": "1.7.0"
+          "const": "1.8.0"
         },
         "moduleName": {
           "type": "string"

@@ -1,0 +1,3 @@
+package main
+
+func D(s string) string { return E(s) }

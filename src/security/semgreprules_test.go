@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -96,7 +98,7 @@ func TestRuntimeRuleGenerationFailsBeforeTheScanner(t *testing.T) {
 	for _, selected := range []bool{false, true} {
 		t.Run(map[bool]string{false: "custom-only", true: "fallback-missing-source"}[selected], func(t *testing.T) {
 			root := t.TempDir()
-			rebase := strings.NewReplacer("/tmp/", root+"/tmp/", "/cicd-semgrep-pack/", root+"/pack/", "/cicd-rules/", root+"/rules/")
+			rebase := strings.NewReplacer("/tmp/", root+"/tmp/", "/cicd-semgrep-pack/", root+"/pack/", "/cicd-rules/", root+"/rules/", opengrepBinPath, root+"/bin/opengrep")
 			for _, d := range []string{"tmp", "pack", "bin"} {
 				if err := os.MkdirAll(filepath.Join(root, d), 0700); err != nil {
 					t.Fatal(err)
@@ -109,14 +111,29 @@ func TestRuntimeRuleGenerationFailsBeforeTheScanner(t *testing.T) {
 				}
 			}
 			write(rebase.Replace(semgrepGHAAdapterPath), semgrepGHAAdapter, 0600)
-			write(filepath.Join(root, "bin", "semgrep"), "#!/bin/sh\necho called > \"$SCAN_MARKER\"\nprintf '{\"runs\":[{}]}' > \"$TEST_REPORT\"\n", 0700)
+			engine := "#!/bin/sh\necho called > \"$SCAN_MARKER\"\nprintf '{\"runs\":[{}]}' > \"$TEST_REPORT\"\n"
+			write(filepath.Join(root, "bin", "opengrep"), engine, 0700)
+			// The verify step runs first and must pass for this test to reach
+			// rule generation: a stand-in engine and wheel, each with the
+			// digest the script is told to expect, and a python3 shim that
+			// answers the wheel install and hands everything else to the real
+			// interpreter the helpers need.
+			wheel := filepath.Join(root, "pyyaml.whl")
+			write(wheel, "stand-in wheel", 0600)
+			python, err := exec.LookPath("python3")
+			if err != nil {
+				t.Skip("python3 is required to run the rule adapter")
+			}
+			write(filepath.Join(root, "bin", "python3"), "#!/bin/sh\n[ \"$1 $2\" = \"-m pip\" ] && exit 0\nexec "+python+" \"$@\"\n", 0700)
+			digest := func(b string) string { h := sha256.Sum256([]byte(b)); return hex.EncodeToString(h[:]) }
 			write(filepath.Join(root, "tmp", "report.sarif"), "stale report", 0600)
 			config := "./consumer.yml"
 			if selected {
 				config = rebase.Replace(semgrepGHAFallbackPath)
 			}
 			cmd := exec.Command("sh", "-c", rebase.Replace(semgrepScript), "sh", "--config", config)
-			cmd.Env = append(os.Environ(), "PATH="+filepath.Join(root, "bin")+":"+os.Getenv("PATH"), "SCAN_MARKER="+filepath.Join(root, "called"), "TEST_REPORT="+filepath.Join(root, "tmp", "report.sarif"))
+			cmd.Env = append(os.Environ(), "PATH="+filepath.Join(root, "bin")+":"+os.Getenv("PATH"), "SCAN_MARKER="+filepath.Join(root, "called"), "TEST_REPORT="+filepath.Join(root, "tmp", "report.sarif"),
+				opengrepSHA256Env+"="+digest(engine), pyyamlSHA256Env+"="+digest("stand-in wheel"), pyyamlWheelEnv+"="+wheel)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("classification script: %v\n%s", err, out)
 			}

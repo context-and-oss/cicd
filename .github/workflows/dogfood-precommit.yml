@@ -197,6 +197,12 @@ jobs:
           # that emits sdk/log >= 0.21.0, because that is where it is fixed.
           # See CAPS-064.
           #
+          # CVE-2026-128085 is the fourth, and the first on otel core: sdk and
+          # trace v1.46.0 as well as sdk/log v0.16.0, fixed in 1.47.0. Core
+          # cannot reach 1.47.0 while CAPS-064's replace holds it, because
+          # 1.47.0 with the codegen's otel/log v0.16.0 is an import cycle, so
+          # its removal condition is that hold lifting. See CAPS-072.
+          #
           # ONE --vuln-accept flag holding BOTH acceptances, one per line. Two
           # flags is what this file shipped with and it did not work: Dagger
           # exposes a []string parameter as a pflag StringSlice, which CSV-parses
@@ -225,7 +231,8 @@ jobs:
             --require-intent \
             --vuln-accept "CVE-2026-39882=go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.16.0 is written into every module's go.mod by Dagger's codegen and reverted on every dagger develop, so cicd cannot pin the fix; the exporter talks to the Dagger engine's own telemetry endpoint on the runner, never to a peer a consumer controls, so a hostile OTLP endpoint means an already-compromised engine. Remove on a DAGGER_VERSION bump whose codegen emits otel >= 1.43.0.
             CVE-2026-81871=go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.16.0, same replace line and same codegen ownership as CVE-2026-39882, and the same runner-local telemetry endpoint. Remove on a DAGGER_VERSION bump whose codegen emits otel >= 1.43.0.
-            CVE-2026-81872=go.opentelemetry.io/otel/sdk/log v0.16.0, held by the same codegen replace line as CVE-2026-39882, so cicd cannot pin the fix; the busy-spin needs the export buffer full, and the only exporter is the Dagger engine's own runner-local telemetry endpoint, so the worst case is CPU burned inside one CI run with no data exposed. Remove on a DAGGER_VERSION bump whose codegen emits sdk/log >= 0.21.0." \
+            CVE-2026-81872=go.opentelemetry.io/otel/sdk/log v0.16.0, held by the same codegen replace line as CVE-2026-39882, so cicd cannot pin the fix; the busy-spin needs the export buffer full, and the only exporter is the Dagger engine's own runner-local telemetry endpoint, so the worst case is CPU burned inside one CI run with no data exposed. Remove on a DAGGER_VERSION bump whose codegen emits sdk/log >= 0.21.0.
+            CVE-2026-128085=go.opentelemetry.io/otel/sdk and otel/trace v1.46.0 and otel/sdk/log v0.16.0: core is held below v1.47.0 by the CAPS-064 replace because v1.47.0 forms an import cycle with the codegen's otel/log v0.16.0, and sdk/log by the codegen replace, so cicd cannot pin the fix; the SDK exports only to the Dagger engine's runner-local telemetry endpoint, so the worst case is memory or CPU burned inside one CI run with no data exposed. Remove when the CAPS-064 hold lifts and the codegen emits otel >= 1.47.0." \
             --commit-sha "$COMMIT_SHA" \
             --branch "$BRANCH_NAME" \
             --repo-url "$REPO_URL" \

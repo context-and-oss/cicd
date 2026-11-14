@@ -72,9 +72,10 @@ variables:
   DOCKERFILE: ""
   PLATFORM: ""
   # Optional plain variables:
-  #   SAST_RULESETS             — Semgrep rulesets (comma-separated, NO spaces).
+  #   SAST_RULESETS             — SAST rule packs (Opengrep, Semgrep rule syntax;
+  #                               comma-separated, NO spaces).
   #                               Defaults to the heavy commit pack below. Never
-  #                               set this empty — an empty ruleset is a Semgrep
+  #                               set this empty — an empty ruleset is a SAST
   #                               false-pass (see src/security/CLAUDE.md).
   #   NPM_FEED_URL              — Internal npm registry URL (dependency-vuln scan)
   #   NPM_FEED_ROUTING          — "npmrc" when the feed has no public upstream:
@@ -239,7 +240,7 @@ steps:
       # Shape- and config-dependent flags. Each variable is guarded against an
       # unexpanded ADO macro ('$('*) for when it is not defined at all.
       #   - --sast-rulesets is omitted when unset (never pass empty — that is a
-      #     Semgrep false-pass; see src/security/CLAUDE.md).
+      #     SAST false-pass; see src/security/CLAUDE.md).
       #   - archive shape adds --build-cmd/--output-path (+ optional
       #     --toolchain-image); other shapes must not pass them.
       #   - container shape adds the optional --dockerfile/--platform overrides;

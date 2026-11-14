@@ -71,7 +71,7 @@ on:
         type: string
         default: 'HIGH'
       sast-rulesets:
-        description: 'Semgrep rulesets for SAST, comma-separated, NO spaces. Defaults to the heavy commit-stage pack (p/security-audit,p/owasp-top-ten,p/secrets). May point at a checked-in semgrep config (e.g. "./security.yml"). Set to empty to keep the composite default (p/security-audit); "auto" is refused by the security module. A .semgrepignore at the repo root is honored automatically.'
+        description: 'SAST rule packs (Opengrep, Semgrep rule syntax), comma-separated, NO spaces. Defaults to the heavy commit-stage pack (p/security-audit,p/owasp-top-ten,p/secrets). May point at a checked-in Semgrep-syntax config (e.g. "./security.yml"). Set to empty to keep the composite default (p/security-audit); "auto" is refused by the security module. A .semgrepignore at the repo root is honored automatically.'
         required: false
         type: string
         default: 'p/security-audit,p/owasp-top-ten,p/secrets'
@@ -488,7 +488,7 @@ jobs:
         run: |
           # Optional flags are appended only when set — empty flags pollute the
           # call, and `--sast-rulesets ""` would override the composite default
-          # with no rules (semgrep silently reports zero findings — a false pass).
+          # with no rules (the SAST engine silently reports zero findings — a false pass).
           extra=(--parallelism "$PARALLELISM" --node-project-limit "$NODE_PROJECT_LIMIT")
           [[ -z "$PREPARE_CMD" ]] || extra+=(--prepare-cmd "$PREPARE_CMD")
           [[ -z "$PREPARE_LANGUAGE" ]] || extra+=(--prepare-language "$PREPARE_LANGUAGE")

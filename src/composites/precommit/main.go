@@ -32,7 +32,8 @@ func (m *Precommit) Run(
 	// Languages to include: go, node, python, dotnet (repeatable, optional).
 	// +optional
 	include []string,
-	// Semgrep rulesets for SAST (e.g. "p/security-audit,p/owasp-top-ten").
+	// SAST rulesets in Semgrep rule syntax, run by Opengrep
+	// (e.g. "p/security-audit,p/owasp-top-ten").
 	// "auto" is rejected by the security module — see security/CLAUDE.md.
 	// +default="p/security-audit"
 	sastRulesets string,

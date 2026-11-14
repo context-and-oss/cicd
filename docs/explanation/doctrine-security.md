@@ -183,30 +183,42 @@ was violated before the false-pass fixes:
   evidence that it ran. `semgrepRunError` treats anything but 0/1 as a non-scan,
   and an exit-zero report with no `runs` as a non-scan too.
 - **Read the part of the report where Semgrep says what it skipped.** An exit-0
-  Semgrep with well-formed `results` can still have rejected hundreds of files:
-  its parser writes one `runs[].invocations[].toolExecutionNotifications[]`
-  entry per file it could not parse (`descriptor.id: "Syntax error"`) and per
-  rule that ran out of time (`"Timeout"`), both level `warning`, and nothing
-  else in the document changes. A C# primary constructor rejected by Semgrep OSS 1.161.0's parser can
+  run of the SAST engine with well-formed `results` can still have rejected
+  hundreds of files: its parser writes one
+  `runs[].invocations[].toolExecutionNotifications[]` entry per file it could
+  not parse (`descriptor.id: "Syntax error"`) and per rule that ran out of time
+  (`"Timeout"`), both level `warning`, and nothing else in the document changes.
+  A C# primary constructor rejected by Semgrep OSS 1.161.0's parser could
   therefore sit beside a row saying `FINDINGS, warningsCount 0`, despite the
-  parser notifications in the attached document. `semgrepnotifications.go` classifies them into
-  one `warnings[]` line and the semgrep row's `warningsCount`. Three traps,
-  each measured against the pinned image: the notification has **no
-  `locations` array** — the path is only inside `message.text`, after
-  `Syntax error at line ` or `Timeout when running <rule> on `, with a trailing
-  colon; Semgrep **parses partially**, so a file it reported a syntax error for
-  can still carry findings, which is why the line says "a floor, not a
-  verdict" and never "zero findings"; and a file skipped for
+  parser notifications in the attached document. `semgrepnotifications.go`
+  classifies them into one `warnings[]` line and the SAST row's `warningsCount`.
+  The engine is now Opengrep, which emits the same notification shape, measured
+  on 2.0.0. Three traps: the notification has **no `locations` array** — the
+  path is only inside `message.text`, after `Syntax error at line ` or
+  `Timeout when running <rule> on `, with a trailing colon; the engine **parses
+  partially**, so a file it reported a syntax error for can still carry
+  findings, which is why the line says "a floor, not a verdict" and never "zero
+  findings" — and under Opengrep an unbalanced brace makes the rejected region
+  the whole file, so that floor can be zero; and a file skipped for
   `exceeded_size_limit` (1 MB default) appears **nowhere in the SARIF** — only
   in the JSON output's `paths.skipped`, and only with `--verbose`. It is a
   warning and not an error because the remedy is upstream's parser, not a
-  consumer commit, and `--fail-on NONE` cannot clear a non-run. See
+  consumer commit, and `--fail-on NONE` cannot clear a non-run. The files
+  named are also counted on the row as `Examined.partial`, which notify marks
+  `⚠️ partial scan` in the Outcome column. Semgrep OSS had two C# gaps outside
+  any count — `record` declarations skipped with **no notification at all**,
+  and C# 12–14 syntax a later release still rejected — which is why the engine
+  was swapped: [specs/swap-semgrep-for-opengrep.md](../../specs/swap-semgrep-for-opengrep.md).
+  Opengrep has a silent bound of its own: its taint fixpoint caps each dataflow
+  node at a fixed number of visits and skips it past that, reported nowhere, so
+  no count can disclose it. See
+  [specs/mark-a-partly-read-scan.md](../../specs/mark-a-partly-read-scan.md) and
   [A tool that ran on part of the input must not read as having run on all of it](doctrine.md#a-tool-that-ran-on-part-of-the-input-must-not-read-as-having-run-on-all-of-it).
 
 One measured notification now has a complete fallback rather than only a
 disclosure. `yaml.github-actions.security.gha-curl-pipe-shell.gha-curl-pipe-shell`
 uses a Bash `metavariable-pattern` over the whole `run:` scalar. Semgrep OSS
-1.161.0 **and** 1.162.0 reject valid `${{ ... }}` expressions, command
+1.161.0 **and** 1.162.0 rejected valid `${{ ... }}` expressions, command
 substitutions and multiline Markdown there. `runSemgrep` detects that exact
 rule name in the first pass's notification, reruns every caller-selected config
 with only that rule excluded, and adds a runtime-adapted YAML+regex equivalent.
@@ -217,10 +229,20 @@ successful rerun is the report that leaves the module; a warning says the
 substitution happened. Every other syntax notification keeps the ordinary
 partial-scan warning — cicd substitutes nothing it has not implemented and
 tested. Pinned packs plan the adaptation up front; live packs can trigger the
-compatibility rerun. The generated copy remains subject to the upstream
+compatibility rerun. Opengrep 2.0.0 parses the same run blocks without a
+notification and reports the upstream rule's findings on them (measured), so
+under the current engine the rerun does not fire; the detection stays because it
+is keyed on the engine's own notification and costs nothing when silent.
+Restoring the upstream rule to the pinned manifests is a rule-set change, not
+part of the engine swap. The generated copy remains subject to the upstream
 restrictive licence, not Apache-2.0; see [runtime rules licensing](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
 The integration fixture under `testdata/semgrep-github-actions` holds
-the three valid parser failures and two real curl-pipe-shell findings.
+the three valid parser failures and two real curl-pipe-shell findings. Its
+workflows are stored as `*.yml.fixture`, so neither GitHub nor zizmor reads
+them as this repository's own; `scripts/smoke/opengrep-github-actions.sh`
+materialises them into a git clone, which also proves the engine never sees
+the tree's `.git` (Opengrep lists a git project with `git ls-files`, and its
+image has no git).
 
 Trivy's vulnerability database is cached in the `cicd-trivy-db` volume
 (`trivyCachePath`/`trivyCacheVolume` in `images.go`) so the fixed scan does not
@@ -230,7 +252,7 @@ re-download it on every run.
 
 `Examined` answers "zero findings over how much?". A pattern scanner needs a
 second denominator: zero findings *with what*. The same consumer commit, pinned
-Semgrep image and `--sast-rulesets p/security-audit` produced sharply different
+Semgrep image (the engine at the time) and `--sast-rulesets p/security-audit` produced sharply different
 loaded-rule counts on subsequent scans, while both reports read zero findings
 over the same file count. The registry resolves a `p/` name at scan
 time, so cicd had pinned the engine and not the rules.
@@ -243,10 +265,10 @@ time, so cicd had pinned the engine and not the rules.
   `/<dir>/<stem>/` and passing `--config /<top>` reproduces the registry's ids,
   which is what lets the next rule be checked at all.
 - **Below the floor is a non-run.** Every manifest id must appear in the SARIF's
-  own loaded-rules list (case-insensitively; semgrep lowercases the path part of
+  own loaded-rules list (case-insensitively; the engine lowercases the path part of
   six of them). One missing id is `ran=false` at every threshold, never a
   smaller clean result. A scan that loaded no rules is a non-run, pinned or not.
-- **What is not pinned says so.** The semgrep row's `rules` records count,
+- **What is not pinned says so.** The SAST row's (`opengrep`) `rules` records count,
   per-language split, the pin, and every live registry pack; a live pack also
   adds an `UNPINNED RULES` warning. Trap: a consumer config *path* is not
   unpinned — it is versioned with the commit being scanned — and must not be
@@ -260,8 +282,8 @@ The default Semgrep scan counted an HTML evidence template as examined but did
 not apply JavaScript rules to its inline scripts. Separately, the page's JSON
 embedding test passed while evidence text became executable markup at a later
 `innerHTML` sink. The audit/OWASP defaults now include a first-party DOM-text
-rule and `semgrep_inline.py` analyses selected inline scripts in the same pinned
-image. Original selection/ignores, locations, rule membership, parser disclosures
+rule and `semgrep_inline.py` analyses selected inline scripts with the same
+pinned engine. Original selection/ignores, locations, rule membership, parser disclosures
 and source redaction remain part of the result. An internal inline-pass failure
 is a non-run, never a fallback to the ordinary scan's green report.
 
@@ -271,6 +293,99 @@ tag is named script. Custom sanitizer names are not evidence of escaping. The
 page itself now uses text-safe DOM construction, and HTML-only changes run full
 CI rather than a documentation exemption. Scope and regression checks:
 [scan-inline-javascript-as-code](../../specs/scan-inline-javascript-as-code.md).
+
+## A compiler-backed scan analysed only what the compiler saw
+
+The .NET security analyzers run inside the compiler, so the `roslyn-analyzers`
+leg has to build the consumer's projects. A build's exit status is the wrong
+witness both ways. A build can fail after the compile, when the analysis has
+already run. A compile can also be skipped (up to date) or fail before the
+analyzers start, so the build reports success or failure with no analysis
+behind it. The witness is the analyzer log. A project is analysed when one of
+its compile logs ran at least one enabled security rule. A compile that
+reported a compiler error was analysed over an incomplete program and is
+partial. Projects to build with no log from any of them is a non-run.
+
+Three further doors, each closed in `roslyn.go`:
+
+- **A project cicd cannot build is named, not dropped.** Legacy, MAUI and
+  workload-only projects stay in `Examined.Total` with a reason. A tree of
+  nothing else is skipped, not failed: the consumer cannot clear an error there.
+- **The repository's configuration may switch a rule off, not grade it.** A
+  disabled security rule is a disclosed `NARROWED RULES` line. The severity
+  comes from cicd's table by rule id, never from the level the repository's
+  `.editorconfig` set.
+- **Only the tree's own code is reported.** Locations outside the scanned
+  tree or under `bin/` and `obj/` are dropped and counted. No container path
+  reaches the envelope.
+
+Trap: the consumer's MSBuild runs in the scan and could rewrite the log. An
+absent log reads as not analysed; a forged one cannot be told apart. A gate
+over code the consumer controls cannot close that.
+Spec: [analyse-dotnet-with-roslyn](../../specs/analyse-dotnet-with-roslyn.md).
+
+## A workflow zizmor could not parse is not a workflow it audited
+
+`zizmor` audits workflows, composite actions and Dependabot files. A file it
+cannot parse is a WARN on stderr and the run still exits 0 with no finding for
+it, so the SARIF alone reads a broken workflow exactly like a clean one. The
+witness is zizmor's own verbose log: every input it registers and every input
+it completes. Registered minus completed is the set not audited, named in a
+`PARTIAL SCAN` warning; registered and none completed is a non-run. No input
+registered at all (exit 3) is no row: a tree with no workflows has nothing to
+audit, and the consumer cannot clear an error there.
+
+Three further doors, each closed in `zizmor.go`:
+
+- **The offline narrowing is named.** The scan runs `--offline`, so the audits
+  that ask GitHub's API do not run. `NARROWED AUDITS` lists them from zizmor's
+  log line, never from a list cicd keeps.
+- **An ignore comment or `zizmor.yml` is disclosed, not trusted.** A second run
+  with `--no-config --no-ignores` is the shadow; a finding only it has goes
+  back in as an accepted suppression, uncounted, and is named in a warning.
+  The same rule as the gitleaks shadow.
+- **One grade is cicd's.** zizmor rates `unpinned-uses` High for every action
+  referenced by tag, which is nearly every consumer's workflow on day one. A
+  gate the consumer cannot clear gets switched off, so cicd grades it MEDIUM.
+  Every other audit keeps zizmor's severity.
+
+Trap: zizmor does not read `.semgrepignore` and has no path exclusion. A
+directory of deliberately unsafe workflows is excluded through `exclude`,
+which the evidence names, or stored under a name zizmor does not collect, as
+this repository's fixtures are.
+Spec: [audit-github-actions-with-zizmor](../../specs/audit-github-actions-with-zizmor.md).
+
+## A taint search that stopped at its depth is not one that followed every call
+
+`ScanTaint` runs Opengrep's interfile analysis, which follows a source through
+calls into other functions and files, but only so many calls deep. Past that
+depth the engine stops and reports nothing about the chain it did not follow,
+so a five-call path from a request parameter to SQL reads exactly like code
+with no such path. The witness is Opengrep's own notification: a
+`SemgrepWarning` naming the rule and the depth. cicd turns it into a
+`DEPTH CAPPED` warning naming each rule, and `--interfile-depth=-1` removes
+the limit. A rule whose interfile budget ran out names no file, because the
+analysis spans every file; it is a `PARTIAL SCAN` over the whole program, not
+a file read in part.
+
+Three further doors, each closed in `taint.go`:
+
+- **Advisory is a threshold, not an exemption.** Warn mode lowers the
+  effective threshold to `NONE`, as `ScanLicenses` does, so it passes over
+  findings and never over a run that did not complete. An engine killed for
+  memory (exit 137, named as such) is an error at every setting.
+- **One defect is counted once.** The same rules run without interfile
+  analysis, and only what the interfile run adds is reported, by a multiset on
+  (rule, file, line, column); `ScanSource` already reports the rest. A failed
+  baseline is an error, and the unfiltered findings are kept beside it rather
+  than dropped.
+- **A depth Opengrep cannot parse is a non-run, not a deeper search.**
+  `--interfile-depth -1` as two arguments is an unknown option to Opengrep's
+  parser and exits 2; cicd passes `--interfile-depth=N` as one.
+
+Trap: no pinned C# rule is marked interfile upstream, so the step adds nothing
+for C#, and every run says so. Cross-method flow in .NET is the Roslyn leg's.
+Spec: [report-cross-file-taint-as-advice](../../specs/report-cross-file-taint-as-advice.md).
 
 ## A dependency scan that resolved nothing is not a clean dependency scan
 
@@ -1135,13 +1250,13 @@ believed the count.
 
 ## Semgrep's matched source never reaches the envelope
 
-semgrep copies the matched line into every result (`region.snippet.text`), and
+The SAST engine (Semgrep then, Opengrep now) copies the matched line into every result (`region.snippet.text`), and
 the `generic.secrets.*` rules in the default `p/security-audit` match exactly
 the line holding a credential — so the key `--redact` kept out of the secrets
 leg arrived through SAST. `redactSemgrepSARIF` rewrites every report in
 `runSemgrepOnce` before anything reads it: snippets at any depth and `fixes`
 are removed, and the result message is replaced with the rule's declared
-message, because semgrep interpolates metavariables and
+message, because the engine interpolates metavariables and
 `secrets-in-config-file` puts the secret in `$VALUE`. ruleId, location,
 suppressions, fingerprints, the rule catalogue and the notifications stay. A
 report it cannot read is an error, never passed through.
@@ -1156,7 +1271,7 @@ single-quoted rule id stay. Greedy, because source can hold backticks.
 Trap: a fixture cannot prove this. The AWS rule refuses any match containing
 `example`, `sample`, `test` or `fake`, which every committed credential carries.
 `scripts/smoke/semgrep-redaction.sh` assembles its probe key at run time and
-asserts semgrep matched it before asserting it is absent. See
+asserts the engine matched it before asserting it is absent. See
 [specs/redact-semgrep-snippets.md](../../specs/redact-semgrep-snippets.md).
 
 ## A secrets scan withholds who committed, not only what

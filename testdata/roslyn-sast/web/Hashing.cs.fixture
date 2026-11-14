@@ -1,0 +1,14 @@
+using System.Security.Cryptography;
+
+namespace Fixture.Web;
+
+public static class Hashing
+{
+    public static byte[] Weak(byte[] data) => SHA1.HashData(data);
+
+#pragma warning disable CA5351 // fixture: an accepted suppression the evidence must disclose
+    public static byte[] Legacy(byte[] data) => MD5.HashData(data);
+#pragma warning restore CA5351
+
+    public static int Jitter() => new Random().Next();
+}

@@ -1,0 +1,28 @@
+package app;
+
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+public class Controller {
+    private final Repo repo = new Repo();
+
+    @GetMapping("/same")
+    public String same(@RequestParam String id) {
+        String q = "SELECT * FROM users WHERE id = " + id;
+        return q;
+    }
+
+    @GetMapping("/local")
+    public String local(@RequestParam String id) {
+        return localQuery(id);
+    }
+
+    private String localQuery(String id) {
+        return "SELECT * FROM orders WHERE id = " + id;
+    }
+
+    @GetMapping("/cross")
+    public String cross(@RequestParam String id) {
+        return repo.buildQuery(id);
+    }
+}

@@ -16,7 +16,7 @@ app boundaries and check legs rather than repository-wide discovery; its depende
 vulnerability, dependency licence and SBOM assessments are currently deferred.
 Do not interpret its passing result as repository-wide or dependency assurance.
 
-Both pipelines run Semgrep with default rules fetched at run time from
+Both pipelines run Opengrep (the SAST engine) with default rules fetched at run time from
 `semgrep/semgrep-rules`, which are under the **Semgrep Rules License v1.0**,
 not Apache-2.0 — internal business use only, no redistribution, no offering
 them as a service. If that does not fit your use, pass your own suitably
