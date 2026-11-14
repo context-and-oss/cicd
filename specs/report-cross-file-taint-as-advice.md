@@ -6,7 +6,9 @@
 parameter handed to a helper, in the same file or another, and concatenated
 into SQL there is not found. Hosted code-scanning products that follow data
 across the whole program find it, so a consumer replacing one with cicd loses
-that finding class unless cicd follows it too.
+that finding class unless cicd follows it too. It is a separate advisory entry
+rather than a flag on `ScanSource` because the interfile pass costs more than
+a merge gate should pay by default (measured below).
 
 Opengrep 2.0.0 has an interfile mode (`--enable-interfile`) that does. In the
 pinned semgrep-rules commit, 27 of the audit and OWASP rules carry

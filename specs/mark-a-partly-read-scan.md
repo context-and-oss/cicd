@@ -7,8 +7,8 @@ A SAST row whose parser rejected part of the tree must not render as
 repository showed exactly that: the parser had rejected a large share of the
 files, the disclosure was one `warnings[]` line, and the row the reader scanned
 said clean. The partial scan stays a **warning**, not an error or a new
-Outcome. A permanent red over a parser the consumer does not control gets SAST
-switched off along with its findings
+Outcome, because a permanent red over a parser the consumer does not control
+gets SAST switched off along with its findings
 ([doctrine](../docs/explanation/doctrine.md#a-tool-that-ran-on-part-of-the-input-must-not-read-as-having-run-on-all-of-it)).
 
 The same change removes a remedy the warning promised without measurement.
