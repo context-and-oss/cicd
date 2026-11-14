@@ -73,10 +73,10 @@ jobs:
     #   npm-feed-routing: npmrc   # feed without a public upstream; .npmrc routes scopes
     #   nuget-feed-url: https://nuget.internal.example.com
     #
-    #   # ── SAST ruleset curation (Semgrep) ──
+    #   # ── SAST ruleset curation (Opengrep, Semgrep rule syntax) ──
     #   # Default is p/security-audit; "auto" is refused by the security module.
     #   # Pass comma-separated packs (NO spaces), or point at a checked-in
-    #   # semgrep config to make it the single source of truth:
+    #   # Semgrep-syntax config to make it the single source of truth:
     #   sast-rulesets: p/security-audit,p/secrets,p/typescript
     #   #   sast-rulesets: ./security.yml
     #   # To exclude specific files/paths from scanning, commit a

@@ -80,13 +80,13 @@ has no gate step and needs the snippet above.
 
 ## Tuning SAST scope
 
-`--sast-rulesets` (default `p/security-audit`; `auto` is refused by the security module) controls Semgrep. To cut false positives
+`--sast-rulesets` (default `p/security-audit`; `auto` is refused by the security module) controls SAST (Opengrep, Semgrep rule syntax). To cut false positives
 on legacy/vendored/POC files, either curate the rulesets or point at your own config:
 
 ```bash
 # comma-separated, NO spaces
 --sast-rulesets p/security-audit,p/secrets,p/typescript
-# or make your checked-in semgrep config the single source of truth
+# or make your checked-in Semgrep-syntax config the single source of truth
 --sast-rulesets ./security.yml
 ```
 

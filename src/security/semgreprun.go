@@ -12,15 +12,29 @@ import (
 	"strings"
 )
 
+// semgrepScan is one SAST scan's result. Declared here, untagged, so the
+// code that reads two of them (taint.go) is reachable from a unit test.
+type semgrepScan struct {
+	SARIF      json.RawMessage
+	BySeverity map[Severity]int
+	Examined   *Examined
+	Rules      *RuleSet
+	// Warnings are non-fatal disclosures about the rule set: the compatibility
+	// rerun, and any registry pack fetched live.
+	Warnings []string
+}
+
 // defaultSastRulesets is the ruleset list used when a consumer names none.
 //
-// It is deliberately *not* semgrep's "auto". `semgrep scan --config auto`
-// refuses to run when telemetry is disabled — "Cannot create auto config when
-// metrics are off", exit 2, no report written — and every scanner cicd runs
-// carries --metrics=off so a client's source tree is never reported to a third
-// party. The two are mutually exclusive, so "auto" could only ever yield an
-// empty report. Do not restore it as the default: semgrepConfigFlags rejects it
-// outright rather than let it silently scan nothing.
+// It is deliberately *not* "auto". Under Semgrep OSS, `--config auto` refused
+// to run while telemetry was off, and the old default turned that exit 2 into
+// an empty report that passed the gate. Opengrep 2.0.0 fails it differently,
+// measured: exit 7, the registry's answer rejected as invalid YAML, and a SARIF
+// whose invocation still says executionSuccessful with zero rules loaded. And
+// were it to work, "auto" is a rule set the registry chooses at scan time,
+// which the evidence could neither name before the scan nor reproduce on a
+// rerun. semgrepConfigFlags rejects it outright; name packs, or a config path
+// in the scanned tree.
 const defaultSastRulesets = "p/security-audit"
 
 // semgrepConfigFlags turns a comma-separated ruleset list into semgrep --config
@@ -42,8 +56,8 @@ func semgrepConfigFlags(rulesets string) ([]string, error) {
 			continue
 		}
 		if r == "auto" {
-			return nil, errors.New(`semgrep: --sast-rulesets "auto" cannot be used: ` +
-				`semgrep refuses --config auto while telemetry is off, and cicd always runs with --metrics=off. ` +
+			return nil, errors.New(`opengrep: --sast-rulesets "auto" cannot be used: ` +
+				`it asks the registry to choose the rules at scan time, so the evidence could neither name nor reproduce the rule set that ran. ` +
 				`Name explicit packs (e.g. "` + defaultSastRulesets + `,p/owasp-top-ten") or a config path in the scanned tree (e.g. "./semgrep.yml")`)
 		}
 		if err := validateSemgrepConfig(r); err != nil {
@@ -52,7 +66,7 @@ func semgrepConfigFlags(rulesets string) ([]string, error) {
 		out = append(out, "--config", r)
 	}
 	if len(out) == 0 {
-		return nil, errors.New(`semgrep: --sast-rulesets resolved to no configs; ` +
+		return nil, errors.New(`opengrep: --sast-rulesets resolved to no configs; ` +
 			`semgrep would scan with no rules and report zero findings. ` +
 			`Omit the flag to use "` + defaultSastRulesets + `" rather than passing an empty value`)
 	}
@@ -69,12 +83,12 @@ func validateSemgrepConfig(r string) error {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
 		case c == '/', c == '.', c == '-', c == '_':
 		default:
-			return errors.New("semgrep: invalid ruleset " + strconv.Quote(r) +
+			return errors.New("opengrep: invalid ruleset " + strconv.Quote(r) +
 				": expected a registry id (e.g. p/security-audit) or a relative config path (e.g. ./semgrep.yml)")
 		}
 	}
 	if strings.HasPrefix(r, "/") {
-		return errors.New("semgrep: invalid ruleset " + strconv.Quote(r) +
+		return errors.New("opengrep: invalid ruleset " + strconv.Quote(r) +
 			": a config path must be relative to the scanned tree")
 	}
 	return nil
@@ -98,9 +112,9 @@ func semgrepRunError(exitCode, stderr, report string) string {
 	n, err := strconv.Atoi(code)
 	switch {
 	case err != nil:
-		return "semgrep: unreadable exit status " + strconv.Quote(code)
+		return "opengrep: unreadable exit status " + strconv.Quote(code)
 	case n != 0 && n != 1:
-		msg := "semgrep: did not run (exit " + code + ")"
+		msg := "opengrep: did not run (exit " + code + ")"
 		if s := lastNonEmptyLine(stderr); s != "" {
 			msg += ": " + s
 		}
@@ -108,16 +122,16 @@ func semgrepRunError(exitCode, stderr, report string) string {
 	}
 
 	if strings.TrimSpace(report) == "" {
-		return "semgrep: exited " + code + " but wrote no report"
+		return "opengrep: exited " + code + " but wrote no report"
 	}
 	var doc struct {
 		Runs []json.RawMessage `json:"runs"`
 	}
 	if err := json.Unmarshal([]byte(report), &doc); err != nil {
-		return "semgrep: report is not valid SARIF: " + err.Error()
+		return "opengrep: report is not valid SARIF: " + err.Error()
 	}
 	if len(doc.Runs) == 0 {
-		msg := "semgrep: exited " + code + " but reported no scan runs, so no rules were applied"
+		msg := "opengrep: exited " + code + " but reported no scan runs, so no rules were applied"
 		if s := lastNonEmptyLine(stderr); s != "" {
 			msg += ": " + s
 		}
@@ -174,7 +188,7 @@ func lastNonEmptyLine(s string) string {
 // semgrepPackErrPath says. semgrepRuleSet checks the loaded rules afterwards
 // as well; this step only makes the first failure the one that is named.
 const semgrepScript = `set -u
-: > /tmp/semgrep.err
+` + opengrepVerifyScript + `: > /tmp/semgrep.err
 : > /tmp/semgrep.scanned
 : > ` + semgrepPackErrPath + `
 if [ -f ` + semgrepPackFiles + ` ]; then
@@ -204,8 +218,10 @@ if [ -s ` + semgrepPackErrPath + ` ]; then
   : > /tmp/report.sarif
   exit 0
 fi
-# The engine is pinned; optional update-service retries must not consume scan time.
-semgrep scan --disable-version-check --sarif-output=/tmp/report.sarif --json-output=/tmp/report.json --metrics=off "$@" . >/tmp/semgrep.out 2>/tmp/semgrep.err
+# Opengrep has no telemetry and no version check, and refuses Semgrep's
+# --metrics and --disable-version-check flags rather than ignoring them. Called
+# by the absolute path opengrepVerifyScript checked, never by PATH lookup.
+` + opengrepBinPath + ` scan --sarif-output=/tmp/report.sarif --json-output=/tmp/report.json "$@" . >/tmp/semgrep.out 2>/tmp/semgrep.err
 code=$?
 echo "$code" > /tmp/semgrep.exit
 [ -f /tmp/report.sarif ] || : > /tmp/report.sarif
@@ -223,7 +239,7 @@ exit 0`
 // denominator a zero finding count needs.
 //
 // Semgrep's SARIF says nothing about scope. It lists what was found and stops,
-// so "semgrep: 0 findings" has meant either "it read every file in the
+// so "opengrep: 0 findings" has meant either "it read every file in the
 // repository and there is nothing" or "it matched no targets at all" — and the
 // report rendered both as the reassuring one. Semgrep's JSON output does carry
 // it, under paths.scanned, and one scan emits both formats, so this costs a

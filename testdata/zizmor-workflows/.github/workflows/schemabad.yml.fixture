@@ -1,0 +1,6 @@
+name: schemabad
+on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    stepz: []

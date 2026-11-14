@@ -76,7 +76,7 @@ func TestSemgrepNotificationsRealCapture(t *testing.T) {
 		t.Errorf("the warning quotes the source the parser rejected:\n%s", w)
 	}
 	for _, want := range []string{
-		"semgrep: PARTIAL SCAN — ",
+		"opengrep: PARTIAL SCAN — ",
 		"2 file(s) could not be fully parsed",
 		"C#: 2",
 		"Broken.cs, Primary.cs",
@@ -86,8 +86,7 @@ func TestSemgrepNotificationsRealCapture(t *testing.T) {
 		"floor, not a verdict",
 		"not a clean one",
 		"First parser message: Broken.cs:3 [source withheld] was unexpected.",
-		"Semgrep OSS " + semgrepVersion,
-		"primary constructors",
+		"Opengrep " + opengrepVersion + " skips the region",
 	} {
 		if !strings.Contains(w, want) {
 			t.Errorf("warning lacks %q:\n%s", want, w)
@@ -101,27 +100,22 @@ func TestSemgrepNotificationsRealCapture(t *testing.T) {
 	}
 }
 
-func TestSemgrepFixpointTimeoutIsVisiblePartialCoverage(t *testing.T) {
+// TestAnUnmeasuredConvergenceNoticeStillReadsAsPartial pins the fail-safe
+// that replaced the fixpoint branch. Opengrep 2.0.0 emits no taint-convergence
+// notice at all, so cicd has no descriptor for one; an engine that starts
+// emitting one must land in the unclassified bucket and still read as a
+// partial scan, never as nothing said.
+func TestAnUnmeasuredConvergenceNoticeStillReadsAsPartial(t *testing.T) {
 	raw := sarifWithNotifications(
 		`{"descriptor":{"id":"Fixpoint timeout"},"level":"warning","message":{"text":"raw diagnostic text must not be quoted"},"locations":[{"physicalLocation":{"artifactLocation":{"uri":"pages/panel.html"}}}]}`,
-		`{"descriptor":{"id":"Fixpoint timeout"},"level":"warning"}`,
 	)
 	warnings := semgrepNotificationWarnings(raw)
-	if len(warnings) != 1 {
-		t.Fatalf("want one partial warning, got %v", warnings)
-	}
-	for _, want := range []string{"2 taint fixpoint timeout(s)", "1 file(s)", "pages/panel.html", "1 naming no file", "floor, not a complete verdict"} {
-		if !strings.Contains(warnings[0], want) {
-			t.Errorf("missing %q in %q", want, warnings[0])
-		}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "PARTIAL SCAN") ||
+		!strings.Contains(warnings[0], "could not classify (id(s): Fixpoint timeout)") {
+		t.Fatalf("want one partial warning naming the unclassified id, got %v", warnings)
 	}
 	if strings.Contains(warnings[0], "raw diagnostic") {
 		t.Fatal("diagnostic source was copied into the warning")
-	}
-	errorNotice := sarifWithNotifications(`{"descriptor":{"id":"Fixpoint timeout"},"level":"error"}`)
-	notices := parseSemgrepNotifications(errorNotice)
-	if notices.FixpointTimeouts != 0 || len(notices.ErrorLevel) != 1 {
-		t.Fatal("an error-level diagnostic was demoted to a partial warning")
 	}
 }
 
@@ -185,7 +179,7 @@ func TestSemgrepNotificationsMalformedAreCountedNotDropped(t *testing.T) {
 	for _, want := range []string{
 		"0 file(s) could not be fully parsed across 2 syntax error(s), 2 of which named no file cicd could read",
 		"1 rule timeout(s) hit 0 file(s), 1 naming no file",
-		"1 error-level notification(s) semgrep raised (id(s): Rule error)",
+		"1 error-level notification(s) opengrep raised (id(s): Rule error)",
 		"4 notification(s) cicd could not classify (id(s): unnamed, Odd)",
 	} {
 		if !strings.Contains(w[0], want) {
@@ -260,16 +254,60 @@ func TestSemgrepNotificationsLanguageSplit(t *testing.T) {
 	if !strings.Contains(w, "(C#: 2, .zig: 1, Dockerfile: 1, TypeScript: 1, no extension: 1 — ") {
 		t.Errorf("language split wrong or unordered:\n%s", w)
 	}
-	if !strings.Contains(w, "primary constructors") {
-		t.Errorf("C# present, so the measured C# remedy must be named:\n%s", w)
-	}
 
 	w = semgrepNotificationWarnings(sarifWithNotifications(syntaxNote("web/app.ts", 1, "x")))[0]
-	if strings.Contains(w, "primary constructors") || strings.Contains(w, "C#") {
-		t.Errorf("no C# file, so no C# remedy:\n%s", w)
+	if strings.Contains(w, "C#") {
+		t.Errorf("no C# file, so no C# in the split:\n%s", w)
 	}
-	if !strings.Contains(w, "a newer semgrep or the Pro engine may accept the construct at the line it names") {
-		t.Errorf("the generic remedy must still be there:\n%s", w)
+	if !strings.Contains(w, "Opengrep "+opengrepVersion+" skips the region its parser rejects") {
+		t.Errorf("the generic parse-failure clause must still be there:\n%s", w)
+	}
+	// Measured: an unbalanced brace widens the skipped span to the whole file
+	// and the file yields no findings. A clause naming only the local case
+	// would promise the rest of the file was read when it may not have been.
+	if !strings.Contains(w, "the whole file") {
+		t.Errorf("the parse-failure clause must name the whole-file case:\n%s", w)
+	}
+	// The old hint promised a remedy nobody measured; a later OSS release was
+	// measured and rejected the same files. It must not come back.
+	if strings.Contains(w, "Pro engine") || strings.Contains(w, "may accept the construct") {
+		t.Errorf("the warning promises an unmeasured remedy:\n%s", w)
+	}
+}
+
+// TestTheParseWarningDoesNotDescribeSemgrepsGaps. The C# clause written for
+// Semgrep OSS named constructs the pinned Opengrep parses; printing it would
+// send a reader hunting a gap the engine that ran does not have, and the
+// "no newer release" line would deny the remedy that was in fact taken.
+func TestTheParseWarningDoesNotDescribeSemgrepsGaps(t *testing.T) {
+	w := semgrepNotificationWarnings(sarifWithNotifications(syntaxNote("api/A.cs", 1, "y")))[0]
+	for _, stale := range []string{"Semgrep OSS", "primary constructors", "record declarations", "no newer"} {
+		if strings.Contains(w, stale) {
+			t.Errorf("the warning still carries the Semgrep-era claim %q:\n%s", stale, w)
+		}
+	}
+	if !strings.Contains(w, "Opengrep "+opengrepVersion) {
+		t.Errorf("the warning must name the engine that ran:\n%s", w)
+	}
+}
+
+// TestSemgrepNoticesPartialFiles. Examined.Partial counts distinct NAMED files
+// across every partial-read kind — a file that failed to parse and also timed
+// out is one partly-read file, not two — and never counts an unnamed notice.
+func TestSemgrepNoticesPartialFiles(t *testing.T) {
+	n := parseSemgrepNotifications(sarifWithNotifications(
+		syntaxNote("api/A.cs", 1, "x"),
+		syntaxNote("api/A.cs", 9, "x"),
+		syntaxNote("api/B.cs", 1, "y"),
+		`{"descriptor":{"id":"Timeout"},"level":"warning","message":{"text":"Timeout when running r.one on api/A.cs:\n "}}`,
+		`{"descriptor":{"id":"Timeout"},"level":"warning","message":{"text":"Timeout when running r.one on api/C.cs:\n "}}`,
+		`{"descriptor":{"id":"Timeout"},"level":"warning","message":{"text":"Timeout when running r.two"}}`,
+	))
+	if got := n.partialFiles(); got != 3 {
+		t.Errorf("partialFiles = %d, want 3 (A, B, C — A once despite three notices)", got)
+	}
+	if got := (semgrepNotices{}).partialFiles(); got != 0 {
+		t.Errorf("no notices must be partial 0, got %d", got)
 	}
 }
 
@@ -284,10 +322,10 @@ func TestSemgrepNotificationsTimeoutOnlyIsStillAWarning(t *testing.T) {
 	if len(w) != 1 {
 		t.Fatalf("want one warning, got %v", w)
 	}
-	if !strings.Contains(w[0], "semgrep: PARTIAL SCAN — 3 rule timeout(s) hit 2 file(s) (X.cs, Y.cs; rules: r.one, r.two).") {
+	if !strings.Contains(w[0], "opengrep: PARTIAL SCAN — 3 rule timeout(s) hit 2 file(s) (X.cs, Y.cs; rules: r.one, r.two).") {
 		t.Errorf("timeout-only wording:\n%s", w[0])
 	}
-	if strings.Contains(w[0], "could not be fully parsed") || strings.Contains(w[0], "Semgrep OSS "+semgrepVersion+" skips") {
+	if strings.Contains(w[0], "could not be fully parsed") || strings.Contains(w[0], "skips the region") {
 		t.Errorf("no parse failure, so no parse-failure clauses:\n%s", w[0])
 	}
 	if !strings.Contains(w[0], "floor, not a verdict") {

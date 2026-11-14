@@ -1,6 +1,6 @@
 # security
 
-Runs SAST (Semgrep), secrets detection (Gitleaks/TruffleHog), vulnerability scanning (Trivy),
+Runs SAST (Opengrep, reading Semgrep-format rules), secrets detection (Gitleaks/TruffleHog), vulnerability scanning (Trivy),
 and dynamic analysis (OWASP ZAP) on source code, container images, or live web targets.
 Returns an evidence envelope.
 
@@ -11,8 +11,66 @@ Returns an evidence envelope.
 > business use only, no redistribution, not to be offered to others as a
 > service. A hosted or redistributed use needs a suitable licence from Semgrep,
 > or your own suitably licensed rules via `--sast-rulesets ./your-config.yml`,
-> which replaces the pinned packs and still fails the gate if Semgrep could not
-> scan. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+> which replaces the pinned packs and still fails the gate if the engine could
+> not scan. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
+
+> **The SAST engine is Opengrep.** It replaced Semgrep OSS, which rejected
+> C# 12 primary constructors and C# 14 null-conditional assignment and skipped
+> `record` declarations without saying so. Opengrep (LGPL-2.1) is downloaded
+> unmodified from its release page at run time and verified against a pinned
+> sha256 before it runs. When upgrading, note:
+>
+> - the SAST tool row and message prefixes say `opengrep`, not `semgrep` — a
+>   filter or query keyed on the old name matches nothing;
+> - a C# tree can gain two true positives Semgrep OSS could not find (ECB mode,
+>   MEDIUM; a key from a non-cryptographic RNG, HIGH), so a scan green at the
+>   default `--fail-on HIGH` can go red over code that was always vulnerable;
+> - a file with an unbalanced brace now yields nothing and is reported as
+>   partly read, and intrafile taint through long loop-carried chains is
+>   bounded without notice.
+>
+> Details: [specs/swap-semgrep-for-opengrep.md](../../specs/swap-semgrep-for-opengrep.md).
+
+> **A .NET tree gets a second SAST engine.** When the tree holds a C#, VB or
+> F# project, `scan-source` (including `--code-only`) builds each C#/VB project
+> in the pinned .NET SDK with its bundled security analyzers switched on. The
+> result is a separate `roslyn-analyzers` row and SARIF run, which can see
+> across method calls in a way a pattern rule cannot. When upgrading, note:
+>
+> - **the scan now runs `dotnet build`**, so it executes your MSBuild logic and
+>   costs a restore and a compile per project;
+> - **cicd sets the severity by rule id.** Injection dataflow (CA3001–CA3012),
+>   insecure deserializers and disabled certificate validation are HIGH, and
+>   every other security rule is MEDIUM. Your `.editorconfig` cannot downgrade
+>   a finding;
+> - **switching a security rule off is disclosed as `NARROWED RULES`**, and a
+>   `#pragma` or `[SuppressMessage]` is disclosed as a suppression;
+> - **legacy (non-SDK), MAUI and workload-only projects are not built.** They
+>   are counted and named, never silently skipped;
+> - **`.semgrepignore` does not scope this leg.** For a directory of
+>   intentionally vulnerable samples, switch the `Security` category off in
+>   that directory's `.editorconfig`.
+>
+> Details: [specs/analyse-dotnet-with-roslyn.md](../../specs/analyse-dotnet-with-roslyn.md).
+
+> **GitHub Actions workflows get their own auditor.** When the tree holds
+> workflows, composite actions or a Dependabot file, `scan-source` (including
+> `--code-only`) runs [zizmor](https://github.com/zizmorcore/zizmor) offline
+> over them. The result is a separate `zizmor` row and SARIF run. When
+> upgrading, note:
+>
+> - **template injection, `pull_request_target` misuse and similar audits gate
+>   at HIGH**, so a workflow green until now can go red;
+> - **`unpinned-uses` is MEDIUM, not zizmor's High**, so actions referenced by
+>   tag do not fail the default gate;
+> - **a `# zizmor: ignore[...]` comment or a `zizmor.yml` is disclosed**: what
+>   it removed is listed in a warning and kept as an accepted suppression;
+> - **a workflow zizmor cannot parse is named as not audited**, and the
+>   offline-only audits it skipped are named as `NARROWED AUDITS`;
+> - **`.semgrepignore` does not scope this leg.** Use `exclude`, a
+>   `zizmor.yml`, or an ignore comment with its reason.
+>
+> Details: [specs/audit-github-actions-with-zizmor.md](../../specs/audit-github-actions-with-zizmor.md).
 
 ## Install
 
@@ -30,6 +88,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.8
 |----------|-------------|
 | `scan-source` | SAST + secrets + filesystem vuln scan on source code |
 | `scan-licenses` | Source/dependency licence declarations and configured policy; findings warn by default |
+| `scan-taint` | Cross-function and cross-file taint (Opengrep interfile) beyond what `scan-source` finds; advisory by default |
 | `scan-archive` | Source vuln scan + secrets scan of a built archive directory |
 | `scan-image` | Secrets entropy + image vuln scan on a built container |
 | `scan-sbom` | Rescan of an existing CycloneDX SBOM against today's vulnerability database |
@@ -76,7 +135,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.8 call scan-source \
 | `src` | Directory | required | Source directory to scan |
 | `path` | string | `""` | Subdirectory to scope the scan to. Empty = whole `src`. |
 | `exclude` | []string | `[]` | Directory names to remove before scanning |
-| `sast-rulesets` | string | `"p/security-audit"` | Semgrep rulesets (`auto` is rejected — see CLAUDE.md). `p/security-audit`, `p/owasp-top-ten` and `p/secrets` use pinned manifests from a semgrep-rules commit; other registry packs are fetched live and reported as unpinned |
+| `sast-rulesets` | string | `"p/security-audit"` | Semgrep-format rulesets (`auto` is rejected — see CLAUDE.md). `p/security-audit`, `p/owasp-top-ten` and `p/secrets` use pinned manifests from a semgrep-rules commit; other registry packs are fetched live and reported as unpinned |
 | `fail-on` | string | `"HIGH"` | Minimum severity that fails: CRITICAL\|HIGH\|MEDIUM\|LOW\|NONE |
 | `commit-sha` | string | required | Git commit SHA for evidence provenance |
 | `branch` | string | required | Git branch name |
@@ -88,7 +147,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.8 call scan-source \
 
 Evidence schema 1.7 adds optional per-finding `concern`, `category`,
 `subcategories`, `confidence`, `weaknessIds` and `classificationSource`.
-For Semgrep, cicd projects an allowlisted subset of the **same invocation's**
+For SAST, cicd projects an allowlisted subset of the **same invocation's**
 native rule metadata into SARIF result properties; the evidence aggregator
 carries it into `combined-evidence.json.findings`. Both ordinary and inline
 JavaScript scans use this path, including custom rules and compatibility reruns.
@@ -125,7 +184,7 @@ These packs include cicd's own DOM-text-to-HTML rule. Prefer `textContent` for t
 rather than assigning DOM text to `innerHTML`, `outerHTML` or
 `insertAdjacentHTML`. Supported sanitizer models include numeric conversions and
 imports of DOMPurify/isomorphic-dompurify. Hand-written escaping helpers may need
-a reviewed rule-specific `nosemgrep` suppression; helper names alone are not proof
+a reviewed rule-specific `nosemgrep` (or `noopengrep`) suppression; helper names alone are not proof
 of sanitization. The emitted rule id is
 `cicd-rules.cicd.javascript.dom-text-to-html`.
 
@@ -134,7 +193,7 @@ Module and template script scopes remain independent; template scripts can run
 when cloned and inserted. The evidence discloses partial/unsupported
 markup and parser failures. Event-handler attributes, framework/server templates
 and inter-module/inter-file flows are not covered by the adapter. Original
-Semgrep ignore and file-size limits still apply. Custom/live rules are not
+`.semgrepignore` and file-size limits still apply. Custom/live rules are not
 rewritten onto extracted files; a custom-only or secrets-only selection does not
 gain the new default rule or inline pass.
 
@@ -218,6 +277,56 @@ scope and enforcement are configured and verified. Inspect dependency-coverage,
 SKIPPED/not-read and exclusion disclosures; a pass does not mean every dependency
 licence was read. [Application mode](../../docs/reference/commit-monorepo.md)
 checks source declarations only and defers dependency licence assessment.
+
+### scan-taint
+
+`scan-source` follows untrusted input inside one function. `scan-taint` runs
+Opengrep's interfile analysis over the pinned audit and OWASP rules whose
+authors marked them interfile (Go, Java, JavaScript and TypeScript; no C# rule
+is), so a request parameter handed to a helper in another file and
+concatenated into SQL there is found. It runs the same rules twice, with and
+without interfile analysis, and reports only what the second run adds:
+`scan-source` already reports the rest, and the aggregate would count it twice.
+
+It is a separate step, not part of `scan-source`, because of its cost: on a
+mid-sized Go repository the interfile run took over ten times as long and more
+than twice the memory, and on a very large tree it was killed for memory. Call
+it where that cost fits, a nightly or a release branch, before making it a
+merge gate.
+
+```bash
+# Advisory (default): findings are reported, the step passes unless a run failed
+dagger -m github.com/context-and-oss/cicd/src/security@v5.1.8 call scan-taint \
+  --src=. \
+  --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
+  export --path=./taint-evidence.json || exit 1
+jq -e '.passed == true' ./taint-evidence.json >/dev/null || exit 1
+```
+
+`--taint-gate=gate` enforces `--fail-on` (default `HIGH`). Warn mode passes
+over findings, never over a run that did not complete: an engine that was
+killed, a rule set below its floor, or a baseline run that failed (without it,
+the findings `scan-source` also makes cannot be told apart) is an error at
+every setting. A chain of calls longer than `--interfile-depth` (default 3) is
+not followed, and the evidence names each rule that stopped there as
+`DEPTH CAPPED`; `--interfile-depth=-1` removes the limit, at a cost in time and
+memory. A rule that ran out of time over the whole program is named as a
+`PARTIAL SCAN`. Details:
+[specs/report-cross-file-taint-as-advice.md](../../specs/report-cross-file-taint-as-advice.md).
+
+**Parameters:**
+
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `src` | Directory | required | Source directory to scan |
+| `path` | string | `""` | Subdirectory to scope the scan to. Empty = whole `src`. |
+| `exclude` | []string | `[]` | Directory names to remove before scanning |
+| `taint-gate` | string | `"warn"` | `warn` reports findings without failing over them; `gate` enforces `fail-on`. There is no `off`: not calling the step is off |
+| `interfile-depth` | int | `3` | Calls followed from a source toward a sink; `-1` for no limit (write it `--interfile-depth=-1`) |
+| `fail-on` | string | `"HIGH"` | Minimum severity that fails in gate mode: CRITICAL\|HIGH\|MEDIUM\|LOW\|NONE |
+| `commit-sha` | string | required | Git commit SHA for evidence provenance |
+| `branch` | string | required | Git branch name |
+| `repo-url` | string | required | Repository URL |
 
 ### scan-image
 

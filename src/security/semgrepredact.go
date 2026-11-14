@@ -79,16 +79,16 @@ func redactSemgrepSARIF(raw json.RawMessage) (json.RawMessage, error) {
 	dec.UseNumber()
 	var doc map[string]any
 	if err := dec.Decode(&doc); err != nil {
-		return nil, errors.New("semgrep: could not read the report to withhold its source text, so it is not passed on: " + err.Error())
+		return nil, errors.New("opengrep: could not read the report to withhold its source text, so it is not passed on: " + err.Error())
 	}
 	runs, ok := doc["runs"].([]any)
 	if !ok {
-		return nil, errors.New("semgrep: the report has no runs array, so cicd cannot prove it withheld the matched source text, and it is not passed on")
+		return nil, errors.New("opengrep: the report has no runs array, so cicd cannot prove it withheld the matched source text, and it is not passed on")
 	}
 	for _, r := range runs {
 		run, ok := r.(map[string]any)
 		if !ok {
-			return nil, errors.New("semgrep: a run in the report is not an object, so its source text cannot be withheld")
+			return nil, errors.New("opengrep: a run in the report is not an object, so its source text cannot be withheld")
 		}
 		if err := withholdSemgrepNotificationSource(run); err != nil {
 			return nil, err
@@ -98,7 +98,7 @@ func redactSemgrepSARIF(raw json.RawMessage) (json.RawMessage, error) {
 		for _, res := range results {
 			result, ok := res.(map[string]any)
 			if !ok {
-				return nil, errors.New("semgrep: a result in the report is not an object, so its source text cannot be withheld")
+				return nil, errors.New("opengrep: a result in the report is not an object, so its source text cannot be withheld")
 			}
 			ruleID, _ := result["ruleId"].(string)
 			stripSemgrepSource(result)
@@ -111,7 +111,7 @@ func redactSemgrepSARIF(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	out, err := json.Marshal(doc)
 	if err != nil {
-		return nil, errors.New("semgrep: could not re-encode the report after withholding its source text: " + err.Error())
+		return nil, errors.New("opengrep: could not re-encode the report after withholding its source text: " + err.Error())
 	}
 	return out, nil
 }
@@ -198,12 +198,12 @@ func withholdSemgrepNotificationSource(run map[string]any) error {
 	}
 	invocations, ok := raw.([]any)
 	if !ok {
-		return errors.New("semgrep: the report's invocations are not an array, so the source text its notifications quote cannot be withheld")
+		return errors.New("opengrep: the report's invocations are not an array, so the source text its notifications quote cannot be withheld")
 	}
 	for _, i := range invocations {
 		invocation, ok := i.(map[string]any)
 		if !ok {
-			return errors.New("semgrep: an invocation in the report is not an object, so the source text its notifications quote cannot be withheld")
+			return errors.New("opengrep: an invocation in the report is not an object, so the source text its notifications quote cannot be withheld")
 		}
 		for _, key := range []string{"toolExecutionNotifications", "toolConfigurationNotifications"} {
 			raw, present := invocation[key]
@@ -212,11 +212,11 @@ func withholdSemgrepNotificationSource(run map[string]any) error {
 			}
 			notes, ok := raw.([]any)
 			if !ok {
-				return errors.New("semgrep: the report's " + key + " are not an array, so the source text they quote cannot be withheld")
+				return errors.New("opengrep: the report's " + key + " are not an array, so the source text they quote cannot be withheld")
 			}
 			for _, n := range notes {
 				if _, ok := n.(map[string]any); !ok {
-					return errors.New("semgrep: a notification in the report is not an object, so the source text it quotes cannot be withheld")
+					return errors.New("opengrep: a notification in the report is not an object, so the source text it quotes cannot be withheld")
 				}
 				withholdSemgrepNotificationSourceIn(n)
 			}

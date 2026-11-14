@@ -253,7 +253,7 @@ steps:
       # security module). To curate, add ONE of these flags to the call below (note:
       # comma-separated, NO spaces):
       #   --sast-rulesets p/security-audit,p/secrets,p/typescript
-      #   --sast-rulesets ./security.yml   # point at your own checked-in semgrep config
+      #   --sast-rulesets ./security.yml   # point at your own checked-in Semgrep-syntax config
       # To exclude specific files/paths, commit a .semgrepignore at the repo root.
       #
       # Languages: omitted, cicd auto-detects by marker file (go.mod,

@@ -1,6 +1,6 @@
 # security module
 
-Domain module: SAST (Semgrep), secrets detection (Gitleaks/TruffleHog), and vulnerability scanning (Trivy). Covers both source code and built container images.
+Domain module: SAST (Opengrep, the LGPL fork of the Semgrep engine; it reads Semgrep rules; plus the .NET SDK's Roslyn security analyzers on a C#/VB tree, and zizmor on GitHub Actions workflows), secrets detection (Gitleaks/TruffleHog), and vulnerability scanning (Trivy). Covers both source code and built container images.
 
 ## Entry functions
 
@@ -10,7 +10,7 @@ func (m *Security) ScanSource(
     ctx context.Context,
     src *dagger.Directory,
     commitSha, branch, repoUrl string,
-    sastRulesets string,    // Semgrep rulesets, default "p/security-audit" ("auto" is rejected)
+    sastRulesets string,    // Semgrep-format rulesets, default "p/security-audit" ("auto" is rejected)
     failOn string,          // CRITICAL|HIGH|MEDIUM|LOW|NONE, default HIGH
     nugetFeedUrl string,    // optional — private NuGet feed for the lockfile-free restore
     nugetToken *dagger.Secret, // optional — token for nugetFeedUrl (secret; never in the envelope)
@@ -68,7 +68,7 @@ dagger -m ./src/security call scan-sbom \
 
 ## Key files
 
-- `main.go` — `ScanSource()`, `ScanImage()` and `ScanWeb()` entry points (the
+- `main.go` — `ScanSource()`, `ScanTaint()`, `ScanImage()` and `ScanWeb()` entry points (the
   dag wiring only; every decision each one makes lives in an untagged file below)
 - `webinputs.go` — **untagged**: `validateWebInputs()`, the `--mode` /
   `--api-spec` / `--api-spec-path` refusals `ScanWeb` makes before any container
@@ -82,17 +82,64 @@ dagger -m ./src/security call scan-sbom \
   first one's header
 - `scopepath.go` — **untagged**: `checkScopePath()`, the `--path` shape rule
   (`applyPathFilter` in `main.go` only applies it)
-- `sast.go` — Semgrep SAST runner
+- `sast.go` — the SAST runner: Opengrep on the pinned Python base. The tree is
+  mounted without its `.git` (`withoutGitMetadata`): the image has no git, and
+  Opengrep lists a git project's files with `git ls-files`. Without it the
+  engine walks the tree, so `.gitignore` no longer scopes the scan;
+  `.semgrepignore` still does
+- `taint.go` — **untagged**: `ScanTaint`'s every decision. The interfile
+  manifest (`rules/opengrep-interfile.txt`, the pinned audit/OWASP rules marked
+  `interfile` upstream), the plan, the gate and depth refusals, the arguments
+  (`--interfile-depth=N` as one argument: Opengrep reads a separate `-1` as an
+  unknown option), and `analyseTaint`: errors from either run, the rule floor on
+  both, the multiset delta that drops what the single-function run also finds,
+  the `automationDetails.id` stamp, and the scope, depth-cap and advisory
+  warnings. The entry in `main.go` only runs the two scans. The real-engine
+  regression is `scripts/smoke/interfile-taint.sh` over
+  `testdata/interfile-taint`. See
+  [specs/report-cross-file-taint-as-advice.md](../../specs/report-cross-file-taint-as-advice.md).
+- `zizmor.go` — **untagged**: the GitHub Actions leg's every decision. The two
+  invocations (the scan and the `--no-config --no-ignores` shadow), the verbose
+  log read into registered / completed / scheduled audits / offline-skipped,
+  no inputs as no row, nothing parsed as a non-run, `PARTIAL SCAN` and
+  `NARROWED AUDITS`, the SARIF projection with cicd's severity
+  (`unpinned-uses` MEDIUM), and the shadow diff disclosed as accepted
+  suppressions. See [specs/audit-github-actions-with-zizmor.md](../../specs/audit-github-actions-with-zizmor.md).
+- `zizmorexec.go` — the same leg's container: the pinned zizmor image, both
+  runs, reading back the status files. Holds no decisions. The real-image
+  regression is `scripts/smoke/zizmor.sh` over `testdata/zizmor-workflows`.
+- `roslyn.go` — **untagged**: the .NET security-analyzer leg's every decision.
+  Which projects it can build (legacy, MAUI and workload-only are named and
+  counted, never dropped; F# is named), the build script and the injected
+  targets file that writes one SARIF log per compile with a project sidecar,
+  and the projection: security rules only, in-tree locations only, cicd's own
+  severity table (`roslynSeverity`, never the repository's level), switched-off
+  rules as `NARROWED RULES`, in-source suppressions disclosed and not counted,
+  compile errors as partial, and no log at all as a non-run. A project counts as
+  analysed only when a log ran a security rule; its build exit status does not
+  decide. See [specs/analyse-dotnet-with-roslyn.md](../../specs/analyse-dotnet-with-roslyn.md).
+- `roslynexec.go` — the same leg's container: discovery, the pinned SDK band
+  (the restore's resolver), a private NuGet cache, the build, and reading back
+  the status files and logs. Holds no decisions. The real-SDK regression is
+  `scripts/smoke/roslyn-analyzers.sh` over `testdata/roslyn-sast`.
+- `opengrep.go` — **untagged**: the pinned Opengrep release (version, per-arch
+  asset and sha256), the pinned PyYAML wheel the rule helpers import,
+  `opengrepAssetsFor()` (a platform it has no digest for is a non-run, never
+  the other arch's binary), and `opengrepVerifyScript`, which checks both
+  digests inside the container **before** the engine runs. `File.Digest` is not
+  the pin; `sha256sum` is. Renovate bumps the version but not the digests, so a
+  version-only bump fails loudly by design. `opengrep_test.go` drives the real
+  script. Why the engine changed: [specs/swap-semgrep-for-opengrep.md](../../specs/swap-semgrep-for-opengrep.md)
 - `semgrepmetadata.go` / `semgrep_metadata.py` — optional allowlisted projection
-  of native Semgrep rule metadata onto the same invocation's SARIF findings,
+  of native rule metadata onto the same invocation's SARIF findings,
   before redaction. Inline runs call the same projector before remapping.
   Never copy arbitrary metadata/source, infer confidence from SARIF precision,
   or let metadata change findings, severity or scan status. See
   [finding metadata](README.md#finding-classification-metadata).
-- `semgrepredact.go` — withholds the matched source from every semgrep report
+- `semgrepredact.go` — withholds the matched source from every SAST report
   before anything reads it: snippets, fixes, interpolated messages and the
   backtick-quoted source in parser notifications (untagged; see "Semgrep's matched source never reaches the envelope")
-- `semgrepnotifications.go` — reads Semgrep's `toolExecutionNotifications` out
+- `semgrepnotifications.go` — reads the engine's `toolExecutionNotifications` out
   of the SARIF the envelope already carries and turns parse failures and rule
   timeouts into one `warnings[]` line (untagged; see "Read the part of the
   report where Semgrep says what it skipped")
@@ -208,21 +255,22 @@ dagger -m ./src/security call scan-sbom \
 
 ## SAST rulesets — why `auto` is rejected
 
-The default is `p/security-audit`, **not** semgrep's `auto`, and `auto` is
-rejected outright with an error. `semgrep scan --config auto` refuses to run
-while telemetry is disabled:
+The default is `p/security-audit`, **not** `auto`, and `auto` is rejected
+outright with an error before any container runs. It has never worked here:
 
-```
-[ERROR]: Cannot create auto config when metrics are off.
-```
+- Semgrep refused it with telemetry off (`Cannot create auto config when
+  metrics are off`), and cicd never sends a client's tree to a third party.
+- Opengrep 2.0.0 exits 7: the registry's answer is rejected as invalid YAML,
+  while the SARIF invocation still says `executionSuccessful: true` with zero
+  rules — measured.
+- Were it to work, it is a rule set the registry chooses at scan time, which
+  the evidence could not name.
 
-cicd runs every scanner with `--metrics=off` so a client's source tree is never
-reported to a third party, so `auto` and cicd are mutually exclusive — it can only
-ever produce an empty report. It was the default until the false-pass fixes, and the old command ended in
-`|| echo '{"runs":[]}' > report.sarif`, so that exit-2 failure became a report
+It was the default until the false-pass fixes, and the old command ended in
+`|| echo '{"runs":[]}' > report.sarif`, so that failure became a report
 with zero findings and a green gate. **SAST was dead for every consumer on
 defaults**, silently. `semgrepConfigFlags` now rejects `auto` and the empty
-string, and `semgrepRunError` fails the gate on any semgrep that did not scan —
+string, and `semgrepRunError` fails the gate on any engine that did not scan —
 including an exit-zero run that reported no runs at all.
 
 If you want `auto`'s breadth, name packs explicitly:
@@ -230,10 +278,11 @@ If you want `auto`'s breadth, name packs explicitly:
 
 ## Pinned default rules
 
-Both ordinary and inline scan commands disable Semgrep's optional engine-update
-probe. The engine is digest-pinned; a retried update/banner request must not
-consume the analysis deadline. This does not disable rule-source fetching or
-make explicit live packs offline, and it changes no scan scope or timeout. See
+Opengrep has no telemetry and no engine-update probe, and it **refuses**
+`--metrics` and `--disable-version-check` as unknown options (empty report)
+rather than ignoring them. Neither scan command passes them;
+`TestTheScanRunsOpengrepWithoutSemgrepOnlyFlags` holds that. Live `p/` packs
+are still fetched from the registry. See the amendment in
 [keep-local-semgrep-time-for-analysis](../../specs/keep-local-semgrep-time-for-analysis.md).
 
 `p/security-audit`, `p/owasp-top-ten` and `p/secrets` never reach the
@@ -253,7 +302,7 @@ cannot silently narrow a named pinned pack while still reporting zero findings.
   files, or a co-located rule is unknown and lands unexcluded —
   `TestSemgrepPackCeilingHoldsByConstruction` holds that.
 
-- **Ids are the floor's whole basis, so the layout is load-bearing.** Semgrep
+- **Ids are the floor's whole basis, so the layout is load-bearing.** The engine
   names a local rule from its path relative to cwd. Each file is staged at
   `/<dir>/<stem>/<file>` and the scan runs from `/src`; anywhere else (under
   `/src`, under `/cicd-semgrep-pack`) gives ids the floor cannot match.
@@ -298,14 +347,23 @@ and appends a separately identified SARIF run before `redactSemgrepSARIF`.
 
 Source maps cover primary, related and flow locations, parser notifications and
 UTF-16 columns. Keep rule catalogues/indices per run and count original files only.
-The inline command requests `--time`: pinned Semgrep can report taint
-fixpoint timeouts there while `errors[]` and SARIF notices remain empty. The
-adapter reconstructs authored warning notices from validated locations, never
-copies raw diagnostic prose, then remaps them before publication. The Go notice
-reader discloses their counts and original files under the existing partial-scan
-warning policy. A loaded-rule catalogue and scanned-input list alone do not prove
-convergence. The ordinary pass does not yet request these timing-only diagnostics.
-See [report-inline-taint-convergence-limits](../../specs/report-inline-taint-convergence-limits.md).
+**Taint convergence is bounded silently, on both passes.** Opengrep 2.0.0
+caps each dataflow node at a fixed number of fixpoint visits and skips it past
+the cap, reported nowhere (no notification, no `errors[]`, no `--time` field).
+Loop-carried taint written in reverse order is lost past the cap; realistic
+loop shapes were measured identical to Semgrep. There is no signal, so cicd
+requests no `--time` and claims nothing per scan. An unknown engine notice
+still reads as partial (`TestAnUnmeasuredConvergenceNoticeStillReadsAsPartial`),
+so a future convergence notification is disclosed without a code change. A
+loaded-rule catalogue and scanned-input list alone do not prove convergence. See
+[swap-semgrep-for-opengrep](../../specs/swap-semgrep-for-opengrep.md#what-opengrep-does-not-say)
+and the amendment in
+[report-inline-taint-convergence-limits](../../specs/report-inline-taint-convergence-limits.md).
+
+**A rejected parse is a partial scan, and its size varies.** A bad statement or
+member is skipped alone; an unbalanced brace makes the whole file the rejected
+region and it yields nothing. Both raise the notification `semgrepnotifications.go`
+reads, so `Examined.Partial` and the `PARTIAL SCAN` warning say so.
 
 Internal failures are exit 125/non-runs, while malformed or unsupported markup is
 a partial-scan disclosure. A failing inline pass retains the original scan's
@@ -321,7 +379,7 @@ this bounded adapter; it is not an HTML5-complete parser.
 
 Custom/live rules are not rewritten onto temporary filenames, whose path semantics
 would differ. Custom-only and secrets-only plans remain unchanged. A hand-written
-sanitizer may need reviewed `nosemgrep`; never trust a helper solely by its name.
+sanitizer may need reviewed `nosemgrep` (Opengrep also honours `noopengrep`); never trust a helper solely by its name.
 The Python unit suite is invoked by the canonical Go module-unit runner; the real
 source-module regression is `scripts/smoke/semgrep-inline.sh`. Rationale and traps:
 [specs/scan-inline-javascript-as-code.md](../../specs/scan-inline-javascript-as-code.md).
@@ -339,21 +397,21 @@ not code debt. Two levers control this, and they are **orthogonal** (rulesets pi
   ruleset value is never spliced into the scan step's shell script). Two forms:
   - Named packs: `--sast-rulesets p/security-audit,p/secrets,p/typescript`
   - A checked-in config path, resolved relative to the scanned root:
-    `--sast-rulesets ./security.yml` — makes the consumer's own semgrep config the
+    `--sast-rulesets ./security.yml` — makes the consumer's own Semgrep-format config the
     single source of truth, so cicd and their config can't drift.
-- **Exclude files/paths** — commit a `.semgrepignore` at the repo root. Semgrep
+- **Exclude files/paths** — commit a `.semgrepignore` at the repo root. Opengrep
   auto-loads it from the working directory; cicd mounts the full source tree, so it
   is honored with zero cicd configuration. This is the **only** mechanism that can
   exclude a single file. The `exclude` param is **directory-name removal only**
   (`WithoutDirectory`) — it cannot target a file, and is **not** plumbed through the
   `precommit`/`commit` composites or `stage-2`. Prefer `.semgrepignore` for both.
-- **Suppress one reviewed match** — use Semgrep's rule-specific `nosemgrep`
-  comment. Semgrep retains the result in SARIF with an accepted suppression;
+- **Suppress one reviewed match** — use the rule-specific `nosemgrep` (or
+  `noopengrep`) comment. The engine retains the result in SARIF with an accepted suppression;
   cicd keeps that native evidence and reports how many matches were suppressed,
   but excludes them from severity counts, `fail-on`, and the findings table.
 
 **Footgun:** never pass `--sast-rulesets ""` (empty). It overrides the default with
-no config; semgrep would scan with no rules and report **zero** findings. That is
+no config; the engine would scan with no rules and report **zero** findings. That is
 now an error rather than a silent false pass, but consumer plumbing should still
 omit the flag entirely when unset rather than pass an empty string. The reusable
 GHA workflow does this via a conditional `extra[]`.
@@ -418,7 +476,7 @@ add the matching flag to `trivyPinnedFlags`.
   reported as zero findings.
 - `--fail-on NONE` never fails over findings — use during exploratory runs. It
   does **not** cover a scanner that could not run: `gatedPassed(ran, severityOK,
-  threshold)` gates `severityOK` alone, so a Semgrep that could not build a
+  threshold)` gates `severityOK` alone, so a SAST engine that could not build a
   config or a Trivy that could not reach its database fails at `NONE` too. It
   used to pass, which meant the flag a team sets on day one to see what cicd
   reports was also the flag that hid a scanner reporting nothing because it
@@ -457,6 +515,9 @@ line per rule:
 - [An acceptance nobody can read is indistinguishable from a bug](../../docs/explanation/doctrine-security.md#an-acceptance-nobody-can-read-is-indistinguishable-from-a-bug)
 - [Vulnerability severity comes from Trivy, not from CycloneDX](../../docs/explanation/doctrine-security.md#vulnerability-severity-comes-from-trivy-not-from-cyclonedx)
 - [A scan that could not run must never read as "clean"](../../docs/explanation/doctrine-security.md#a-scan-that-could-not-run-must-never-read-as-clean)
+- [A compiler-backed scan analysed only what the compiler saw](../../docs/explanation/doctrine-security.md#a-compiler-backed-scan-analysed-only-what-the-compiler-saw)
+- [A workflow zizmor could not parse is not a workflow it audited](../../docs/explanation/doctrine-security.md#a-workflow-zizmor-could-not-parse-is-not-a-workflow-it-audited)
+- [A taint search that stopped at its depth is not one that followed every call](../../docs/explanation/doctrine-security.md#a-taint-search-that-stopped-at-its-depth-is-not-one-that-followed-every-call)
 - [A dependency scan that resolved nothing is not a clean dependency scan](../../docs/explanation/doctrine-security.md#a-dependency-scan-that-resolved-nothing-is-not-a-clean-dependency-scan)
 - [A gate a consumer cannot clear is a gate that gets switched off](../../docs/explanation/doctrine-security.md#a-gate-a-consumer-cannot-clear-is-a-gate-that-gets-switched-off)
 - [A TruffleHog finding without a location is not a finding](../../docs/explanation/doctrine-security.md#a-trufflehog-finding-without-a-location-is-not-a-finding)

@@ -422,7 +422,7 @@ func TestSemgrepScriptStagesBeforeItScans(t *testing.T) {
 	refuseExisting := at(`already exists in the scan image`)
 	stage := at(`cp "` + semgrepPackSrc + `/$f" "$d/"`)
 	guard := at("if [ -s " + semgrepPackErrPath + " ]; then\n  echo 2 > /tmp/semgrep.exit")
-	scan := at("semgrep scan ")
+	scan := at("opengrep scan ")
 	if truncate > refuseExisting || refuseExisting > stage || stage > guard || guard > scan {
 		t.Fatalf("staging steps out of order:\n%s", semgrepScript)
 	}

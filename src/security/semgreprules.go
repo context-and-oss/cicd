@@ -19,7 +19,7 @@ const (
 	// classifier that never matched a real scan.
 	semgrepCicdRuleDir         = "cicd-rules"
 	semgrepGHAFallbackLoadedID = semgrepCicdRuleDir + "." + semgrepGHAFallbackRuleID
-	semgrepGHAFallbackWarning  = "semgrep: RULE FALLBACK — the upstream " + semgrepGHACurlPipeRuleID +
+	semgrepGHAFallbackWarning  = "opengrep: RULE FALLBACK — the upstream " + semgrepGHACurlPipeRuleID +
 		" rule could not parse one or more GitHub Actions run blocks, so cicd reran the scan with that rule excluded and its runtime-adapted parser-safe equivalent enabled; no affected file was left on the first pass's partial verdict."
 )
 

@@ -1,6 +1,6 @@
-"""Inline JavaScript adapter for the pinned Semgrep image (stdlib, plus its PyYAML).
+"""Inline JavaScript adapter for the pinned Opengrep scan (stdlib, plus the pinned PyYAML).
 
-Never execute consumer code. Inputs come from Semgrep's original selected-file
+Never execute consumer code. Inputs come from Opengrep's original selected-file
 inventory, not a second filesystem walk that could bypass its ignore rules.
 Offsets are UTF-8 bytes internally and UTF-16 columns in the exported SARIF.
 """
@@ -154,7 +154,7 @@ class SourceMap:
         return line, len(text.encode("utf-16-le")) // 2 + 1
 
     def region(self, region):
-        # Semgrep's pinned SARIF emitter uses byte columns; converting through
+        # Opengrep's SARIF emitter uses byte columns (measured on 2.0.0); converting through
         # offsets avoids guessing about non-ASCII source or a same-line tag.
         for prefix in ("start", "end"):
             line_key, col_key = prefix + "Line", prefix + "Column"
@@ -185,10 +185,10 @@ def extract(selected, root, output):
             parser = Scripts(source.decode("utf-8"))
             blocks = parser.extract()
         except UnicodeDecodeError:
-            warnings.append("semgrep: PARTIAL INLINE SCAN — " + json.dumps(relative) + ": non-UTF-8 HTML is not analysed")
+            warnings.append("opengrep: PARTIAL INLINE SCAN — " + json.dumps(relative) + ": non-UTF-8 HTML is not analysed")
             continue
         for issue in sorted(parser.issues):
-            warnings.append("semgrep: PARTIAL INLINE SCAN — " + json.dumps(relative) + ": " + issue)
+            warnings.append("opengrep: PARTIAL INLINE SCAN — " + json.dumps(relative) + ": " + issue)
         source_lines = [0] + [m.end() for m in re.finditer(b"\n", source)]
         groups = [[b for b in blocks if not b[2]]]
         groups.extend([[b] for b in blocks if b[2]])  # Modules/template scripts stay independent.
@@ -203,7 +203,7 @@ def extract(selected, root, output):
 
 
 def rules_for_inline(plan, pack_root, dom_path):
-    import yaml  # Already part of the digest-pinned Semgrep image; never consumer code.
+    import yaml  # The wheel opengrep.go pins and verifies by sha256; never consumer code.
 
     floor, rules = set(plan["floor"]), []
     for relative in plan["files"]:
@@ -312,63 +312,11 @@ def remap_sarif(document, maps, original_bases):
     return document
 
 
-def add_fixpoint_notifications(report, document, maps):
-    """Surface pinned-engine taint warnings absent from its SARIF/errors.
-
-    Reconstruct only authored text and typed locations. The upstream message
-    can contain source and is never copied. A catalogue and scanned-file list
-    do not prove every analysis converged; these retain the partial-warning
-    policy, not a new severity gate or an approval of the partial result.
-    """
-    timing = report.get('time')
-    if not isinstance(timing, dict) or not isinstance(timing.get('fixpoint_timeouts'), list):
-        raise InlineError('inline scanner did not supply readable analysis diagnostics')
-    warnings = timing['fixpoint_timeouts']
-    if not warnings:
-        return
-    runs = document.get('runs')
-    if not isinstance(runs, list) or len(runs) != 1 or not isinstance(runs[0], dict):
-        raise InlineError('inline diagnostics have ambiguous scan runs')
-    notes = []
-    inputs = {'scripts/' + name for name in maps}
-    for warning in warnings:
-        if not isinstance(warning, dict) or warning.get('error_type') != 'Fixpoint timeout' or warning.get('severity') != 'warn':
-            raise InlineError('inline scanner supplied an unknown analysis diagnostic')
-        note = {'descriptor': {'id': 'Fixpoint timeout'}, 'level': 'warning',
-                'message': {'text': 'Taint analysis stopped before convergence; findings are a floor, not a complete verdict.'}}
-        location = warning.get('location')
-        if location is not None:
-            if not isinstance(location, dict):
-                raise InlineError('inline diagnostic has an unreadable location')
-            path = location.get('path')
-            if not isinstance(path, str) or path not in inputs:
-                raise InlineError('inline diagnostic names an unknown extracted input')
-            physical = {'artifactLocation': {'uri': path}}
-            region = {}
-            for prefix in ('start', 'end'):
-                position = location.get(prefix)
-                if position is None:
-                    continue
-                if not isinstance(position, dict) or any(type(position.get(key)) is not int or position[key] < 1 for key in ('line', 'col')):
-                    raise InlineError('inline diagnostic has an invalid source position')
-                region[prefix + 'Line'], region[prefix + 'Column'] = position['line'], position['col']
-            if region:
-                if 'startLine' not in region:
-                    raise InlineError('inline diagnostic has no starting source position')
-                physical['region'] = region
-            note['locations'] = [{'physicalLocation': physical}]
-        notes.append(note)
-    invocations = runs[0].setdefault('invocations', [])
-    if not isinstance(invocations, list) or len(invocations) > 1:
-        raise InlineError('inline diagnostics have ambiguous scan invocations')
-    if not invocations:
-        invocations.append({'executionSuccessful': True})
-    if not isinstance(invocations[0], dict):
-        raise InlineError('inline diagnostic invocation is unreadable')
-    notifications = invocations[0].setdefault('toolExecutionNotifications', [])
-    if not isinstance(notifications, list):
-        raise InlineError('inline diagnostic notifications are unreadable')
-    notifications.extend(notes)
+# The binary opengrep.go placed and sha256-checked before this script ran.
+# Called by absolute path, never by PATH lookup, so the engine that analyses the
+# inline scripts is the one that was verified. Go's opengrepBinPath; a unit test
+# holds the two equal.
+ENGINE = "/usr/local/bin/opengrep"
 
 
 def analyse(plan_path, source_root, report_path, sarif_path, warnings_path):
@@ -392,14 +340,17 @@ def analyse(plan_path, source_root, report_path, sarif_path, warnings_path):
             config.write_text(json.dumps({"rules": rules}))
             with (work / "stderr").open("wb") as stderr:
                 result = subprocess.run([
-                    "semgrep", "scan", "--disable-version-check",
-                    "--no-rewrite-rule-ids", "--metrics=off", "--time", "--config", str(config), "--json-output", str(work / "report.json"),
+                    ENGINE, "scan",
+                    "--no-rewrite-rule-ids", "--config", str(config), "--json-output", str(work / "report.json"),
                     "--sarif-output", str(work / "report.sarif"), "scripts",
                 ], cwd=work, stdout=subprocess.DEVNULL, stderr=stderr)
             if result.returncode not in (0, 1):
                 raise InlineError("inline JavaScript scanner did not complete")
             profile = json.loads((work / "report.json").read_text())
-            scanned = profile["paths"]["scanned"]
+            paths = profile.get("paths") if isinstance(profile, dict) else None
+            scanned = paths.get("scanned") if isinstance(paths, dict) else None
+            if not isinstance(scanned, list) or not all(isinstance(p, str) for p in scanned):
+                raise InlineError("inline JavaScript scanner did not report which inputs it scanned")
             if {Path(p).name for p in scanned} != set(maps):
                 raise InlineError("inline JavaScript scanner omitted an extracted input")
             inline = json.loads((work / "report.sarif").read_text())
@@ -411,11 +362,10 @@ def analyse(plan_path, source_root, report_path, sarif_path, warnings_path):
             # The inline scan has its own rule identities and native output.
             # Enrich before remapping/appending; never borrow ordinary metadata.
             enrich_sarif(profile, inline)
-            add_fixpoint_notifications(profile, inline, maps)
             bases = original["runs"][0].get("originalUriBaseIds", {})
             original["runs"].extend(remap_sarif(inline, maps, bases)["runs"])
             files = len({mapping.original for mapping in maps.values()})
-            warnings.append(f"semgrep: INLINE JAVASCRIPT — analysed {len(maps)} script scope(s) in {files} HTML file(s) with selected pinned JavaScript/TypeScript rules and cicd's DOM rule; custom/live rules and event-handler attributes are not included")
+            warnings.append(f"opengrep: INLINE JAVASCRIPT — analysed {len(maps)} script scope(s) in {files} HTML file(s) with selected pinned JavaScript/TypeScript rules and cicd's DOM rule; custom/live rules and event-handler attributes are not included")
     # Publish only after the complete inline pass and all location mapping succeed.
     warnings_path.write_text(json.dumps(warnings))
     staged = sarif_path.with_name(sarif_path.name + ".inline")
@@ -436,7 +386,7 @@ def main():
     except Exception as exc:
         # A decoder/parser/OS exception can quote consumer code. Never print it.
         detail = str(exc) if isinstance(exc, InlineError) else type(exc).__name__
-        print("semgrep: inline JavaScript analysis failed: " + detail, file=sys.stderr)
+        print("opengrep: inline JavaScript analysis failed: " + detail, file=sys.stderr)
         return 125
     return 0
 

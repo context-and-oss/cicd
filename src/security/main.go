@@ -34,10 +34,11 @@ func (m *Security) ScanSource(
 	// Relative to path if set, otherwise relative to src root.
 	// +optional
 	exclude []string,
-	// Comma-separated semgrep rulesets: registry packs (e.g.
-	// "p/security-audit,p/owasp-top-ten") or a config path in the scanned tree
-	// (e.g. "./semgrep.yml"). "auto" is rejected — it cannot run with telemetry
-	// off, which cicd always sets. Never pass empty. p/security-audit is read
+	// Comma-separated SAST rulesets in Semgrep rule syntax, run by Opengrep:
+	// registry packs (e.g. "p/security-audit,p/owasp-top-ten") or a config path
+	// in the scanned tree (e.g. "./semgrep.yml"). "auto" is rejected — the
+	// registry's answer is not a rule set the engine can load, nor one the
+	// evidence could name. Never pass empty. p/security-audit is read
 	// from a pinned semgrep-rules commit and must load every rule it declares;
 	// any other registry pack is fetched live and reported as unpinned.
 	// +default="p/security-audit"
@@ -111,6 +112,15 @@ func (m *Security) ScanSource(
 	}
 
 	sast, err1 := runSemgrep(ctx, filtered, sastRulesets)
+	// The second SAST engine, for C# and Visual Basic: the SDK's security
+	// analyzers, run inside a build. Present only when the tree has a .NET
+	// project. Runs on a code-only scan too — it is SAST, not dependency
+	// assessment. See roslyn.go.
+	roslyn := runRoslyn(ctx, filtered, nugetFeedUrl, nugetToken)
+	// The third, for GitHub Actions: zizmor over every workflow, composite
+	// action and Dependabot file. Present only when the tree has one. See
+	// zizmor.go.
+	zizmor := runZizmor(ctx, filtered)
 	sarifSecrets, findingsSecrets, secretsScan, err2 := runGitleaks(ctx, filtered)
 	var vuln trivyResult
 	var err3, err4 error
@@ -128,18 +138,26 @@ func (m *Security) ScanSource(
 	// so the warning and the report cannot describe two different scans. See
 	// semgrepnotifications.go.
 	sastWarnings := append(sast.Warnings, semgrepNotificationWarnings(sast.SARIF)...)
-	if warning := sarifSuppressionWarning(sast.SARIF); warning != "" {
+	// The same notifications, as a number on the row: how many of the files
+	// semgrep examined it named as read only in part. The warning says what
+	// happened; this is what lets a report mark the row without parsing prose.
+	// Only when semgrep stated its denominator — a partial count with no Count
+	// beside it would be a share of nothing.
+	if sast.Examined != nil {
+		sast.Examined.Partial = parseSemgrepNotifications(sast.SARIF).partialFiles()
+	}
+	if warning := sarifSuppressionWarning("opengrep", sast.SARIF); warning != "" {
 		sastWarnings = append(sastWarnings, warning)
 	}
 
 	var errs []string
-	for _, e := range []error{err1, err2, err3, err4} {
+	for _, e := range []error{err1, roslyn.Err, zizmor.Err, err2, err3, err4} {
 		if e != nil {
 			errs = append(errs, e.Error())
 		}
 	}
 
-	combined := mergeSeverity(sast.BySeverity, bySeverityFromFindings(findingsSecrets), vuln.BySeverity)
+	combined := mergeSeverity(sast.BySeverity, roslyn.BySeverity, zizmor.BySeverity, bySeverityFromFindings(findingsSecrets), vuln.BySeverity)
 	total := 0
 	for _, c := range combined {
 		total += c
@@ -156,13 +174,13 @@ func (m *Security) ScanSource(
 	// run: a code-only scan has nothing to say about dependencies, and a row
 	// saying ERROR about a scan nobody asked for would be the wrong sentence.
 	tools := []toolResult{
-		// Semgrep's warnings are its partial-scan disclosure: files it
+		// Opengrep's warnings are its partial-scan disclosure: files it
 		// could not parse, rules that timed out. Counted on this row so a
 		// reader of the row alone sees that FINDINGS here is a floor —
 		// Examined beside it says what that floor was measured over, and
 		// Rules which rules it was measured with.
 		{
-			Name:       "semgrep",
+			Name:       "opengrep",
 			BySeverity: sast.BySeverity,
 			Examined:   sast.Examined,
 			Rules:      sast.Rules,
@@ -170,9 +188,40 @@ func (m *Security) ScanSource(
 			Warnings:   len(sastWarnings),
 			Concern:    ConcernSAST,
 		},
+	}
+	if roslyn.Present {
+		// Its warnings are its own partial-scan disclosure: projects it could
+		// not build or reach, compiles with errors, rules the repository
+		// switched off. Examined counts C#/VB projects, buildable or not.
+		tools = append(tools, toolResult{
+			Name:       roslynToolName,
+			BySeverity: roslyn.BySeverity,
+			Examined:   roslyn.Examined,
+			Rules:      roslyn.Rules,
+			Err:        roslyn.Err,
+			Warnings:   len(roslyn.Warnings),
+			Skipped:    roslyn.Skipped,
+			Concern:    ConcernSAST,
+		})
+	}
+	if zizmor.Present {
+		// Its warnings name the files it could not parse, the online audits
+		// an offline run cannot perform, and the findings an ignore comment
+		// or the repository's configuration removed.
+		tools = append(tools, toolResult{
+			Name:       zizmorToolName,
+			BySeverity: zizmor.BySeverity,
+			Examined:   zizmor.Examined,
+			Rules:      zizmor.Rules,
+			Err:        zizmor.Err,
+			Warnings:   len(zizmor.Warnings),
+			Concern:    ConcernSAST,
+		})
+	}
+	tools = append(tools,
 		// Gitleaks' warnings name the archives it did not open; Examined is
 		// the bytes its tree leg read. See gitleaksarchives.go.
-		{
+		toolResult{
 			Name:       "gitleaks",
 			BySeverity: bySeverityFromFindings(findingsSecrets),
 			Examined:   secretsScan.Examined,
@@ -180,7 +229,7 @@ func (m *Security) ScanSource(
 			Warnings:   len(secretsScan.Warnings),
 			Concern:    ConcernSecrets,
 		},
-	}
+	)
 	if !codeOnly {
 		tools = append(tools,
 			// Each tool's warnings are counted on its own row and
@@ -217,7 +266,9 @@ func (m *Security) ScanSource(
 		Sources: perToolSources(scopeSource, threshold, tools...),
 		// Secrets are counted HIGH by bySeverityFromFindings; stamp the same
 		// level into gitleaks' own SARIF so the detail rows agree with the counts.
-		SARIFReport:     mergeSARIF(sast.SARIF, stampSARIFLevel(sarifSecrets, "error")),
+		// Roslyn's and zizmor's runs are already graded by cicd's own table
+		// (roslyn.go, zizmor.go).
+		SARIFReport:     mergeSARIF(mergeSARIF(mergeSARIF(sast.SARIF, roslyn.SARIF), zizmor.SARIF), stampSARIFLevel(sarifSecrets, "error")),
 		CycloneDXReport: vuln.CycloneDX,
 		// Only the vulnerability detail is carried explicitly. Lint, SAST and
 		// secrets detail is expressible in SARIF and the aggregator reads it from
@@ -225,7 +276,7 @@ func (m *Security) ScanSource(
 		// vulnerability rows downstream would put a HIGH row under a CRITICAL
 		// count. See trivyreport.go.
 		Findings: vuln.Findings,
-		Warnings: concatWarnings(sastWarnings, secretsScan.Warnings, vuln.Warnings, vuln.InventoryWarnings),
+		Warnings: concatWarnings(sastWarnings, roslyn.Warnings, zizmor.Warnings, secretsScan.Warnings, vuln.Warnings, vuln.InventoryWarnings),
 		Errors:   errs,
 	}
 	// The envelope reports what its tools found, folded from the rows above.
@@ -609,6 +660,134 @@ func (m *Security) ScanLicenses(
 	// The envelope reports what its tools found, folded from the rows above.
 	// Derived from the rows that actually ship rather than recomputed from the
 	// same inputs, so the two cannot disagree.
+	env.Outcome = sourcesOutcome(env.Sources)
+
+	data, err := json.Marshal(env)
+	if err != nil {
+		return nil, fmt.Errorf("marshal evidence: %w", err)
+	}
+	return writeEvidenceFile(data)
+}
+
+// ScanTaint follows untrusted input across functions and files with
+// Opengrep's interfile analysis, over the pinned audit and OWASP rules whose
+// authors marked them interfile, and reports only what ScanSource's
+// single-function pass of the same rules does not. Returns an evidence
+// envelope.
+//
+// Advisory by default, and a separate step rather than a ScanSource flag,
+// because the analysis costs a multiple of the single-function scan and that
+// cost is the analysis's, not the rule count's: see taint.go. Warn mode works
+// as ScanLicenses' does, by lowering the effective threshold to NONE, so a
+// run that did not complete still fails.
+func (m *Security) ScanTaint(
+	ctx context.Context,
+	// Source directory to scan.
+	src *dagger.Directory,
+	// Subdirectory within src to scan. Empty string scans the entire src.
+	// +optional
+	path string,
+	// Directory names to exclude (e.g. "vendor", "node_modules").
+	// Relative to path if set, otherwise relative to src root.
+	// +optional
+	exclude []string,
+	// Whether cross-function findings fail the gate: "gate" or "warn".
+	// There is deliberately no "off": not calling the step is off.
+	// +default="warn"
+	taintGate string,
+	// How many calls deep the interfile search follows a source toward a
+	// sink. -1 removes the limit. The evidence names every rule the limit
+	// stopped; raising it costs time and memory.
+	// +default=3
+	interfileDepth int,
+	// Minimum severity that fails the pipeline: CRITICAL|HIGH|MEDIUM|LOW|NONE.
+	// Ignored when taintGate is "warn".
+	// +default="HIGH"
+	failOn string,
+	// Git commit SHA for evidence provenance.
+	commitSha string,
+	// Git branch name for evidence provenance.
+	branch string,
+	// Repository URL for evidence provenance.
+	repoUrl string,
+) (*dagger.File, error) {
+	start := time.Now()
+	repo := repoContext{RepoURL: repoUrl, CommitSHA: commitSha, Branch: branch}
+
+	// Configuration errors before any container, for ScanLicenses' reason: a
+	// misspelled mode is a mistake in the pipeline, not a failed scan.
+	if err := validateTaintGate(taintGate); err != nil {
+		return nil, err
+	}
+	if err := validateInterfileDepth(interfileDepth); err != nil {
+		return nil, err
+	}
+	threshold := Severity(failOn)
+	if taintGate == taintGateWarn {
+		threshold = SeverityNone
+	}
+	plan, err := loadTaintPlan()
+	if err != nil {
+		return nil, err
+	}
+	filtered, err := applyPathFilter(src, path, exclude)
+	if err != nil {
+		return nil, err
+	}
+
+	// One fetch for both runs, so they cannot stage different rules.
+	var res taintResult
+	pinned, fetchErr := fetchSemgrepRules(ctx)
+	if fetchErr != nil {
+		res = taintResult{Errs: []string{taintToolName + ": " + fetchErr.Error()},
+			Warnings: []string{taintScopeWarning(interfileDepth)}}
+	} else {
+		baseline, baseErr := runSemgrepOnce(ctx, filtered, plan.Args, pinned, plan)
+		interfile, interErr := runSemgrepOnce(ctx, filtered, taintInterfileArgs(plan, interfileDepth), pinned, plan)
+		res = analyseTaint(baseline, interfile, baseErr, interErr, plan, interfileDepth)
+	}
+
+	total := 0
+	for _, c := range res.BySeverity {
+		total += c
+	}
+	ran := len(res.Errs) == 0
+	severityOK := !shouldFail(res.BySeverity, threshold)
+	if ran && taintGate == taintGateWarn && total > 0 {
+		res.Warnings = append(res.Warnings, taintAdvisoryWarning(total))
+	}
+	var rowErr error
+	if !ran {
+		rowErr = errors.New(strings.Join(res.Errs, "; "))
+	}
+
+	env := &envelope{
+		SchemaVersion:      evidenceSchemaVersion,
+		ModuleName:         moduleName,
+		Stage:              moduleStage,
+		Tool:               toolInfo{Name: scopeTaint},
+		Repo:               repo,
+		TimestampUTC:       start.UTC(),
+		DurationMS:         time.Since(start).Milliseconds(),
+		Passed:             gatedPassed(ran, severityOK, threshold),
+		Concern:            ConcernSAST,
+		Examined:           res.Examined,
+		FailOnSeverity:     threshold,
+		FindingsCount:      total,
+		FindingsBySeverity: res.BySeverity,
+		Sources: perToolSources(scopeTaint, threshold, toolResult{
+			Name:       taintToolName,
+			BySeverity: res.BySeverity,
+			Examined:   res.Examined,
+			Rules:      res.Rules,
+			Err:        rowErr,
+			Warnings:   len(res.Warnings),
+			Concern:    ConcernSAST,
+		}),
+		SARIFReport: res.SARIF,
+		Warnings:    res.Warnings,
+		Errors:      res.Errs,
+	}
 	env.Outcome = sourcesOutcome(env.Sources)
 
 	data, err := json.Marshal(env)

@@ -52,17 +52,6 @@
   },
   "images": [
     {
-      "family": "semgrep",
-      "role": "scanner",
-      "repository": "semgrep/semgrep",
-      "tag": "1.162.0",
-      "digest": "sha256:9349edbadf90c3f3c0c3f55867625354e89680e6fa10d9034042af52fdb0e0d0",
-      "purpose": "SAST scan of consumer source (security.ScanSource)",
-      "sources": [
-        "src/security/images.go"
-      ]
-    },
-    {
       "family": "gitleaks",
       "role": "scanner",
       "repository": "zricethezav/gitleaks",
@@ -103,6 +92,17 @@
       "tag": "2.17.0",
       "digest": "sha256:8d387b1a63e3425beef4846e39719f5af2a787753af2d8b6558c6257d7a577a2",
       "purpose": "DAST scan of a running target (security.ScanWeb)",
+      "sources": [
+        "src/security/images.go"
+      ]
+    },
+    {
+      "family": "zizmor",
+      "role": "scanner",
+      "repository": "ghcr.io/zizmorcore/zizmor",
+      "tag": "1.32.0",
+      "digest": "sha256:3014cc8f68f663935f69b3c3e0e41f5ce102b268d97db13db0f62208747f860d",
+      "purpose": "GitHub Actions workflow, action and Dependabot audit (security.ScanSource SAST)",
       "sources": [
         "src/security/images.go"
       ]
@@ -158,9 +158,10 @@
       "repository": "python",
       "tag": "3.12-slim",
       "digest": "sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de",
-      "purpose": "repository-chosen default runtime for the Python lint and unit-test passes in quality.Check",
+      "purpose": "repository-chosen default runtime for the Python lint and unit-test passes in quality.Check; also the base security.ScanSource runs the sha256-verified Opengrep binary and its Python rule helpers on",
       "sources": [
-        "src/quality/images.go"
+        "src/quality/images.go",
+        "src/security/images.go"
       ]
     },
     {

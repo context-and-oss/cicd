@@ -67,6 +67,18 @@
       "datasourceTemplate": "docker"
     },
     {
+      "description": "The Opengrep release binary security.ScanSource fetches, pinned by version in opengrep.go. Renovate moves the version only: the per-architecture sha256 beside it must be replaced by hand, and a PR that forgets fails every scan with PINNED DOWNLOAD REJECTED",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/security/opengrep\\.go$/"
+      ],
+      "matchStrings": [
+        "// renovate: datasource=github-releases depName=(?<depName>[^\\s]+)[ \\t]*\\n[ \\t]*opengrepVersion[ \\t]*=[ \\t]*\"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v(?<version>.+)$"
+    },
+    {
       "description": "Dagger CLI + engine version used by this repository's own workflows",
       "customType": "regex",
       "managerFilePatterns": [
@@ -102,9 +114,9 @@
     },
     {
       "matchDepNames": [
-        "semgrep/semgrep"
+        "opengrep/opengrep"
       ],
-      "groupName": "runtime image: semgrep"
+      "groupName": "sast engine: opengrep"
     },
     {
       "matchDepNames": [
@@ -129,6 +141,12 @@
         "ghcr.io/zaproxy/zaproxy"
       ],
       "groupName": "runtime image: zap"
+    },
+    {
+      "matchDepNames": [
+        "ghcr.io/zizmorcore/zizmor"
+      ],
+      "groupName": "runtime image: zizmor"
     },
     {
       "matchDepNames": [

@@ -31,6 +31,7 @@ const (
 	scopeArchive = "security-archive"
 	scopeImage   = "security-image"
 	scopeLicense = "security-license"
+	scopeTaint   = "security-taint"
 )
 
 // toolResult is one scanner's contribution to a fused envelope.

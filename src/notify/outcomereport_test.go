@@ -140,6 +140,33 @@ func TestAnExaminedWithNoUnitSaysTheUnitIsMissing(t *testing.T) {
 	}
 }
 
+// TestAPartlyReadScanSaysSoInBothColumns. A nightly consumer run showed
+// "✅ clean" beside a SAST row whose parser had rejected a large share of the
+// tree; the only disclosure was a warning count. The Outcome column is the one
+// a reader scans, so the marker goes there — appended, never replacing the
+// outcome the producer stated — and the Examined column says how many.
+func TestAPartlyReadScanSaysSoInBothColumns(t *testing.T) {
+	ex := &Examined{Unit: "files", Count: 3000, Partial: 240}
+	if got := examinedCell(ex); got != "3,000 files (240 partly read)" {
+		t.Errorf("examinedCell = %q", got)
+	}
+	got := rowOutcomeLabel(OutcomeClean, ex)
+	if !strings.Contains(got, outcomeLabel(OutcomeClean)) || !strings.Contains(got, "partial scan") {
+		t.Errorf("rowOutcomeLabel = %q, want the stated outcome plus the partial marker", got)
+	}
+	for _, quiet := range []*Examined{nil, {Unit: "files", Count: 3000}} {
+		if got := rowOutcomeLabel(OutcomeClean, quiet); got != outcomeLabel(OutcomeClean) {
+			t.Errorf("no partial named, so no marker: %q", got)
+		}
+	}
+	rows := []SourceStatus{{ModuleName: "security", Tool: "semgrep", Outcome: OutcomeClean, Examined: ex}}
+	var sb strings.Builder
+	writeSourceTable(&sb, rows)
+	if !strings.Contains(sb.String(), "partial scan") || !strings.Contains(sb.String(), "240 partly read") {
+		t.Errorf("source table hides the partial scan:\n%s", sb.String())
+	}
+}
+
 func TestALargeCountIsGrouped(t *testing.T) {
 	cases := map[int]string{0: "0", 7: "7", 999: "999", 1000: "1,000",
 		34567: "34,567", 123456: "123,456", 1234567: "1,234,567", -4321: "-4,321"}

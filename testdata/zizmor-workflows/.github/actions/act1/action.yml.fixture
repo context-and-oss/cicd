@@ -1,0 +1,7 @@
+name: act1
+description: x
+runs:
+  using: composite
+  steps:
+    - run: echo "${{ github.event.issue.title }}"
+      shell: bash

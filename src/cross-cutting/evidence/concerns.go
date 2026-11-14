@@ -199,7 +199,7 @@ func foldExamined(rows []concernRow) *Examined {
 		return nil
 	}
 	unit := ""
-	n := 0
+	n, partial := 0, 0
 	for i, r := range rows {
 		if r.Examined == nil {
 			return nil
@@ -210,13 +210,18 @@ func foldExamined(rows []concernRow) *Examined {
 			return nil
 		}
 		n += r.Examined.Count
+		partial += r.Examined.Partial
 	}
 	if unit == "" {
 		// A count with no unit cannot be reported; see Examined's own
 		// contract. Folding several of them would only multiply the problem.
 		return nil
 	}
-	return &Examined{Unit: unit, Count: n}
+	// Partial IS folded, unlike Total: it is a subset of each row's own Count,
+	// so the sum is bounded by the folded Count and claims nothing beyond what
+	// each tool named. Dropping it here would make a concern row read as fully
+	// examined while one of its tools said otherwise.
+	return &Examined{Unit: unit, Count: n, Partial: partial}
 }
 
 // concernRows gathers every row in the run under the concern its producer

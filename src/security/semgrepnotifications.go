@@ -37,6 +37,12 @@
 // semgrep dropped for its size limit appears NOWHERE in the SARIF, only in the
 // JSON output's paths.skipped, so this file reports what the SARIF says and
 // does not claim to have seen every skip.
+//
+// The engine is now Opengrep (opengrep.go). Re-measured on 2.0.0: the same
+// descriptor ids, the same level, the same path-in-message shape, so this
+// reader is unchanged. What moved is the span: a bad statement or member is
+// still skipped alone, but an unbalanced brace makes the whole file the
+// rejected region and the file yields nothing — so "a floor" can be zero.
 package main
 
 import (
@@ -47,12 +53,20 @@ import (
 	"strings"
 )
 
-// Native parser/rule-timeout descriptors and the inline adapter's projection
-// of timing-only fixpoint warnings. Anything else is bucketed by level.
+// Native parser/rule-timeout descriptors. Anything else is bucketed by level,
+// so a descriptor a future engine adds still reads as a partial scan.
+//
+// There is no taint-convergence descriptor. Opengrep 2.0.0 bounds each
+// dataflow node at four visits and skips it silently past that, reporting
+// nothing anywhere — SARIF, JSON, --time or its debug log — so there is no
+// signal to read. See specs/swap-semgrep-for-opengrep.md.
 const (
-	semgrepNoticeSyntax   = "Syntax error"
-	semgrepNoticeTimeout  = "Timeout"
-	semgrepNoticeFixpoint = "Fixpoint timeout"
+	semgrepNoticeSyntax  = "Syntax error"
+	semgrepNoticeTimeout = "Timeout"
+	// semgrepNoticeWarning is Opengrep's generic warning descriptor. Only the
+	// interfile depth cap is read from it; any other text under it is still
+	// unclassified, so a warning cicd has not measured reads as a partial scan.
+	semgrepNoticeWarning = "SemgrepWarning"
 )
 
 // semgrepNoticeListCap is how many names a warning spells out before "and N
@@ -69,6 +83,14 @@ var (
 	// "Timeout when running <rule> on <path>:\n " — note the trailing colon
 	// semgrep leaves after the path.
 	semgrepTimeoutRe = regexp.MustCompile(`^Timeout when running (\S+) on (.+?):?\s*$`)
+	// "Timeout when running <rule>:\n " — the interfile shape, measured on
+	// 2.0.0 with --interfile-timeout. It names no file, because the budget it
+	// ran out of covers the rule's whole-program analysis, not one file.
+	semgrepRuleTimeoutRe = regexp.MustCompile(`^Timeout when running ([^\s:]+):?\s*$`)
+	// "SemgrepWarning:\n rule <rule>: the interfile search stopped at depth
+	// <n> with calls beyond it, ..." — measured on 2.0.0 under
+	// --enable-interfile. Read after whitespace is collapsed.
+	semgrepDepthCapRe = regexp.MustCompile(`^SemgrepWarning: rule ([^\s:]+): the interfile search stopped at depth (\d+)\b`)
 )
 
 // semgrepNotices is one SARIF document's notifications, classified.
@@ -101,12 +123,18 @@ type semgrepNotices struct {
 	TimedOutRules []string
 	// UnattributedTimeouts counts "Timeout" notifications naming no file.
 	UnattributedTimeouts int
+	// WholeProgramTimeouts are the distinct rules whose interfile analysis
+	// ran out of its budget. Not files: the notification names none, because
+	// the analysis it abandoned spans the program.
+	WholeProgramTimeouts []string
 
-	// FixpointTimeouts counts taint scopes that stopped before convergence.
-	// A scope may involve several rules; this is not a rule/file pair count.
-	FixpointTimeouts             int
-	FixpointFiles                []string
-	UnattributedFixpointTimeouts int
+	// DepthCapped are the distinct rules whose interfile search stopped at
+	// the call depth it was given with calls left beyond it, and Depth is the
+	// depth the notification names. Not a parse failure and not a timeout:
+	// every file was read, and a longer chain from a source to a sink was not
+	// followed.
+	DepthCapped []string
+	Depth       string
 
 	// ErrorLevel holds the descriptor ids of every OTHER notification semgrep
 	// marked level "error" — a shape this module has not measured and so
@@ -118,9 +146,21 @@ type semgrepNotices struct {
 	Unclassified []string
 }
 
+// partialFiles is how many distinct files semgrep named as read only in part —
+// a parser that gave up on a region, or a rule that timed out.
+// It becomes Examined.Partial, the structured twin of the warning below.
+//
+// Only named files count. A notification that names no file is still in the
+// warning, but a count of files cannot include a file nobody named, and an
+// estimate here would be this module inventing a measurement.
+func (n semgrepNotices) partialFiles() int {
+	all := append(append([]string{}, n.UnparsedFiles...), n.TimedOutFiles...)
+	return len(distinct(all))
+}
+
 // any reports whether semgrep said anything at all.
 func (n semgrepNotices) any() bool {
-	return n.ParseFailures > 0 || n.Timeouts > 0 || n.FixpointTimeouts > 0 ||
+	return n.ParseFailures > 0 || n.Timeouts > 0 || len(n.WholeProgramTimeouts) > 0 ||
 		len(n.ErrorLevel) > 0 || len(n.Unclassified) > 0
 }
 
@@ -168,8 +208,9 @@ func parseSemgrepNotifications(raw json.RawMessage) semgrepNotices {
 	}
 	seenFile := map[string]bool{}
 	seenTimedFile := map[string]bool{}
-	seenFixpointFile := map[string]bool{}
 	seenRule := map[string]bool{}
+	seenWhole := map[string]bool{}
+	seenCapped := map[string]bool{}
 	for _, run := range doc.Runs {
 		for _, inv := range run.Invocations {
 			for _, note := range inv.ToolExecutionNotifications {
@@ -196,6 +237,18 @@ func parseSemgrepNotifications(raw json.RawMessage) semgrepNotices {
 						}
 						n.FirstParserMessage = strings.TrimSpace(where + " " + detail)
 					}
+				case id == semgrepNoticeTimeout && semgrepWholeProgramTimeout(note) != "":
+					if rule := semgrepWholeProgramTimeout(note); !seenWhole[rule] {
+						seenWhole[rule] = true
+						n.WholeProgramTimeouts = append(n.WholeProgramTimeouts, rule)
+					}
+				case id == semgrepNoticeWarning && semgrepDepthCapRe.MatchString(collapseSpace(note.Message.Text)):
+					m := semgrepDepthCapRe.FindStringSubmatch(collapseSpace(note.Message.Text))
+					if !seenCapped[m[1]] {
+						seenCapped[m[1]] = true
+						n.DepthCapped = append(n.DepthCapped, m[1])
+					}
+					n.Depth = m[2]
 				case id == semgrepNoticeTimeout:
 					n.Timeouts++
 					rule, file := semgrepTimeoutSubject(note)
@@ -210,15 +263,6 @@ func parseSemgrepNotifications(raw json.RawMessage) semgrepNotices {
 					if !seenTimedFile[file] {
 						seenTimedFile[file] = true
 						n.TimedOutFiles = append(n.TimedOutFiles, file)
-					}
-				case id == semgrepNoticeFixpoint && strings.EqualFold(note.Level, "warning"):
-					n.FixpointTimeouts++
-					file := firstLocationURI(note)
-					if file == "" {
-						n.UnattributedFixpointTimeouts++
-					} else if !seenFixpointFile[file] {
-						seenFixpointFile[file] = true
-						n.FixpointFiles = append(n.FixpointFiles, file)
 					}
 				case strings.EqualFold(note.Level, "error"):
 					n.ErrorLevel = append(n.ErrorLevel, orUnnamed(id))
@@ -267,6 +311,21 @@ func semgrepTimeoutSubject(note sarifNotification) (rule, file string) {
 	return "", firstLocationURI(note)
 }
 
+// semgrepWholeProgramTimeout returns the rule an interfile timeout names, or
+// "" when the notification is not that shape. Only a notification with no
+// location qualifies: one that carries a file is a per-file timeout, whatever
+// its text says.
+func semgrepWholeProgramTimeout(note sarifNotification) string {
+	if firstLocationURI(note) != "" {
+		return ""
+	}
+	first, _, _ := strings.Cut(note.Message.Text, "\n")
+	if m := semgrepRuleTimeoutRe.FindStringSubmatch(strings.TrimSpace(first)); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 func firstLocationURI(note sarifNotification) string {
 	for _, loc := range note.Locations {
 		if uri := strings.TrimSpace(loc.PhysicalLocation.ArtifactLocation.URI); uri != "" {
@@ -289,10 +348,30 @@ func collapseSpace(s string) string {
 // everything" line on every clean run is noise the next real one drowns in.
 func semgrepNotificationWarnings(raw json.RawMessage) []string {
 	n := parseSemgrepNotifications(raw)
-	if !n.any() {
-		return nil
+	var out []string
+	if n.any() {
+		out = append(out, semgrepPartialScanWarning(n))
 	}
-	return []string{semgrepPartialScanWarning(n)}
+	if len(n.DepthCapped) > 0 {
+		out = append(out, semgrepDepthCapWarning(n))
+	}
+	return out
+}
+
+// semgrepDepthCapWarning names the rules whose interfile search stopped at its
+// depth. A separate line from PARTIAL SCAN because nothing went unread: the
+// narrowing is in how far a call chain was followed, which only a scan that
+// asked for interfile analysis can have, and its remedy is a flag.
+func semgrepDepthCapWarning(n semgrepNotices) string {
+	depth := n.Depth
+	if depth == "" {
+		depth = "its limit"
+	}
+	return "opengrep: DEPTH CAPPED — the interfile search of " + strconv.Itoa(len(n.DepthCapped)) +
+		" rule(s) stopped at call depth " + depth + " with calls beyond it (" +
+		listCapped(n.DepthCapped, semgrepNoticeListCap) + "), so a source reaching a sink through a " +
+		"longer chain of calls was not followed and is not among these findings. A deeper search " +
+		"(--interfile-depth, or --interfile-depth=-1 for no limit) costs time and memory."
 }
 
 // semgrepPartialScanWarning renders the classified notifications as ONE line.
@@ -346,21 +425,15 @@ func semgrepPartialScanWarning(n semgrepNotices) string {
 		parts = append(parts, s)
 	}
 
-	if n.FixpointTimeouts > 0 {
-		s := strconv.Itoa(n.FixpointTimeouts) + " taint fixpoint timeout(s) hit " +
-			strconv.Itoa(len(n.FixpointFiles)) + " file(s)"
-		if len(n.FixpointFiles) > 0 {
-			s += " (" + listCapped(n.FixpointFiles, semgrepNoticeListCap) + ")"
-		}
-		if n.UnattributedFixpointTimeouts > 0 {
-			s += ", " + strconv.Itoa(n.UnattributedFixpointTimeouts) + " naming no file"
-		}
-		parts = append(parts, s)
+	if len(n.WholeProgramTimeouts) > 0 {
+		parts = append(parts, strconv.Itoa(len(n.WholeProgramTimeouts))+
+			" rule(s) ran out of time in interfile analysis, which spans every file (rules: "+
+			listCapped(n.WholeProgramTimeouts, semgrepNoticeListCap)+")")
 	}
 
 	if len(n.ErrorLevel) > 0 {
 		parts = append(parts, strconv.Itoa(len(n.ErrorLevel))+
-			" error-level notification(s) semgrep raised (id(s): "+
+			" error-level notification(s) opengrep raised (id(s): "+
 			listCapped(distinct(n.ErrorLevel), semgrepNoticeListCap)+")")
 	}
 	if len(n.Unclassified) > 0 {
@@ -369,26 +442,30 @@ func semgrepPartialScanWarning(n semgrepNotices) string {
 			listCapped(distinct(n.Unclassified), semgrepNoticeListCap)+")")
 	}
 
-	msg := "semgrep: PARTIAL SCAN — " + strings.Join(parts, ", and ") + "."
+	msg := "opengrep: PARTIAL SCAN — " + strings.Join(parts, ", and ") + "."
 
-	if n.ParseFailures > 0 || n.Timeouts > 0 {
-		msg += " Semgrep matches nothing in a region it could not parse and nothing for a rule " +
+	if n.ParseFailures > 0 || n.Timeouts > 0 || len(n.WholeProgramTimeouts) > 0 {
+		msg += " Opengrep matches nothing in a region it could not parse and nothing for a rule " +
 			"that timed out, so those files' findings are a floor, not a verdict, and zero " +
 			"findings there is not a clean one."
-	}
-	if n.FixpointTimeouts > 0 {
-		msg += " Taint analysis stopped before convergence in those scopes; findings there are a floor, not a complete verdict."
 	}
 	if n.FirstParserMessage != "" {
 		msg += " First parser message: " + n.FirstParserMessage + "."
 	}
 	if n.ParseFailures > 0 {
-		msg += " Semgrep OSS " + semgrepVersion + " skips what its parser rejects; a newer " +
-			"semgrep or the Pro engine may accept the construct at the line it names"
-		if hasLanguage(n.UnparsedFiles, "C#") {
-			msg += " (its C# parser rejects C# 12 primary constructors, measured)"
-		}
-		msg += "."
+		// No remedy is printed: cicd has measured no engine that parses more of
+		// a file Opengrep rejects. The C# constructs Semgrep OSS rejected or
+		// silently skipped (primary constructors, null-conditional assignment,
+		// records) were the reason for the swap and all parse under the pinned
+		// release, so naming them here would describe the wrong engine.
+		//
+		// How big "the region" is was measured, not assumed: a bad statement
+		// or member is skipped alone and findings before and after it are
+		// kept; an unbalanced brace makes the span the whole file, and the
+		// file yields nothing. The notification's span says which, so the
+		// sentence names both rather than promising the kinder one.
+		msg += " Opengrep " + opengrepVersion + " skips the region its parser rejects — " +
+			"one statement or member, or after an unbalanced brace the whole file."
 	}
 	return msg
 }
@@ -415,15 +492,6 @@ func languageSplit(files []string) string {
 		out = append(out, name+": "+strconv.Itoa(counts[name]))
 	}
 	return strings.Join(out, ", ")
-}
-
-func hasLanguage(files []string, language string) bool {
-	for _, f := range files {
-		if languageOfPath(f) == language {
-			return true
-		}
-	}
-	return false
 }
 
 // extensionLanguages names the language a file extension implies, in the

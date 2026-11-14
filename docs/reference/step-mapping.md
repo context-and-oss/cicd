@@ -33,6 +33,9 @@ Verdicts:
 |---------------|-----------------|---------|
 | Baseline Semgrep SAST | `security.scan-source` (SAST) — pinned defaults, inline JavaScript support and curatable `--sast-rulesets` | Replace |
 | CodeQL / SonarQube SAST | Overlapping, not equivalent analysis. Establish the required language/rule coverage before removing an existing scanner; cicd does not run these engines | Keep until replacement coverage is established |
+| CodeQL cross-function dataflow | [`security.scan-taint`](../../src/security/README.md#scan-taint) — Opengrep interfile analysis for Go, Java and JavaScript/TypeScript to a stated call depth; advisory by default, no C# rule. Without GitHub Advanced Security: [run without it](../how-to-guides/run-without-github-advanced-security.md) | Keep until replacement coverage is established |
+| .NET security analyzers (`CA3001`–`CA3012`, `CA23xx`, `CA53xx`) in a separate build | `security.scan-source` builds a C# or VB tree with the SDK's Roslyn security analyzers and gates on them | Replace |
+| CodeQL for GitHub Actions, zizmor | `security.scan-source` runs zizmor on `.github/workflows`, actions and Dependabot files | Replace |
 | Gitleaks source snapshot scanning | `security.scan-source` runs Gitleaks on the uploaded working tree | Replace only after equivalent rules, scope and suppressions are verified |
 | Git-history secret scanning | `scan-source` adds history scanning only when the uploaded directory carries usable `.git/` metadata; available history depends on checkout depth. Application mode is snapshot-only | Keep until equivalent history coverage is verified |
 | TruffleHog / provider verification / GitHub secret-scanning protections | `scan-image` scans image files with TruffleHog; `--verify-secrets` selects only verified results in the container path. This is not a source/history or platform-protection replacement | Keep provider/platform protections until equivalent behavior is configured and verified |

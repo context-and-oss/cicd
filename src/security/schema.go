@@ -19,7 +19,7 @@ import (
 // 1.1.0 is the first version this repository can prove describes what it
 // ships. 1.0.0 named several different shapes over its life and no consumer
 // should treat it as identifying any one of them.
-const evidenceSchemaVersion = "1.7.0"
+const evidenceSchemaVersion = "1.8.0"
 
 type Severity string
 
@@ -248,6 +248,18 @@ type Examined struct {
 	// means it did not say, which is why this one is omitempty and Count is
 	// not: a tool that cannot see its own denominator must not imply one.
 	Total int `json:"total,omitempty"`
+	// Partial is how many of the Count units the tool itself reported reading
+	// only in part — a file whose parser gave up on a region, a rule that timed
+	// out on it. Findings in those units are a floor, not a verdict.
+	//
+	// It is a count of units the tool NAMED, never an estimate: a tool that
+	// says something went wrong without saying where adds nothing here, and
+	// its warning stays the authoritative disclosure. Zero means the tool
+	// named none, which is why this is omitempty. It is deliberately not an
+	// error and not an Outcome: a scan that read most of a repository found
+	// what it found, and a gate that goes permanently red over a parser the
+	// consumer does not control gets switched off (docs/explanation/doctrine.md).
+	Partial int `json:"partial,omitempty"`
 }
 
 // SourceStatus summarises one source verdict behind a combined Passed, so the

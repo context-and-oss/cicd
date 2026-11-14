@@ -1,0 +1,18 @@
+const { findById } = require('./repo');
+const db = require('./db');
+
+app.get('/same', function handler(req, res) {
+  db.sequelize.query("SELECT * FROM users WHERE id = " + req.query.id);
+});
+
+function localFind(id) {
+  return db.sequelize.query("SELECT * FROM orders WHERE id = " + id);
+}
+
+app.get('/local', function handler2(req, res) {
+  localFind(req.query.id);
+});
+
+app.get('/cross', function handler3(req, res) {
+  findById(req.query.id);
+});

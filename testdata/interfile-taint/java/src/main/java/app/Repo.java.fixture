@@ -1,0 +1,7 @@
+package app;
+
+public class Repo {
+    public String buildQuery(String id) {
+        return "SELECT * FROM invoices WHERE id = " + id;
+    }
+}

@@ -68,3 +68,15 @@ exact-version qualification.
 - A runtime correction requires a new release and fresh affected-consumer
   evidence. Published tags and previously qualified consumer/provider pins must
   not be moved or silently upgraded as a side effect.
+
+## Amendment — the switch is gone with the probe
+
+The engine is now Opengrep 2.0.0 ([swap-semgrep-for-opengrep](swap-semgrep-for-opengrep.md)).
+It has no version check and no telemetry, and it refuses
+`--disable-version-check` and `--metrics` as unknown options, writing an empty
+report, rather than ignoring them. Both scan commands drop both flags. The
+optional startup request this spec removed does not exist in the new engine, so
+the measured analysis-time saving holds without a switch.
+`TestTheScanRunsOpengrepWithoutSemgrepOnlyFlags` and the inline adapter test
+now require the flags' absence. The rest — single inline invocation, original
+inventory, process limit, no batching — is unchanged.
