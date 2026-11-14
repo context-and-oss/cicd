@@ -78,15 +78,19 @@ dagger -m ./src/security call scan-sbom \
   cannot), `foldZAPRun()` (the add-on verdict, the dead-scan error, the parsed
   report, the import probe and the reach reconciliation folded into one
   `zapFold`) and `buildWebEnvelope()` (that fold as the evidence envelope)
-- `sarifmerge.go` — **untagged**: `mergeSARIF()`, two SARIF documents under the
-  first one's header
+- `sarifmerge.go` — **untagged**: `mergeSARIF()`, any number of SARIF
+  documents folded under the first one's header
+- `sarifkey.go` — **untagged**: `sarifResultKey()`, the rule + file + line:column
+  key the zizmor shadow and the taint delta both count findings by
 - `scopepath.go` — **untagged**: `checkScopePath()`, the `--path` shape rule
   (`applyPathFilter` in `main.go` only applies it)
 - `sast.go` — the SAST runner: Opengrep on the pinned Python base. The tree is
   mounted without its `.git` (`withoutGitMetadata`): the image has no git, and
-  Opengrep lists a git project's files with `git ls-files`. Without it the
-  engine walks the tree, so `.gitignore` no longer scopes the scan;
-  `.semgrepignore` still does
+  Opengrep lists a git project's files with `git ls-files`. So the engine
+  walks the tree, and `gitIgnoredScope` first removes what `.gitignore`
+  excludes, asking git in the pinned gitleaks image. `gitscope.go`
+  (**untagged**) holds the script and `classifyGitScope`, which names every
+  scope that differs from git's in `warnings[]`; `.semgrepignore` still applies
 - `taint.go` — **untagged**: `ScanTaint`'s every decision. The interfile
   manifest (`rules/opengrep-interfile.txt`, the pinned audit/OWASP rules marked
   `interfile` upstream), the plan, the gate and depth refusals, the arguments

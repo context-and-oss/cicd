@@ -32,7 +32,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -252,26 +251,6 @@ type zizmorKeyed struct {
 	result map[string]any
 }
 
-// zizmorResultKey identifies a finding across the two runs: the rule and its
-// primary location. A location is part of a finding's identity, so two
-// template injections in one file are two findings.
-func zizmorResultKey(r map[string]any) (key, uri, rule string, line int) {
-	rule, _ = r["ruleId"].(string)
-	locs, _ := r["locations"].([]any)
-	if len(locs) > 0 {
-		loc, _ := locs[0].(map[string]any)
-		phys, _ := loc["physicalLocation"].(map[string]any)
-		art, _ := phys["artifactLocation"].(map[string]any)
-		uri, _ = art["uri"].(string)
-		region, _ := phys["region"].(map[string]any)
-		l, _ := region["startLine"].(float64)
-		c, _ := region["startColumn"].(float64)
-		line = int(l)
-		return rule + "\x00" + uri + "\x00" + strconv.Itoa(int(l)) + ":" + strconv.Itoa(int(c)), uri, rule, line
-	}
-	return rule + "\x00", "", rule, 0
-}
-
 func zizmorResults(raw string) ([]zizmorKeyed, string, []json.RawMessage, error) {
 	var doc zizmorDoc
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
@@ -283,7 +262,7 @@ func zizmorResults(raw string) ([]zizmorKeyed, string, []json.RawMessage, error)
 	run := doc.Runs[0]
 	out := make([]zizmorKeyed, 0, len(run.Results))
 	for _, r := range run.Results {
-		k, uri, rule, line := zizmorResultKey(r)
+		k, uri, rule, line := sarifResultKey(r)
 		out = append(out, zizmorKeyed{key: k, uri: uri, rule: rule, line: line, result: r})
 	}
 	return out, run.Tool.Driver.SemanticVersion, run.Tool.Driver.Rules, nil

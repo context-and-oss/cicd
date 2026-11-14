@@ -192,7 +192,7 @@ func taintResultKeys(t *testing.T, raw json.RawMessage) []string {
 	}
 	var out []string
 	for _, r := range rs {
-		_, uri, _, line := zizmorResultKey(r)
+		_, uri, _, line := sarifResultKey(r)
 		out = append(out, fmt.Sprintf("%s:%d", uri, line))
 	}
 	slices.Sort(out)

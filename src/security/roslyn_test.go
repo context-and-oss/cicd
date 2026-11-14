@@ -461,7 +461,10 @@ func TestRoslynScriptIsShellSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	argLog := filepath.Join(dir, "args")
-	stub := "#!/bin/sh\nprintf '%s\\n' \"$2\" >> " + argLog + "\ncase \"$2\" in *Bad*) echo \"$2 : error CS0001: broken\"; exit 1;; esac\nexit 0\n"
+	// The stub drains stdin, as a credential provider or an MSBuild node
+	// may: with the loop's stdin inherited, the first build would swallow
+	// every project after it.
+	stub := "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$2\" >> " + argLog + "\ncase \"$2\" in *Bad*) echo \"$2 : error CS0001: broken\"; exit 1;; esac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "dotnet"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -504,5 +507,18 @@ func TestRoslynScriptIsShellSafe(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, strings.TrimPrefix(roslynOutDir, "/"))); err != nil {
 		t.Errorf("the log directory was not created: %v", err)
+	}
+}
+
+func TestRoslynFeedWarning(t *testing.T) {
+	if w := roslynFeedWarning("", false); w != "" {
+		t.Errorf("no feed must say nothing, got %q", w)
+	}
+	if w := roslynFeedWarning("https://nuget.example.com/v3/index.json", true); w != "" {
+		t.Errorf("a feed with its token must say nothing, got %q", w)
+	}
+	w := roslynFeedWarning("https://nuget.example.com/v3/index.json", false)
+	if !strings.Contains(w, "without nuget-token") || !strings.HasPrefix(w, roslynToolName+": ") {
+		t.Errorf("a feed without its token must be named: %q", w)
 	}
 }

@@ -344,3 +344,26 @@ func TestSemgrepNotificationsPathWithColonSurvives(t *testing.T) {
 		t.Errorf("FirstParserMessage = %q", n.FirstParserMessage)
 	}
 }
+
+// TestSemgrepNoticesPartialFilesOneSpellingPerFile. The engine may name one
+// file "./a.go" in a timeout and "/src/a.go" or a file URI in a syntax
+// notice; read raw, it would be two partly-read files.
+func TestSemgrepNoticesPartialFilesOneSpellingPerFile(t *testing.T) {
+	n := parseSemgrepNotifications(sarifWithNotifications(
+		syntaxNote("/src/api/A.cs", 1, "x"),
+		`{"descriptor":{"id":"Timeout"},"level":"warning","message":{"text":"Timeout when running r.one on ./api/A.cs:\n "}}`,
+		`{"descriptor":{"id":"Timeout"},"level":"warning","message":{"text":"Timeout when running r.two on api/A.cs:\n "}}`,
+	))
+	if got := n.partialFiles(); got != 1 {
+		t.Errorf("partialFiles = %d, want 1 (one file, three spellings): unparsed=%v timed=%v",
+			got, n.UnparsedFiles, n.TimedOutFiles)
+	}
+	for in, want := range map[string]string{
+		"./a.go": "a.go", "/src/a.go": "a.go", "file:///src/a.go": "a.go", " a.go ": "a.go",
+		"a//b/../c.go": "a/c.go", "": "", "/src/": "", ".": "",
+	} {
+		if got := semgrepNoticePath(in); got != want {
+			t.Errorf("semgrepNoticePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

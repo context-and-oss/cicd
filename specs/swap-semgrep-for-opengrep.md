@@ -101,14 +101,20 @@ say so.
   which then yields nothing. Semgrep recovered more of such a file. The
   notification still fires, so the partial-scan warning and `Examined.Partial`
   still say so; the warning's last sentence names both cases.
-- **`.gitignore` no longer scopes the scan.** Semgrep's image had git, so it
-  scanned what `git ls-files` listed: tracked files and untracked ones git does
-  not ignore. Opengrep now walks the tree it is handed, and a gitignored file
-  that is present is scanned. A fresh CI checkout holds none, so the scope
-  there is unchanged; a local run over a working tree with build output or
-  dependencies on disk scans more, never less. `.semgrepignore` still applies.
-  cicd does not re-derive git's ignore rules: that would be a second resolver
-  for a question git answers, and git is what the image lacks.
+- **git, not the engine, applies `.gitignore`.** Semgrep's image had git, so
+  it scanned what `git ls-files` listed: tracked files and untracked ones git
+  does not ignore. Opengrep's base has no git, and a `.git` in its mount is a
+  scan that does not run, so the engine walks the tree it is handed. Left
+  there, a gitignored `dist/` or `node_modules` present on disk would be
+  scanned: findings in files the repository does not contain. So before the
+  scan, git in the pinned gitleaks image (which already carries git for the
+  history leg) lists the untracked, ignored paths, and each is removed from
+  the copy Opengrep sees (`gitscope.go`). cicd does not re-derive git's ignore
+  rules; that would be a second resolver for a question git answers. Every
+  difference is named in `warnings[]`: how many ignored paths were left out,
+  a git that could not answer (the scan then walks every file, and says so),
+  and a removal that failed. A tree with no `.git` is scanned as handed over,
+  silently, as Semgrep did. `.semgrepignore` still applies on top.
 - **Loop-carried taint is bounded silently.** See next section.
 - **`--config auto` still cannot work.** Semgrep refused it with metrics off.
   Opengrep exits 7: the registry's answer is rejected as invalid YAML, while

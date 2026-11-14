@@ -10,6 +10,7 @@ import (
 	"dagger/security/internal/dagger"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // runRoslyn builds every C#/VB project in the tree with the SDK's security
@@ -20,7 +21,7 @@ import (
 // and nothing it writes leaves the container except the logs and the status
 // files the script keeps.
 func runRoslyn(ctx context.Context, src *dagger.Directory, feedUrl string, feedToken *dagger.Secret) roslynResult {
-	contents := map[string]string{}
+	var paths []string
 	for _, pattern := range roslynProjectGlobs {
 		matches, err := src.Glob(ctx, pattern)
 		if err != nil {
@@ -28,16 +29,14 @@ func runRoslyn(ctx context.Context, src *dagger.Directory, feedUrl string, feedT
 				".NET project files (%s): %w", roslynToolName, pattern, err)}
 		}
 		for _, m := range matches {
-			if roslynInBuildOutput(m) {
-				continue
+			if !roslynInBuildOutput(m) {
+				paths = append(paths, m)
 			}
-			body, err := src.File(m).Contents(ctx)
-			if err != nil {
-				return roslynResult{Present: true, Err: fmt.Errorf("%s: SAST did not run — could not read "+
-					"the project file %s: %w", roslynToolName, m, err)}
-			}
-			contents[m] = body
 		}
+	}
+	contents, err := readProjectFiles(ctx, src, paths)
+	if err != nil {
+		return roslynResult{Present: true, Err: err}
 	}
 	scope := classifyRoslynProjects(contents)
 	if len(scope.Build) == 0 {
@@ -127,5 +126,43 @@ func runRoslyn(ctx context.Context, src *dagger.Directory, feedUrl string, feedT
 		}
 		out.Logs = append(out.Logs, roslynLog{Project: roslynSidecarProject(sidecar), SARIF: []byte(sarif)})
 	}
-	return analyseRoslyn(scope, out)
+	res := analyseRoslyn(scope, out)
+	if w := roslynFeedWarning(feedUrl, feedToken != nil); w != "" {
+		res.Warnings = append(res.Warnings, w)
+	}
+	return res
+}
+
+// roslynReadConcurrency bounds the project-file reads in flight. Each is an
+// engine round trip; a .NET monorepo has hundreds of projects, and reading
+// them one after another made the listing the slowest part of a small build.
+const roslynReadConcurrency = 8
+
+// readProjectFiles reads every project file, a bounded number at a time. The
+// first failure is the one reported, by the path that failed, and every read
+// still in flight is left to finish so no goroutine outlives the call.
+func readProjectFiles(ctx context.Context, src *dagger.Directory, paths []string) (map[string]string, error) {
+	bodies := make([]string, len(paths))
+	errs := make([]error, len(paths))
+	sem := make(chan struct{}, roslynReadConcurrency)
+	var wg sync.WaitGroup
+	for i, p := range paths {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			bodies[i], errs[i] = src.File(p).Contents(ctx)
+		}()
+	}
+	wg.Wait()
+	contents := make(map[string]string, len(paths))
+	for i, p := range paths {
+		if errs[i] != nil {
+			return nil, fmt.Errorf("%s: SAST did not run — could not read the project file %s: %w",
+				roslynToolName, p, errs[i])
+		}
+		contents[p] = bodies[i]
+	}
+	return contents, nil
 }

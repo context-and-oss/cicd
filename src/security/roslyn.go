@@ -154,6 +154,11 @@ const roslynTargets = `<Project>
 // (TestRoslynScriptIsShellSafe). Each project is built on its own so each has
 // its own exit status, and every failure is written down by name; the script
 // always exits 0 and Go classifies.
+//
+// Each build reads /dev/null, not the loop's stdin: the loop's stdin is the
+// project list, and a credential provider or MSBuild node that reads stdin
+// would swallow the projects after it, which would then be neither built nor
+// named as failed.
 func roslynBuildScript() string {
 	return "mkdir -p " + roslynOutDir + "\n" +
 		": > " + roslynFailedPath + "\n" +
@@ -162,7 +167,7 @@ func roslynBuildScript() string {
 		"while IFS= read -r p; do\n" +
 		"  [ -n \"$p\" ] || continue\n" +
 		"  if ! dotnet build \"$p\" " + strings.Join(roslynBuildArgs, " ") +
-		" >>" + roslynOutPath + " 2>>" + roslynErrPath + "; then\n" +
+		" </dev/null >>" + roslynOutPath + " 2>>" + roslynErrPath + "; then\n" +
 		"    printf '%s\\n' \"$p\" >> " + roslynFailedPath + "\n" +
 		"  fi\n" +
 		"done < " + roslynProjectsPath + "\n" +
@@ -460,6 +465,20 @@ type roslynResult struct {
 	Warnings   []string
 	Skipped    bool
 	Err        error
+}
+
+// roslynFeedWarning names a feed URL that arrived without its token. The
+// credential config is written only for the pair, so the URL alone changes
+// nothing: the restore uses the repository's own NuGet configuration, and a
+// feed that needs authentication fails there as an unbuildable project whose
+// log names a 401, not the missing token.
+func roslynFeedWarning(feedURL string, hasToken bool) string {
+	if feedURL == "" || hasToken {
+		return ""
+	}
+	return roslynToolName + ": nuget-feed-url was given without nuget-token, so no credential was configured " +
+		"for it; the restore used the repository's own NuGet configuration, and a project that needs that feed " +
+		"authenticated reads as unbuildable"
 }
 
 // roslynExamined is the unit the row counts in.

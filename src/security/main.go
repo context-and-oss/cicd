@@ -268,7 +268,7 @@ func (m *Security) ScanSource(
 		// level into gitleaks' own SARIF so the detail rows agree with the counts.
 		// Roslyn's and zizmor's runs are already graded by cicd's own table
 		// (roslyn.go, zizmor.go).
-		SARIFReport:     mergeSARIF(mergeSARIF(mergeSARIF(sast.SARIF, roslyn.SARIF), zizmor.SARIF), stampSARIFLevel(sarifSecrets, "error")),
+		SARIFReport:     mergeSARIF(sast.SARIF, roslyn.SARIF, zizmor.SARIF, stampSARIFLevel(sarifSecrets, "error")),
 		CycloneDXReport: vuln.CycloneDX,
 		// Only the vulnerability detail is carried explicitly. Lint, SAST and
 		// secrets detail is expressible in SARIF and the aggregator reads it from

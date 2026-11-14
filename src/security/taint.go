@@ -232,7 +232,7 @@ func taintDelta(baseline, interfile json.RawMessage) (json.RawMessage, int, erro
 	}
 	remaining := map[string]int{}
 	for _, r := range baseResults {
-		k, _, _, _ := zizmorResultKey(r)
+		k, _, _, _ := sarifResultKey(r)
 		remaining[k]++
 	}
 	results, _ := run["results"].([]any)
@@ -242,7 +242,7 @@ func taintDelta(baseline, interfile json.RawMessage) (json.RawMessage, int, erro
 		if r == nil {
 			return nil, 0, errors.New("interfile SARIF: a result is not an object")
 		}
-		k, _, _, _ := zizmorResultKey(r)
+		k, _, _, _ := sarifResultKey(r)
 		if remaining[k] > 0 {
 			remaining[k]--
 			continue

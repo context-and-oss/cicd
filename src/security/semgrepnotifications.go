@@ -47,6 +47,7 @@ package main
 
 import (
 	"encoding/json"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -222,6 +223,7 @@ func parseSemgrepNotifications(raw json.RawMessage) semgrepNotices {
 				case id == semgrepNoticeSyntax:
 					n.ParseFailures++
 					file, line, detail := semgrepSyntaxLocation(note)
+					file = semgrepNoticePath(file)
 					if file == "" {
 						n.UnattributedParseFailures++
 						continue
@@ -252,6 +254,7 @@ func parseSemgrepNotifications(raw json.RawMessage) semgrepNotices {
 				case id == semgrepNoticeTimeout:
 					n.Timeouts++
 					rule, file := semgrepTimeoutSubject(note)
+					file = semgrepNoticePath(file)
 					if rule != "" && !seenRule[rule] {
 						seenRule[rule] = true
 						n.TimedOutRules = append(n.TimedOutRules, rule)
@@ -273,6 +276,25 @@ func parseSemgrepNotifications(raw json.RawMessage) semgrepNotices {
 		}
 	}
 	return n
+}
+
+// semgrepNoticePath is one spelling per file. A syntax notice names a file in
+// its message or its location and a timeout in its message, and the engine
+// may write the same file as "./a.go", "/src/a.go" or "file:///src/a.go"
+// across them; read raw, one file both partly parsed and timed out would
+// count twice in Examined.Partial.
+func semgrepNoticePath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	p = strings.TrimPrefix(p, "file://")
+	p = strings.TrimPrefix(p, "/src/")
+	p = path.Clean(p)
+	if p == "." || p == "/src" {
+		return ""
+	}
+	return p
 }
 
 func orUnnamed(id string) string {

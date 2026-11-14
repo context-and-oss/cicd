@@ -103,6 +103,10 @@ func runSemgrepOnce(ctx context.Context, src *dagger.Directory, args []string, p
 			return semgrepScan{}, err
 		}
 	}
+	scoped, scope, err := gitIgnoredScope(ctx, src)
+	if err != nil {
+		return semgrepScan{}, err
+	}
 	base := dag.Container().From(pythonImage)
 	platform, err := base.Platform(ctx)
 	if err != nil {
@@ -137,7 +141,7 @@ func runSemgrepOnce(ctx context.Context, src *dagger.Directory, args []string, p
 			WithNewFile(semgrepPackTops, strings.Join(plan.Tops, "\n")+"\n")
 	}
 	ran := ctr.
-		WithMountedDirectory("/src", withoutGitMetadata(src)).
+		WithMountedDirectory("/src", withoutGitMetadata(scoped)).
 		WithWorkdir("/src").
 		WithExec(append([]string{"sh", "-c", semgrepScript, "sh"}, args...))
 
@@ -218,7 +222,37 @@ func runSemgrepOnce(ctx context.Context, src *dagger.Directory, args []string, p
 	if err := json.Unmarshal([]byte(notes), &scan.Warnings); err != nil {
 		return scan, errors.New("opengrep: could not read inline scan disclosures")
 	}
+	if scope.Warning != "" {
+		scan.Warnings = append(scan.Warnings, scope.Warning)
+	}
 	return scan, nil
+}
+
+// gitIgnoredScope returns the tree with every path git ignores removed, and
+// what the evidence says about it; see gitscope.go. A tree without .git comes
+// back unchanged, as does one git could not answer for, with the warning that
+// says so. The error is cicd's own: a status file the script always writes
+// could not be read back.
+func gitIgnoredScope(ctx context.Context, src *dagger.Directory) (*dagger.Directory, gitScope, error) {
+	ran := dag.Container().
+		From(gitleaksImage).
+		WithoutEntrypoint().
+		WithDirectory(gitScopeMount, src).
+		WithWorkdir(gitScopeMount).
+		WithExec([]string{"sh", "-c", gitScopeScript()})
+	status, err := ran.File(gitScopeStatus).Contents(ctx)
+	if err != nil {
+		return nil, gitScope{}, errors.New(readbackError("opengrep", gitScopeStatus, err))
+	}
+	stderr, err := ran.File(gitScopeErr).Contents(ctx)
+	if err != nil {
+		return nil, gitScope{}, errors.New(readbackError("opengrep", gitScopeErr, err))
+	}
+	scope := classifyGitScope(status, stderr)
+	if !scope.Pruned {
+		return src, scope, nil
+	}
+	return ran.Directory(gitScopeMount), scope, nil
 }
 
 // withoutGitMetadata drops the tree's .git, whichever shape it has (a
