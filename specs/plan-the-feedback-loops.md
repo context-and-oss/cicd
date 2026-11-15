@@ -32,11 +32,33 @@ would otherwise open:
 - The investigator tool must be publicly installable and pinned, so that cicd
   does not depend on something a consumer cannot fetch.
 
+## False positives and the proposal shape
+
+A loop that triages a live error stream on a schedule sees the same noise
+every run. Without memory it re-proposes every dismissed group, pays a model
+call for it, and teaches its readers to ignore it. The roadmap therefore keeps
+one record of decisions, the issue tracker, keyed by a fingerprint marker on
+each issue. A dismissal there holds until the group regrows in a newer release
+or regresses after a fix. Repeated dismissals of one pattern turn into a rule
+proposal instead of being re-decided case by case. Precision per class is
+measured from proposal outcomes, and a class below the consumer's floor drops
+to a lower output level on its own.
+
+The issue is always the unit of record and a draft PR only attaches to one,
+since dedupe, dismissal and the learn-from-bugs hand-off all need an issue. The
+choice between issue and PR uses confidence and blast radius. A PR also needs a
+reproducing test that cicd witnesses red then green, because a model's
+confidence in its own triage is a claim. High blast radius never produces an
+automatic PR.
+
 ## Rejected
 
 - Filing logs-to-fixes under Stage 11 `Observe`. That function returns a
   release health verdict; triage of an open-ended error stream is a different
   question and must not block a release.
+- A state file owned by cicd for dismissals. It would be a second record next
+  to the tracker where people actually close issues, and the two would drift.
+- Opening a PR on model confidence alone, or a PR without an issue.
 - Running learn-from-bugs as a merge gate. "No change" is a valid outcome, and a
   gate whose pass state includes "the model decided nothing was needed" grades
   its own blind spot.
@@ -47,3 +69,7 @@ would otherwise open:
   duplicate Sentry and Log Analytics clients the section rules out.
 - Reporting an agent timeout or an invalid report as `no_change`.
 - Recording a parked record's matched value in the evidence.
+- Treating an unreadable tracker as "no prior decisions". That re-proposes
+  every dismissed group in one run.
+- Reopening a dismissed group just because it fired again, with no newer
+  release and no regrowth.

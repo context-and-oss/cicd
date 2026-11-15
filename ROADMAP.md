@@ -363,13 +363,75 @@ Analytics adapters are designed once, together with the Stage 11 source contract
 | Grouping         | Deterministic fingerprint: exception type + crash-site file + function, with the title only as a fallback. The model breaks ties and never invents a key |
 | Classification   | `bug` / `noise` / `env` / `needs_info`, with confidence and blast radius. Consumer rules win over the model |
 | Ownership        | A group whose stack never touches the consumer's own code is reported and never proposed        |
-| Output           | One brief per qualifying `bug` group. Default is dry run: the evidence lists the issues that would open. Opt-in opens an issue; a draft PR needs a consumer-supplied fix command |
+| Output           | One brief per qualifying `bug` group. Default is dry run: the evidence lists the proposals that would open. The issue is always the unit of record, and a draft PR is only ever attached to one. See *Issue or pull request* below |
 | Limits           | A per-run cap on groups proposed; groups beyond the cap are counted, not dropped silently      |
 | Writes           | None to Sentry or Azure: no resolve, no mute. The issue/PR token is a separate identity from the telemetry identity |
-| Evidence         | Per source: window, records examined, groups, classifications, parked counts by kind, briefs, proposals opened. An unreachable or unauthorised source goes in `errors[]` and never reads as "no errors" |
+| Evidence         | Per source: window, records examined, groups, classifications, parked counts by kind, groups suppressed (by dismissal, by rule, by pre-gate reason), briefs, proposals opened and updated. An unreachable or unauthorised source goes in `errors[]` and never reads as "no errors" |
 
 **Composite**: `src/composites/logs-to-fixes`, which runs Sanitize → Triage → propose → evidence →
 notify. It is triggered by a schedule or an alert, never by a commit.
+
+#### A false positive is decided once
+
+The loop has to remember what a human already decided. Otherwise it re-proposes the same group on
+every run.
+
+- **The issue tracker is the record of decisions.** Each issue carries its group's fingerprint in a
+  hidden marker. Before proposing, the loop reads the tracker (GitHub or Azure DevOps). If an issue
+  for that fingerprint is open, it gets an updated comment, never a duplicate. If someone closed it
+  as *not planned* / *won't fix*, the group is dismissed. cicd keeps no state of its own, because
+  people already make these decisions in the tracker. If the tracker cannot be read, nothing is
+  proposed, and that goes in `errors[]`, because an unread record of decisions looks the same as an
+  empty one.
+- **A dismissed group stays dismissed until something material changes.** It comes back only if:
+  - it fires in a release newer than the dismissal **and** its volume has grown past a set factor, or
+  - it was closed as *fixed* and fires again in a release newer than the fix. That is reopened and
+    labelled as a regression.
+
+  Firing again on its own never brings it back.
+- **Rules for whole classes of noise.** Consumer rules already win over the model. When several
+  groups that share a pattern (origin, exception type, third-party frame) have been dismissed, the
+  loop proposes a rule as a pull request to the consumer's rules file. Once a human merges it, that
+  class is filtered before any model call.
+- **A deterministic pre-gate before proposing.** It requires:
+  - a frame in the consumer's own code, with a source-mapped path;
+  - not seen only on old releases;
+  - a minimum event or user volume;
+  - persistence across more than one run, so a single spike is not proposed.
+
+  Each refusal is counted in the evidence by reason.
+- **A decided group is not triaged again.** Triage results are cached by fingerprint and release, so
+  dismissed and already-proposed groups cost no model call.
+- **Precision is measured, and the loop cuts back automatically.** The evidence records every
+  proposal and its outcome (merged, dismissed, still open), and precision is computed per
+  classification and fix class. When precision for a class falls below the consumer's floor, that
+  class drops one level, from PR to issue or from issue to dry run, and the evidence says so. Only a
+  human raises it again.
+
+#### Issue or pull request
+
+The **issue is always the record**. A draft PR is optional, and it links to its issue. A PR is never
+opened without an issue, because the issue is where dedupe, dismissal and discussion happen, and
+learn-from-bugs takes it as input.
+
+Confidence and blast radius decide the outcome, but neither is enough to open a PR. Model confidence
+is reported by the model itself. The evidence for a PR is a reproducing test that cicd runs itself
+through the witnessed BYO test of
+[ADR-002](docs/decisions/ADR-002-witnessed-test-execution.md): it must fail on the current code and
+pass with the proposed fix.
+
+| Triage result | Outcome |
+|---|---|
+| `noise` / `env`, or matched by a rule | Nothing proposed; counted in the evidence |
+| `needs_info`, or confidence below the issue floor | No issue; listed in the run summary, and looked at again if volume grows past the regrowth factor |
+| `bug`, confidence at or above the issue floor, **or** high blast radius | Issue with the brief |
+| `bug`, confidence at or above the PR floor, low or medium blast radius, allowlisted fix class, own code | Issue **plus** a draft PR from the consumer-supplied fix command, kept only if the reproducing test is witnessed red then green |
+| The row above, but no test could be witnessed | Issue only; the proposed patch goes on the issue as text |
+
+**High blast radius never gets an automatic PR**, at any confidence. A human has to design that
+fix. Every floor, the regrowth factor and the precision floor are consumer configuration. The
+defaults are conservative, and the default mode is dry run. A consumer raises them once the
+measured precision justifies it.
 
 ### Loop B — learn from bugs (fix merged → Stages 1–2)
 
@@ -447,3 +509,5 @@ All Phase 2 and Phase 3 modules follow the same conventions established in Phase
 | Learn-from-bugs investigator tool  | TBD — must be public and pinnable |
 | Logs-to-fixes fix command for draft PRs | TBD — consumer-supplied; issue-only until decided |
 | Sanitiser pattern set and parking policy | Shape decided; per-kind patterns TBD |
+| Logs-to-fixes default floors (issue, PR, precision), regrowth factor, minimum volume | Shape decided; values TBD |
+| Tracker fingerprint marker format (GitHub and Azure DevOps) | TBD |
