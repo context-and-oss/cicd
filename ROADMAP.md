@@ -358,7 +358,7 @@ Analytics adapters are designed once, together with the Stage 11 source contract
 
 | Decision         | Value                                                                                          |
 |------------------|------------------------------------------------------------------------------------------------|
-| Primary function | `Triage(ctx, sources *dagger.File, rules *dagger.File, window string, ...) (*dagger.File, error)` |
+| Primary function | `Triage(ctx, sources *dagger.File, rules *dagger.File, window string, previous *dagger.File, ...) (*dagger.File, error)`, where `previous` is the last run's evidence (optional) |
 | Window           | Bounded per source by a persisted high-water mark; the evidence records the window queried     |
 | Grouping         | Deterministic fingerprint: exception type + crash-site file + function, with the title only as a fallback. The model breaks ties and never invents a key |
 | Classification   | `bug` / `noise` / `env` / `needs_info`, with confidence and blast radius. Consumer rules win over the model |
@@ -384,7 +384,8 @@ every run.
   proposed, and that goes in `errors[]`, because an unread record of decisions looks the same as an
   empty one.
 - **A dismissed group stays dismissed until something material changes.** It comes back only if:
-  - it fires in a release newer than the dismissal **and** its volume has grown past a set factor, or
+  - it fires in a release newer than the dismissal **and** its rate has grown past the regrowth
+    factor, or
   - it was closed as *fixed* and fires again in a release newer than the fix. That is reopened and
     labelled as a regression.
 
@@ -400,8 +401,18 @@ every run.
   - persistence across more than one run, so a single spike is not proposed.
 
   Each refusal is counted in the evidence by reason.
-- **A decided group is not triaged again.** Triage results are cached by fingerprint and release, so
-  dismissed and already-proposed groups cost no model call.
+- **A decided group is not triaged again.** cicd keeps no state, and a `noise` verdict never reaches
+  the tracker, so the memory is the **previous run's evidence**, passed back in as an optional
+  input (a workflow artifact or cache entry). A group already classified there is triaged again
+  only in a newer release that also crosses the regrowth factor. Dismissed and already-proposed
+  groups cost no model call, and the model gets no repeated chance to change its mind about the
+  same noise. The pre-gate's persistence check reads the same input. When the input is missing or
+  unreadable, the run still works: it re-triages everything, skips the persistence check (which
+  only makes proposals stricter), and says both things in the evidence. A missing memory costs
+  money, and the evidence shows that it cost money.
+- **Regrowth is a rate, not a count.** It is measured as events per affected user, or per request
+  where the source has request counts, against the rate when the group was decided. An absolute
+  count trips whenever traffic grows, which would reopen harmless noise every time usage rises.
 - **Precision is measured, and the loop cuts back automatically.** The evidence records every
   proposal and its outcome (merged, dismissed, still open), and precision is computed per
   classification and fix class. When precision for a class falls below the consumer's floor, that
@@ -423,10 +434,20 @@ pass with the proposed fix.
 | Triage result | Outcome |
 |---|---|
 | `noise` / `env`, or matched by a rule | Nothing proposed; counted in the evidence |
+| `noise` with its crash site in the consumer's own code, persisting past the reporting-noise threshold | Issue with fix class `reporting-noise` (see below). The same PR rules apply as for a bug |
 | `needs_info`, or confidence below the issue floor | No issue; listed in the run summary, and looked at again if volume grows past the regrowth factor |
 | `bug`, confidence at or above the issue floor, **or** high blast radius | Issue with the brief |
 | `bug`, confidence at or above the PR floor, low or medium blast radius, allowlisted fix class, own code | Issue **plus** a draft PR from the consumer-supplied fix command, kept only if the reproducing test is witnessed red then green |
 | The row above, but no test could be witnessed | Issue only; the proposed patch goes on the issue as text |
+
+**Recurring noise in the consumer's own code is a reporting defect.** If an exception is expected
+(a cancelled request, a client disconnect), the code should not report it as one. Because the loop
+never mutes anything in Sentry or Azure, the lasting fix belongs in the code. The fix class
+`reporting-noise` proposes that change: drop the event in the Sentry SDK's `beforeSend`, filter it
+in an Application Insights telemetry processor, or lower the log level. Its witnessed test, when
+there is one, asserts that the expected condition is no longer reported. Rules stay for noise from
+code the consumer does not own, where no code change is possible. A rule hides a class for good,
+while a `reporting-noise` fix removes it at the source.
 
 **High blast radius never gets an automatic PR**, at any confidence. A human has to design that
 fix. Every floor, the regrowth factor and the precision floor are consumer configuration. The
@@ -511,3 +532,6 @@ All Phase 2 and Phase 3 modules follow the same conventions established in Phase
 | Sanitiser pattern set and parking policy | Shape decided; per-kind patterns TBD |
 | Logs-to-fixes default floors (issue, PR, precision), regrowth factor, minimum volume | Shape decided; values TBD |
 | Tracker fingerprint marker format (GitHub and Azure DevOps) | TBD |
+| Previous-run evidence transport (artifact or cache) and retention | TBD |
+| Rate denominator per source (users or requests) | TBD |
+| Reporting-noise threshold | TBD |

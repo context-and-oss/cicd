@@ -44,6 +44,23 @@ proposal instead of being re-decided case by case. Precision per class is
 measured from proposal outcomes, and a class below the consumer's floor drops
 to a lower output level on its own.
 
+Walking one recurring, harmless exception through that design exposed three
+gaps, and the roadmap now closes each:
+
+- A `noise` verdict never reaches the tracker, and cicd keeps no state, so
+  the cache of triage results had nowhere to live. Every run would have sent
+  the same noise to the model again. The previous run's evidence is now an
+  optional input. When it is missing, the run re-triages and says so instead
+  of failing, because a missing memory costs money and does not make the
+  result wrong.
+- Regrowth is measured as a rate per user or request rather than as a count,
+  since a count rises with traffic and would reopen harmless noise.
+- Recurring noise in the consumer's own code becomes a `reporting-noise`
+  proposal that stops the code reporting an expected condition, instead of a
+  rule that hides it. The loop never mutes anything at the source, so the
+  lasting fix has to be in the code. Rules remain for code the consumer does
+  not own.
+
 The issue is always the unit of record and a draft PR only attaches to one,
 since dedupe, dismissal and the learn-from-bugs hand-off all need an issue. The
 choice between issue and PR uses confidence and blast radius. A PR also needs a
@@ -59,6 +76,11 @@ automatic PR.
 - A state file owned by cicd for dismissals. It would be a second record next
   to the tracker where people actually close issues, and the two would drift.
 - Opening a PR on model confidence alone, or a PR without an issue.
+- Opening an issue for every `noise` verdict so the tracker would remember it.
+  That floods the tracker with exactly what the loop exists to filter out.
+- Muting recurring noise in Sentry or Azure. That hides the event without
+  fixing the code that reports it, and needs a write identity on the telemetry
+  source.
 - Running learn-from-bugs as a merge gate. "No change" is a valid outcome, and a
   gate whose pass state includes "the model decided nothing was needed" grades
   its own blind spot.
@@ -73,3 +95,5 @@ automatic PR.
   every dismissed group in one run.
 - Reopening a dismissed group just because it fired again, with no newer
   release and no regrowth.
+- Failing the run when the previous evidence is missing. That would turn a
+  cache miss into an outage of the whole loop.
