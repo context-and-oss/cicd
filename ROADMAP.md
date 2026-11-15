@@ -1,7 +1,8 @@
 # Roadmap
 
 **Nothing on this page is implemented.** This is a design record for the *remaining* stages of the
-[CD Model](docs/explanation/continuous-delivery/cd-model/stages.md): every module, composite,
+[CD Model](docs/explanation/continuous-delivery/cd-model/stages.md), and for the feedback loops
+that run between stages: every module, composite,
 function signature and evidence field below is a decision captured ahead of implementation so the
 work can proceed without re-interviewing. Names and signatures here are proposals and will change
 when the code is written. TBD items are explicitly marked, and no phase has a delivery date.
@@ -290,6 +291,131 @@ Two composites are planned for stages 7–12:
 
 ---
 
+## Feedback loops — from late stages back to early ones
+
+**Status**: Shape decided; investigator tool and source adapter fields TBD.
+
+The two loops below are not stages. Each one reads from a late stage and writes to an early one.
+Like the shipped `src/composites/dast`, each runs on its own cadence in its own workflow, no other
+composite calls it, and it never gates a merge. Each produces a **proposal**: an issue or a draft
+pull request. That proposal enters the CD Model at Stage 1 like any other change, so the fix or the
+prevention passes Stages 2–4 like any other change. cicd never merges, never pushes to trunk, and
+never writes back to a telemetry source. ADR-001 keeps publishing out of cicd for the same reason.
+
+```text
+Stage 1 ─► 2 ─► 3 ─► 4 ─► … ─► 10 ─► 11 (Live)
+      ▲              │               │
+      │              │ fix merged    │ Sentry / Azure logs
+      │              ▼               ▼
+      ├────── learn-from-bugs  logs-to-fixes
+      │       draft PR: test,        │
+      │       check or guidance      │
+      └─ issue / draft PR (the fix) ─┘
+```
+
+The loops chain together. When a fix proposed by logs-to-fixes merges, that merge triggers
+learn-from-bugs, using the logs-to-fixes brief as the issue.
+
+### Module: `src/feedback`
+
+There is one domain module with three functions. The two loops share a sanitiser and a model
+contract, so they share a module. They do not share a composite.
+
+| Function   | Role                                                                                       |
+|------------|--------------------------------------------------------------------------------------------|
+| `Sanitize` | Deterministic personal-data and credential screen. It runs before every model call in either loop |
+| `Triage`   | Logs-to-fixes: groups and classifies telemetry, then writes one brief per qualifying group |
+| `Learn`    | Learn-from-bugs: turns an issue plus its fix into a witnessed prevention proposal          |
+
+Model access follows the `risk` module's contract: native `dag.LLM()`, or an OpenAI-compatible
+`--llm-url` with `--llm-token` as a `*dagger.Secret`. A second model path is not introduced.
+
+### Shared: sanitise before any model sees the text
+
+Both loops send untrusted text to a model: log records in one, issue text in the other. Consumer
+logs are expected to carry no personal data. `Sanitize` runs anyway, because nothing measures that
+expectation until something checks.
+
+- **What it screens**: email addresses, phone numbers, payment card numbers, national identifiers,
+  credentials and tokens, and public IP addresses. The patterns are deterministic, with no model
+  involved.
+- **Parks the record; does not redact it**: a record with a hit is left out of every prompt. Redacting
+  one field and sending the rest only moves the miss to the next field.
+- **Evidence**: records examined, records parked, and hit counts by kind (`pii:email`). A hit's value
+  is never recorded.
+- **Exact bytes**: the screen runs on the exact prompt bytes sent to the model, not on the source
+  record before templating.
+- **A screen that could not run refuses the run**. It never reports zero hits.
+- **Content is data**: log messages and issue bodies are framed as data, never as instructions,
+  because both are attacker-reachable.
+
+### Loop A — logs to fixes (Stage 11 → Stage 1)
+
+**Sources**: Sentry, and Azure through the Log Analytics workspace (workspace-based Application
+Insights included). There are no other sources. The loop uses **Stage 11's source adapters and
+read-only telemetry identity**; it does not ship its own clients. For that reason the Sentry and Log
+Analytics adapters are designed once, together with the Stage 11 source contract, and serve both.
+
+| Decision         | Value                                                                                          |
+|------------------|------------------------------------------------------------------------------------------------|
+| Primary function | `Triage(ctx, sources *dagger.File, rules *dagger.File, window string, ...) (*dagger.File, error)` |
+| Window           | Bounded per source by a persisted high-water mark; the evidence records the window queried     |
+| Grouping         | Deterministic fingerprint: exception type + crash-site file + function, with the title only as a fallback. The model breaks ties and never invents a key |
+| Classification   | `bug` / `noise` / `env` / `needs_info`, with confidence and blast radius. Consumer rules win over the model |
+| Ownership        | A group whose stack never touches the consumer's own code is reported and never proposed        |
+| Output           | One brief per qualifying `bug` group. Default is dry run: the evidence lists the issues that would open. Opt-in opens an issue; a draft PR needs a consumer-supplied fix command |
+| Limits           | A per-run cap on groups proposed; groups beyond the cap are counted, not dropped silently      |
+| Writes           | None to Sentry or Azure: no resolve, no mute. The issue/PR token is a separate identity from the telemetry identity |
+| Evidence         | Per source: window, records examined, groups, classifications, parked counts by kind, briefs, proposals opened. An unreachable or unauthorised source goes in `errors[]` and never reads as "no errors" |
+
+**Composite**: `src/composites/logs-to-fixes`, which runs Sanitize → Triage → propose → evidence →
+notify. It is triggered by a schedule or an alert, never by a commit.
+
+### Loop B — learn from bugs (fix merged → Stages 1–2)
+
+**Input**: an issue (text, or a link) plus the exact fix (a commit, a `BASE..HEAD` range, or a
+merged pull request).
+
+**Triggers**:
+
+- A fix landing on trunk at Stage 4.
+- An on-demand run after a Stage 11 post-mortem; see
+  [incident response](docs/explanation/continuous-delivery/deployment/incident-response.md).
+- A merged logs-to-fixes proposal.
+
+**Question**: which stage should have caught this, and what is the smallest change that would catch
+the next one? The answer is one of: a regression test, a contract or schema check, a lint or static
+rule, review guidance, a configuration check, or **no change**.
+
+| Decision         | Value                                                                                           |
+|------------------|-------------------------------------------------------------------------------------------------|
+| Primary function | `Learn(ctx, src *dagger.Directory, issue *dagger.File, fix string, testCmd string, ...) (*dagger.File, error)` |
+| Isolation        | The investigator runs in a container on a copy of the checkout and returns a diff plus a structured report. It never edits the consumer's tree |
+| Witnessing       | cicd reruns the proposed regression test itself through the witnessed BYO test of [ADR-002](docs/decisions/ADR-002-witnessed-test-execution.md). The test must fail on the fix's parent and pass on the fix. Validation the agent reports is a claim, not evidence |
+| Outcomes         | `applied`, `no_change`, `not_applied`, `apply_failed`, or did-not-run. `no_change` is valid but must give a reason; an agent timeout or an invalid report is never `no_change` |
+| Stage mapping    | The earliest practical detection point is recorded as a CD Model stage number, so findings aggregate into the [defect-stages mapping](docs/explanation/continuous-delivery/quality-gates/defect-prevention/defect-stages-mapping.md) over time |
+| Output           | A draft PR on its own branch, never trunk. The finding record travels as evidence and is not committed automatically |
+| Evidence         | Issue reference or hash, fix base and head SHAs, diff hash, outcome, witnessed red/green results, stage mapping. No raw issue body, diff or transcript |
+
+**Composite**: `src/composites/learn-from-bugs`, which runs Sanitize (issue text) → Learn →
+witnessed test → propose → evidence → notify.
+
+**Investigator tool**: TBD. It must be publicly installable and pinnable: a digest-pinned image in
+`images.go`, or `go run <module>@<version>`. cicd does not depend on a tool a consumer cannot
+fetch. It also reaches consumers through the Dagger module, never as a third-party `uses:` action,
+because of the doctrine that our own workflows use no third-party actions.
+
+### Templates and sequencing
+
+- Reusable workflows: `logs-to-fixes.yml` (schedule plus manual) and `learn-from-bugs.yml` (trunk
+  push filtered to fixes, plus manual), with matching Azure DevOps starters.
+- **Learn-from-bugs comes first**. It depends on nothing unbuilt, since the witnessed BYO test
+  already ships.
+- **Logs-to-fixes lands with the Stage 11 source contract**, because building it earlier would
+  create a second set of Sentry and Log Analytics clients that Stage 11 would later have to replace.
+
+---
+
 ## Conventions carried forward from Phase 1
 
 All Phase 2 and Phase 3 modules follow the same conventions established in Phase 1:
@@ -318,3 +444,6 @@ All Phase 2 and Phase 3 modules follow the same conventions established in Phase
 | Stage 11 normalized signal schema  | Log Analytics hub + multi-source adapters decided; SLO/quorum details TBD |
 | Auth role sets per provider        | WIF/managed-identity policy decided; exact least-privilege roles TBD |
 | Stage 12 Release Toggling platform | TBD                             |
+| Learn-from-bugs investigator tool  | TBD — must be public and pinnable |
+| Logs-to-fixes fix command for draft PRs | TBD — consumer-supplied; issue-only until decided |
+| Sanitiser pattern set and parking policy | Shape decided; per-kind patterns TBD |
