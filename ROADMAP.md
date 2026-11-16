@@ -327,8 +327,41 @@ contract, so they share a module. They do not share a composite.
 | `Triage`   | Logs-to-fixes: groups and classifies telemetry, then writes one brief per qualifying group |
 | `Learn`    | Learn-from-bugs: turns an issue plus its fix into a witnessed prevention proposal          |
 
-Model access follows the `risk` module's contract: native `dag.LLM()`, or an OpenAI-compatible
-`--llm-url` with `--llm-token` as a `*dagger.Secret`. A second model path is not introduced.
+Model access inside Dagger (`Triage`) follows the `risk` module's contract: native `dag.LLM()`,
+or an OpenAI-compatible `--llm-url` with `--llm-token` as a `*dagger.Secret`. A second model path
+is not introduced. The learn-from-bugs investigator runs outside Dagger (see Loop B), but it uses
+the same endpoint and the same kind of token.
+
+### Shared: the consumer brings the model, and no model secret is stored
+
+cicd holds no model credential. Each consumer brings three things:
+
+- **Endpoint and deployment.** An OpenAI-compatible Responses endpoint, such as Azure AI Foundry,
+  and a deployment name. Both are inputs to the reusable workflows, never constants in them. The
+  consumer's code and issue text go to the consumer's own endpoint, under the consumer's tenant,
+  region and data terms.
+- **Identity.** An Entra app registration (client ID and tenant ID) with a model-calling role on
+  that endpoint, and nothing else. The workflow exchanges GitHub's OIDC token for a short-lived
+  Entra token and passes it on as a secret. There is no API key to store, leak or rotate.
+- **Shared settings as org variables.** The endpoint, deployment, client ID and tenant ID are not
+  secret. An organisation sets them once as org-level Actions variables, and its repositories pass
+  them in. A new consumer repository in that organisation needs no setup of its own.
+
+**One federated credential per consumer organisation, not per repository.** Entra's
+claims-matching federated credential (a preview feature, used anyway because the alternative is
+one credential per repository with a low per-identity cap) trusts a pattern of callers instead of
+one subject. Its expression must pin all three of these:
+
+- `repository_owner_id`: the organisation's immutable numeric ID. This is the guard. A name pattern
+  such as `repo:<org>*` also matches any other organisation whose name starts the same way.
+- `sub`: the trunk branch, such as `repo:<org>/*:ref:refs/heads/main`, so a pull request branch
+  cannot obtain a token.
+- `job_workflow_ref`: cicd's reusable workflow **at a release tag**, such as
+  `context-and-oss/cicd/.github/workflows/learn-from-bugs.yml@refs/tags/*`. A `@*` ref also
+  accepts a branch carrying a modified copy of the workflow.
+
+cicd is public, so `job_workflow_ref` alone would trust every repository on GitHub that calls the
+workflow. The owner ID is mandatory, not a refinement.
 
 ### Shared: sanitise before any model sees the text
 
@@ -562,6 +595,7 @@ All Phase 2 and Phase 3 modules follow the same conventions established in Phase
 | Auth role sets per provider        | WIF/managed-identity policy decided; exact least-privilege roles TBD |
 | Stage 12 Release Toggling platform | TBD                             |
 | Learn-from-bugs investigator tool  | TBD — must be public and pinnable |
+| Claims-matching federated credentials (preview) | Decided to use. Unverified: one expression across several organisations (`or`), and which Entra identity types support it |
 | Logs-to-fixes fix command for draft PRs | TBD — consumer-supplied; issue-only until decided |
 | Sanitiser pattern set and parking policy | Shape decided; per-kind patterns TBD |
 | Logs-to-fixes default floors (issue, PR, precision), regrowth factor, minimum volume | Shape decided; values TBD |
