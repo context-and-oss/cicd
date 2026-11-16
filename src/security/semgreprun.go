@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // semgrepScan is one SAST scan's result. Declared here, untagged, so the
@@ -152,6 +153,45 @@ func lastNonEmptyLine(s string) string {
 	return ""
 }
 
+// semgrepStartedPath is where the scan script stamps, in Unix nanoseconds,
+// the moment it began. It is how a run tells its own result from one the
+// engine replayed out of cache; see semgrepKillReplayed.
+const semgrepStartedPath = "/tmp/semgrep.started"
+
+// semgrepRerunEnv carries a per-call value into the rerun of a replayed kill.
+// It changes the exec's inputs, so the engine has to run it rather than serve
+// the cached kill a second time. It is nothing the scan reads.
+const semgrepRerunEnv = "CICD_OPENGREP_RERUN"
+
+// semgrepKillReplayed reports whether a scan that died by signal is a replay
+// of an earlier call's death rather than one that happened in this call.
+//
+// The script exits 0 whatever opengrep does, so that the exit status and the
+// evidence can be read back. The engine caches an exec by its inputs, so it
+// also caches that exit-0 layer — and a scan the kernel killed for memory
+// (exit 137) was then replayed, instantly, on every retry of the same tree:
+// the evidence said ERROR every time, correctly, and no retry could ever do
+// better. Every other outcome is the input's and is right to cache. A signal
+// death is the machine's: the same tree can finish on a larger engine, or on
+// the same one with less running beside it.
+//
+// sh reports a signal death as 128 plus the signal, and opengrep's own codes
+// are far below that. A death is a replay when the script stamped a start
+// before this call asked for the scan. A stamp that cannot be read is treated
+// as a replay: rerunning a fresh kill once costs a second failed run, and
+// trusting an unreadable stamp could leave the replay in place for good.
+func semgrepKillReplayed(exitCode, started string, asked time.Time) bool {
+	n, err := strconv.Atoi(strings.TrimSpace(exitCode))
+	if err != nil || n < 128 {
+		return false
+	}
+	ns, err := strconv.ParseInt(strings.TrimSpace(started), 10, 64)
+	if err != nil {
+		return true
+	}
+	return ns < asked.UnixNano()
+}
+
 // semgrepScript runs semgrep, records its exit status, and always exits 0 so
 // the classification below — not Dagger's exec failure — decides what
 // happened.
@@ -188,6 +228,7 @@ func lastNonEmptyLine(s string) string {
 // semgrepPackErrPath says. semgrepRuleSet checks the loaded rules afterwards
 // as well; this step only makes the first failure the one that is named.
 const semgrepScript = `set -u
+date +%s%N > ` + semgrepStartedPath + ` 2>/dev/null || :
 ` + opengrepVerifyScript + `: > /tmp/semgrep.err
 : > /tmp/semgrep.scanned
 : > ` + semgrepPackErrPath + `

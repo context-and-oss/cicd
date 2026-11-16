@@ -90,7 +90,11 @@ dagger -m ./src/security call scan-sbom \
   walks the tree, and `gitIgnoredScope` first removes what `.gitignore`
   excludes, asking git in the pinned gitleaks image. `gitscope.go`
   (**untagged**) holds the script and `classifyGitScope`, which names every
-  scope that differs from git's in `warnings[]`; `.semgrepignore` still applies
+  scope that differs from git's in `warnings[]`; `.semgrepignore` still applies.
+  The script exits 0 and stamps its start, so a signal death the engine
+  replayed from an earlier call's cache (`semgrepKillReplayed`, untagged in
+  `semgreprun.go`) runs once more with `CICD_OPENGREP_RERUN` set; never make
+  the stamp conditional or move it after a step that can be killed
 - `taint.go` — **untagged**: `ScanTaint`'s every decision. The interfile
   manifest (`rules/opengrep-interfile.txt`, the pinned audit/OWASP rules marked
   `interfile` upstream), the plan, the gate and depth refusals, the arguments

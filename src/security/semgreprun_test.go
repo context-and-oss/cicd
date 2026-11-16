@@ -1,8 +1,10 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestSemgrepConfigFlagsRejectsAuto is the regression guard for the worst of the
@@ -318,5 +320,47 @@ func TestTheInlineHelperRunsTheVerifiedBinary(t *testing.T) {
 	want := `ENGINE = "` + opengrepBinPath + `"`
 	if !strings.Contains(semgrepInlineScript, want) {
 		t.Fatalf("semgrep_inline.py no longer pins %s", want)
+	}
+}
+
+// TestSemgrepKillReplayedOnlyRerunsAKillFromAnEarlierCall pins the one outcome
+// the engine must not serve from cache. The script exits 0 so its evidence can
+// be read, which made an OOM kill (exit 137) a cached layer: every retry of
+// the same tree replayed it instantly, and no retry could ever succeed.
+func TestSemgrepKillReplayedOnlyRerunsAKillFromAnEarlierCall(t *testing.T) {
+	asked := time.Unix(1_800_000_000, 500)
+	before := strconv.FormatInt(asked.UnixNano()-int64(90*time.Second), 10)
+	after := strconv.FormatInt(asked.UnixNano()+1, 10)
+	cases := []struct {
+		name, code, started string
+		want                bool
+	}{
+		{"cached kill from an earlier call", "137\n", before, true},
+		{"cached SIGTERM from an earlier call", "143", before, true},
+		{"kill in this call is reported, not run twice", "137", after + "\n", false},
+		{"kill with no stamp is rerun rather than trusted", "137", "", true},
+		{"kill with a stamp date could not format", "137", "1800000000N", true},
+		{"a cached clean scan stays cached", "0", before, false},
+		{"a cached usage error is the input's, not the machine's", "2", before, false},
+		{"a cached inline failure is the input's too", "125", before, false},
+		{"an unreadable exit is classified elsewhere", "", before, false},
+	}
+	for _, c := range cases {
+		if got := semgrepKillReplayed(c.code, c.started, asked); got != c.want {
+			t.Errorf("%s: semgrepKillReplayed(%q, %q) = %v, want %v", c.name, c.code, c.started, got, c.want)
+		}
+	}
+}
+
+// TestTheSemgrepScriptStampsItsStartBeforeAnythingElse: the stamp is what tells
+// a replay from a fresh run, so it must be written before any step that can be
+// killed, and never be able to fail the script.
+func TestTheSemgrepScriptStampsItsStartBeforeAnythingElse(t *testing.T) {
+	stamp := "date +%s%N > " + semgrepStartedPath + " 2>/dev/null || :\n"
+	if !strings.HasPrefix(semgrepScript, "set -u\n"+stamp) {
+		t.Fatalf("semgrepScript must stamp its start as its first command: %q", stamp)
+	}
+	if !strings.Contains(semgrepScript, opengrepBinPath+" scan") {
+		t.Fatalf("semgrepScript no longer invokes %s scan", opengrepBinPath)
 	}
 }

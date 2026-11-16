@@ -74,6 +74,16 @@ the fixture proves the capability, not a yield.
   likely out-of-memory kill it is; the rule floor not met on either run; a
   SARIF the delta cannot read. A failed baseline keeps the unfiltered
   interfile findings beside its error.
+- **A kill is not served from cache.** The scan script exits 0 so the exit
+  and the evidence can be read back, so the engine cached a killed run like a
+  finished one, and every retry of the same tree replayed the kill instantly:
+  measured on a consumer tree, a rerun after an out-of-memory kill came back
+  `CACHED` with the same exit 137. A kill is the machine's, not the input's.
+  The script now stamps its start; a signal death (exit 128 or above) stamped
+  before the call asked is run once more with a per-call value in its
+  environment, and a kill in the call itself is reported, not run twice. This
+  lives in `runSemgrepOnce`, so `ScanSource` gets it too; every other outcome
+  is still cached.
 - **The SARIF run carries `automationDetails.id: opengrep-interfile`**, so an
   aggregate or an upload keys it apart from `ScanSource`'s Opengrep run.
   Redaction is the same as `ScanSource`'s: matched source, code flows and
@@ -99,6 +109,9 @@ the fixture proves the capability, not a yield.
   unreadable SARIF shapes refused; a failed baseline and a killed interfile
   run; the floor; the advisory and suppression warnings; and the measured
   depth-cap and rule-only timeout notifications, verbatim.
+- `src/security/semgreprun_test.go`: a kill stamped before the call is a
+  replay and a kill after it is not; a missing or unformatted stamp reruns;
+  exit 0, 2 and 125 stay cached; and the stamp is the script's first command.
 - `scripts/smoke/interfile-taint.sh`, run by the `module-test` security cell
   and `make smoke`: the real engine over `testdata/interfile-taint`, in warn
   mode at depth 3 (exactly the six cross-function findings, none of the
@@ -108,6 +121,14 @@ the fixture proves the capability, not a yield.
 ## Residue
 
 - Only the arm64 engine was exercised locally; amd64 is exercised by CI.
+- The rerun of a replayed kill is proven in CI by unit test only: no CI job
+  can make the kernel kill a scan on demand. It was proven once on the engine
+  against the consumer tree that is killed for memory: the second call's
+  interfile exec came back `CACHED` with exit 137, the module ran it again
+  with `CICD_OPENGREP_RERUN` set, and that run executed and was killed afresh,
+  so the error the call reported was a measurement, not a replay. It relies
+  on the module and the scan container reading the same clock, which holds
+  because both run on the engine's host.
 - The cost figures are from library code; an application tree with more
   request handlers may cost more. A consumer measurement before making it a
   merge gate is the next step.

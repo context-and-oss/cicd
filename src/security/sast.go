@@ -7,7 +7,9 @@ import (
 	"dagger/security/internal/dagger"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // runSemgrep executes semgrep with SARIF output and returns raw SARIF, severity
@@ -140,14 +142,31 @@ func runSemgrepOnce(ctx context.Context, src *dagger.Directory, args []string, p
 			WithNewFile(semgrepPackFiles, semgrepPackStaging(plan.Files)).
 			WithNewFile(semgrepPackTops, strings.Join(plan.Tops, "\n")+"\n")
 	}
-	ran := ctr.
+	scanIn := ctr.
 		WithMountedDirectory("/src", withoutGitMetadata(scoped)).
-		WithWorkdir("/src").
-		WithExec(append([]string{"sh", "-c", semgrepScript, "sh"}, args...))
+		WithWorkdir("/src")
+	cmd := append([]string{"sh", "-c", semgrepScript, "sh"}, args...)
+	// Taken before the exec is evaluated, which is no earlier than the
+	// Contents call below; a run stamped before it is a cache replay.
+	asked := time.Now()
+	ran := scanIn.WithExec(cmd)
 
 	code, err := ran.File("/tmp/semgrep.exit").Contents(ctx)
 	if err != nil {
 		return semgrepScan{}, err
+	}
+	// A kill the engine replayed from an earlier call is run once more, for
+	// real. A kill in this call is not: it is reported as it is. See
+	// semgrepKillReplayed.
+	started, _ := ran.File(semgrepStartedPath).Contents(ctx)
+	if semgrepKillReplayed(code, started, asked) {
+		ran = scanIn.
+			WithEnvVariable(semgrepRerunEnv, strconv.FormatInt(asked.UnixNano(), 10)).
+			WithExec(cmd)
+		code, err = ran.File("/tmp/semgrep.exit").Contents(ctx)
+		if err != nil {
+			return semgrepScan{}, err
+		}
 	}
 	// Before anything else is read: an engine that did not match its pin is
 	// the most important thing this scan has to say.
