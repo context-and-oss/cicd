@@ -1,0 +1,7 @@
+const db = require('./db');
+
+function findById(id) {
+  return db.sequelize.query("SELECT * FROM invoices WHERE id = " + id);
+}
+
+module.exports = { findById };

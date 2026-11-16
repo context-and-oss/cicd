@@ -180,7 +180,7 @@ class InlineTests(unittest.TestCase):
             (root / 'sarif').write_text(baseline)
             def fake_scan(command, cwd, **kwargs):
                 work = Path(cwd)
-                (work / 'report.json').write_text('{"paths":{"scanned":["scripts/inline-0000.js"]},"time":{"fixpoint_timeouts":[]}}')
+                (work / 'report.json').write_text('{"paths":{"scanned":["scripts/inline-0000.js"]}}')
                 (work / 'report.sarif').write_text(json.dumps({'runs': [{
                     'tool': {'driver': {'rules': [{'id': DOM_ID}]}}, 'results': []}]}))
                 return SimpleNamespace(returncode=0)
@@ -200,16 +200,17 @@ class InlineTests(unittest.TestCase):
             (root / 'report').write_text('{"paths":{"scanned":["page.html"]}}')
             (root / 'sarif').write_text('{"runs":[{}]}')
             def fake_scan(command, cwd, **kwargs):
-                self.assertEqual(command[:2], ['semgrep', 'scan'])
-                self.assertIn('--disable-version-check', command)
-                self.assertIn('--metrics=off', command)
+                self.assertEqual(command[:2], [adapter.ENGINE, 'scan'])
+                # Opengrep exits 2 on either Semgrep-only flag.
+                self.assertNotIn('--disable-version-check', command)
+                self.assertNotIn('--metrics=off', command)
                 self.assertIn('--no-rewrite-rule-ids', command)
-                self.assertIn('--time', command)
+                self.assertNotIn('--time', command)  # Opengrep's timing payload carries no convergence signal.
                 self.assertNotIn('timeout', kwargs)  # The caller owns execution lifetime.
                 self.assertEqual(command[-1], 'scripts')
                 work = Path(cwd)
                 self.assertEqual((work / 'scripts/inline-0000.js').read_text(), 'first();\n;\nsecond();\n;\n')
-                (work / 'report.json').write_text('{"paths":{"scanned":["scripts/inline-0000.js"]},"time":{"fixpoint_timeouts":[]}}')
+                (work / 'report.json').write_text('{"paths":{"scanned":["scripts/inline-0000.js"]}}')
                 (work / 'report.sarif').write_text(json.dumps({'runs': [{
                     'tool': {'driver': {'rules': [{'id': DOM_ID}]}}, 'results': []}]}))
                 return SimpleNamespace(returncode=0)
@@ -233,7 +234,6 @@ class InlineTests(unittest.TestCase):
                 work = Path(cwd)
                 (work / 'report.json').write_text(json.dumps({
                     'paths': {'scanned': ['scripts/inline-0000.js']},
-                    'time': {'fixpoint_timeouts': []},
                     'results': [{'check_id': DOM_ID, 'extra': {'metadata': {
                         'category': 'security', 'confidence': 'LOW', 'subcategory': ['audit'],
                     }}}],
@@ -282,7 +282,7 @@ class InlineTests(unittest.TestCase):
                 def fake_scan(command, cwd, **kwargs):
                     work = Path(cwd)
                     scanned = [] if omitted == 'input' else ['scripts/inline-0000.js']
-                    (work / 'report.json').write_text(json.dumps({'paths': {'scanned': scanned}, 'time': {'fixpoint_timeouts': []}}))
+                    (work / 'report.json').write_text(json.dumps({'paths': {'scanned': scanned}}))
                     rules = [] if omitted == 'rule' else [{'id': DOM_ID}]
                     runs = [] if omitted == 'run' else [{'tool': {'driver': {'rules': rules}}, 'results': []}]
                     (work / 'report.sarif').write_text(json.dumps({'runs': runs}))
@@ -292,50 +292,6 @@ class InlineTests(unittest.TestCase):
                     with self.assertRaises(InlineError):
                         analyse(root / 'plan', root, root / 'report', root / 'sarif', root / 'warnings')
                 self.assertEqual((root / 'sarif').read_text(), baseline)
-
-    def test_fixpoint_notices_are_authored_mapped_and_do_not_copy_source(self):
-        source = 'é😀<script>run();</script>'.encode()
-        maps = {'inline-0000.js': SourceMap('sp ace/#panel.html', source, Scripts(source.decode()).extract())}
-        report = {'time': {'fixpoint_timeouts': [{'error_type': 'Fixpoint timeout', 'severity': 'warn',
-            'message': 'RAW SOURCE must not escape, including unquoted values',
-            'location': {'path': 'scripts/inline-0000.js',
-                         'start': {'line': 1, 'col': 1, 'offset': 0},
-                         'end': {'line': 1, 'col': 2, 'offset': 1}}}]}}
-        sarif = {'runs': [{'invocations': [{'executionSuccessful': True, 'toolExecutionNotifications': []}]}]}
-        adapter.add_fixpoint_notifications(report, sarif, maps)
-        remap_sarif(sarif, maps, {})
-        note = sarif['runs'][0]['invocations'][0]['toolExecutionNotifications'][0]
-        self.assertEqual(note['descriptor']['id'], 'Fixpoint timeout')
-        self.assertEqual(note['level'], 'warning')
-        physical = note['locations'][0]['physicalLocation']
-        self.assertEqual(physical['artifactLocation']['uri'], 'sp%20ace/%23panel.html')
-        self.assertEqual(physical['region']['startColumn'], 12)
-        self.assertNotIn('RAW SOURCE', json.dumps(sarif))
-        self.assertNotIn('inline-0000', json.dumps(sarif))
-
-    def test_unattributed_fixpoint_notice_is_still_counted(self):
-        report = {'time': {'fixpoint_timeouts': [{'error_type': 'Fixpoint timeout', 'severity': 'warn'}]}}
-        sarif = {'runs': [{}]}
-        adapter.add_fixpoint_notifications(report, sarif, {})
-        notices = sarif['runs'][0]['invocations'][0]['toolExecutionNotifications']
-        self.assertEqual(len(notices), 1)
-        self.assertNotIn('locations', notices[0])
-
-    def test_malformed_or_unknown_diagnostics_are_not_zero_warnings(self):
-        warning = {'error_type': 'Fixpoint timeout', 'severity': 'warn'}
-        for report in [{}, {'time': None}, {'time': {}}, {'time': {'fixpoint_timeouts': None}},
-                       {'time': {'fixpoint_timeouts': [None]}},
-                       {'time': {'fixpoint_timeouts': [dict(warning, severity='error')]}},
-                       {'time': {'fixpoint_timeouts': [dict(warning, error_type='unknown')]}}]:
-            with self.subTest(report=report), self.assertRaises(InlineError):
-                adapter.add_fixpoint_notifications(report, {'runs': [{}]}, {})
-        for path in ['scripts/unknown.js', '../scripts/inline-0000.js', '/outside/inline-0000.js']:
-            report = {'time': {'fixpoint_timeouts': [dict(warning, location={
-                'path': path, 'start': {'line': 1, 'col': 1}})]}}
-            with self.subTest(path=path), self.assertRaises(InlineError):
-                adapter.add_fixpoint_notifications(report, {'runs': [{}]}, {'inline-0000.js': None})
-        with self.assertRaises(InlineError):
-            adapter.add_fixpoint_notifications({'time': {'fixpoint_timeouts': [warning]}}, {'runs': [{}, {}]}, {})
 
     def test_bad_profile_never_publishes_inline_success(self):
         from types import SimpleNamespace
@@ -348,7 +304,7 @@ class InlineTests(unittest.TestCase):
             (root / 'sarif').write_text(baseline)
             def fake_scan(command, cwd, **kwargs):
                 work = Path(cwd)
-                (work / 'report.json').write_text('{"paths":{"scanned":["scripts/inline-0000.js"]},"time":{}}')
+                (work / 'report.json').write_text('{"paths":{"skipped":[]}}')
                 (work / 'report.sarif').write_text(json.dumps({'runs': [{
                     'tool': {'driver': {'rules': [{'id': DOM_ID}]}}, 'results': []}]}))
                 return SimpleNamespace(returncode=0)

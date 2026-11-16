@@ -1,0 +1,7 @@
+package main
+
+import "fmt"
+
+func BuildQuery(id string) string {
+	return fmt.Sprintf("SELECT * FROM invoices WHERE id = %s", id)
+}

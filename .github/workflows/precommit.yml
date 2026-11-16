@@ -37,7 +37,7 @@ on:
         type: string
         default: 'HIGH'
       sast-rulesets:
-        description: 'Semgrep rulesets for SAST, comma-separated, NO spaces (e.g. "p/security-audit,p/secrets"). May also point at a checked-in semgrep config in the repo (e.g. "./security.yml") to make your own curated config the single source of truth. Empty keeps the composite default (p/security-audit); "auto" is refused by the security module. To exclude specific files/paths from scanning, add a .semgrepignore at the repo root — it is honored automatically.'
+        description: 'SAST rule packs (Opengrep, Semgrep rule syntax), comma-separated, NO spaces (e.g. "p/security-audit,p/secrets"). May also point at a checked-in Semgrep-syntax config in the repo (e.g. "./security.yml") to make your own curated config the single source of truth. Empty keeps the composite default (p/security-audit); "auto" is refused by the security module. To exclude specific files/paths from scanning, add a .semgrepignore at the repo root — it is honored automatically.'
         required: false
         type: string
         default: ''
@@ -197,8 +197,11 @@ jobs:
       gates: ${{ steps.gate.outputs.gates }}
 
     steps:
+      # Credentials stay persisted: the change-diff step below runs
+      # `git fetch origin <base>`, which needs them on a privately hosted
+      # consumer, and a failed fetch on a pull request fails the run.
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked] -- the base-branch fetch needs the token; no step uploads the checkout
         with:
           # Full history so the diff-scoped gates can reach the base branch's
           # merge-base. On a pull request a shallow clone has no common
@@ -505,7 +508,7 @@ jobs:
             extra+=(--vuln-accept "$VULN_ACCEPT")
           fi
           # Only append when set — passing --sast-rulesets "" would override the
-          # composite default (p/security-audit) with an empty config, which makes semgrep
+          # composite default (p/security-audit) with an empty config, which makes the SAST engine
           # scan with no rules and report zero findings (a silent false pass).
           if [ -n "$SAST_RULESETS" ]; then
             extra+=(--sast-rulesets "$SAST_RULESETS")

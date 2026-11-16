@@ -45,7 +45,11 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.version }}
-      run: |
+      # The one value written to $GITHUB_ENV below is built from VERSION, and
+      # every caller passes its own literal env.DAGGER_VERSION
+      # (scripts/tests/test_install_dagger.py asserts both), so nothing a fork
+      # or a pull request controls reaches it.
+      run: | # zizmor: ignore[github-env] -- VERSION is a caller literal; see above
         set -euo pipefail
         asset="dagger_v${VERSION}_linux_amd64.tar.gz"
         base="https://dl.dagger.io/dagger/releases/${VERSION}"

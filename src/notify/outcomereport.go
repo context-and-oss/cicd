@@ -57,6 +57,23 @@ func outcomeLabel(o Outcome) string {
 	return string(o)
 }
 
+// rowOutcomeLabel is a table row's Outcome cell: the outcome, plus a partial-scan
+// marker when the tool named units it read only in part.
+//
+// The marker lives in the Outcome column, not only under Examined, because
+// that is the column a reader scans. A nightly consumer run read "✅ clean"
+// beside a SAST row whose parser had rejected a large share of the tree; the
+// disclosure was a warning count two columns over, and nobody opened it. The
+// outcome itself is left as the producer stated it — a partial scan is not an
+// error (see Examined.Partial) — so this appends rather than replaces.
+func rowOutcomeLabel(o Outcome, ex *Examined) string {
+	lbl := outcomeLabel(o)
+	if ex != nil && ex.Partial > 0 {
+		lbl += " · ⚠️ partial scan"
+	}
+	return lbl
+}
+
 // headline renders the report's first line: the gate verdict, and the outcome
 // beside it whenever the verdict alone would mislead.
 //
@@ -153,10 +170,16 @@ func examinedCell(ex *Examined) string {
 		// integer under a heading that implies one.
 		unit = "(unit not stated)"
 	}
+	cell := fmt.Sprintf("%s %s", humanCount(ex.Count), unit)
 	if ex.Total > 0 {
-		return fmt.Sprintf("%s of %s %s", humanCount(ex.Count), humanCount(ex.Total), unit)
+		cell = fmt.Sprintf("%s of %s %s", humanCount(ex.Count), humanCount(ex.Total), unit)
 	}
-	return fmt.Sprintf("%s %s", humanCount(ex.Count), unit)
+	if ex.Partial > 0 {
+		// The share matters as much as the number: 3 of 3,000 and 240 of 300
+		// are different scans, and only the second is mostly unread.
+		cell += fmt.Sprintf(" (%s partly read)", humanCount(ex.Partial))
+	}
+	return cell
 }
 
 // humanCount groups thousands so a large count is legible at a glance. 123456
@@ -193,7 +216,7 @@ func writeSourceTable(sb *strings.Builder, sources []SourceStatus) {
 	for _, s := range sources {
 		fmt.Fprintf(sb, "| %s | %s | %s | %s | %s | %s |\n",
 			cellOrDash(escapeCell(sourceLabel(s))),
-			escapeCell(outcomeLabel(s.Outcome)),
+			escapeCell(rowOutcomeLabel(s.Outcome, s.Examined)),
 			escapeCell(examinedCell(s.Examined)),
 			humanCount(s.FindingsCount),
 			humanCount(s.ErrorsCount),

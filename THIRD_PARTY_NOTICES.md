@@ -77,7 +77,7 @@ the runtime restrictions below still apply.
 ### Default Semgrep rules — Semgrep Rules License v1.0, not Apache-2.0
 
 `security.ScanSource` (and every composite and template that calls it) runs
-Semgrep with `p/security-audit` by default. cicd does not fetch that pack from
+the SAST engine (Opengrep, below) with `p/security-audit` by default. cicd does not fetch that pack from
 the Semgrep registry: it clones
 [semgrep/semgrep-rules](https://github.com/semgrep/semgrep-rules) at commit
 `16b9e6d45f10649f6a531ec4838ed9924372c3bc` (`semgrepRulesCommit` in
@@ -93,7 +93,7 @@ Semgrep Rules License v1.0. For more details, visit https://semgrep.dev/legal/ru
 ```
 
 The Semgrep Rules License is **not** an open-source licence and is separate
-from the licence of the Semgrep engine (the `semgrep/semgrep` image). In
+from the licence of whichever engine runs them (Opengrep, below). In
 summary — read the [licence itself](https://semgrep.dev/legal/rules-license),
 which governs — v1.0 permits use of the rules only for your own internal
 business purposes, does not permit distributing them or making them available
@@ -124,6 +124,27 @@ What this means for you:
   See [`src/security/CLAUDE.md`](src/security/CLAUDE.md#sast-scope--noise-control)
   for the config-path form. Choose rules whose licence fits your use; cicd does
   not ship an alternative default rule set.
+
+### Opengrep — LGPL-2.1, not redistributed
+
+The SAST engine is [Opengrep](https://github.com/opengrep/opengrep), the
+LGPL-2.1 fork of the Semgrep engine. cicd does not redistribute it and carries
+no copy of it in this tree: on every run the scan container downloads the
+**unmodified** release binary for its architecture from the project's
+[GitHub releases](https://github.com/opengrep/opengrep/releases) and verifies it
+against the sha256 pinned in
+[`src/security/opengrep.go`](src/security/opengrep.go) before running it. cicd
+invokes it as a separate program and does not link against it. Its licence is
+the one published with that release. Why the engine changed:
+[specs/swap-semgrep-for-opengrep.md](specs/swap-semgrep-for-opengrep.md).
+
+### PyYAML — MIT, not redistributed
+
+The rule helpers (`src/security/semgrep_gha.py`, `src/security/semgrep_inline.py`)
+import [PyYAML](https://pyyaml.org/) 6.0.3. The scan container downloads the
+unmodified wheel for its architecture from PyPI at run time, verifies it against
+the sha256 pinned in `src/security/opengrep.go`, and installs it from that file
+alone. It is not bundled here. PyYAML is distributed under the MIT licence.
 
 ### Tool images
 

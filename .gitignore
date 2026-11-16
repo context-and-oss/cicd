@@ -45,6 +45,8 @@ smoke-evidence*/
 cover.html
 coverage/
 *.sarif
+# Verbatim tool captures the unit tests read; ignoring them ships a suite that cannot find its input.
+!src/security/testdata/zizmor-*/*.sarif
 .pytest_cache/
 .ruff_cache/
 .envrc

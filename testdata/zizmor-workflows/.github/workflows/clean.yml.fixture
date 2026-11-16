@@ -1,0 +1,8 @@
+name: clean
+on: push
+permissions: {}
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi

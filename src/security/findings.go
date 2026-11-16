@@ -166,7 +166,7 @@ func parseSarifSeverities(raw json.RawMessage) map[Severity]int {
 // sarifSuppressionWarning discloses accepted source suppressions while keeping
 // them out of the severity counts and gate. The native SARIF remains untouched,
 // so an auditor can still inspect the rule, location and suppression metadata.
-func sarifSuppressionWarning(raw json.RawMessage) string {
+func sarifSuppressionWarning(tool string, raw json.RawMessage) string {
 	var doc sarifDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return ""
@@ -186,7 +186,7 @@ func sarifSuppressionWarning(raw json.RawMessage) string {
 	if count != 1 {
 		noun = "findings"
 	}
-	return fmt.Sprintf("semgrep: %d %s suppressed in source", count, noun)
+	return fmt.Sprintf("%s: %d %s suppressed in source", tool, count, noun)
 }
 
 // stampSARIFLevel rewrites result.level on every result in a SARIF document,

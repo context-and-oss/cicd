@@ -9,7 +9,7 @@ decision behind the split between them see
 | | Repository-selected tool image | Consumer-resolved toolchain image |
 |---|---|---|
 | Chosen by | this repository's own code | the consumer: `--toolchain-image`, or `.nvmrc` / `global.json` |
-| Examples | Semgrep, Gitleaks, Trivy, TruffleHog, ZAP, conftest, golangci-lint, Alpine helpers | whatever the consumer's build or test command needs to run in |
+| Examples | Gitleaks, Trivy, TruffleHog, ZAP, zizmor, conftest, golangci-lint, Alpine helpers | whatever the consumer's build or test command needs to run in |
 | Rule | immutable: readable `tag@sha256:<digest>` | resolved at run time; only the explicit param can carry a digest |
 | Where declared | the module's `images.go`, listed in `scripts/runtime-images.json` | nowhere — it is an input, not a pin |
 | Enforced by | `scripts/check-runtime-image-pins.py` | not applicable; misclassifying one as static is itself a bug |
@@ -152,6 +152,34 @@ metadata and the image actually pulled cannot disagree.
 `images.go` carries no build tag, so the unit-test build (`-tags unit_test`) can
 see these constants too.
 
+## The SAST engine is a pinned binary, not an image
+
+Opengrep, the SAST engine, publishes release binaries and no container image, so
+it has no row in `scripts/runtime-images.json`. `src/security/opengrep.go` pins
+the version and the sha256 GitHub publishes for each architecture's asset
+(`opengrep_linux_x86`, `opengrep_linux_aarch64`). The scan fetches the asset
+from the project's release page onto the digest-pinned `python:3.12-slim` base
+(`pythonImage` in `src/security/images.go`, the same pin `quality` uses), and
+`opengrepVerifyScript` checks the digest with `sha256sum` inside the container
+**before** the binary runs. A mismatch is a non-run (`PINNED DOWNLOAD
+REJECTED`), never a scan by an unverified engine; a platform with no pinned
+digest is refused rather than handed the other architecture's binary. The
+engine is called by its absolute path, the one the verify step checked.
+
+PyYAML, which the rule helpers import and the slim base lacks, is pinned the
+same way: one cp312 wheel per architecture by PyPI's sha256, installed with
+`pip --no-index` from the verified file.
+
+Update automation covers the version only. Renovate's `opengrep.go` manager
+(group `sast engine: opengrep`) proposes a new Opengrep release, but it cannot
+produce the digests: replace both by hand from the release page, or a
+version-only bump fails every scan on the architecture left behind — loudly, by
+design. The PyYAML wheels have no Renovate manager; a `pythonImage` bump across
+a minor needs new wheels, which `TestPyYAMLWheelFitsTheBase` reports at review
+time. Neither pin is checked by `check-runtime-image-pins.py`, which reads
+`From(...)` references; `opengrep_test.go` holds their shape. Why the engine
+changed: [specs/swap-semgrep-for-opengrep.md](../../specs/swap-semgrep-for-opengrep.md).
+
 ## What CI checks, and what it does not
 
 `scripts/check-runtime-image-pins.py` (wired into `ci.yml`'s `lint-repo`, also
@@ -193,7 +221,7 @@ by hand: the static runtime images above, and the Dagger version
   `templates/` (consumer copy-paste starters, rewritten by the release pin bump),
   `docs/` and `testdata/` are never touched.
 - `packageRules` groups by tool family — one family, one pull request, one
-  revert. A bad Trivy bump cannot drag Semgrep with it.
+  revert. A bad Trivy bump cannot drag the SAST engine with it.
 
 `scripts/tests/test_update_config.py` evaluates those managers against the real
 files in the tree, in both directions: every declared pin is matched with its

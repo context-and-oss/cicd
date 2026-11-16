@@ -7,7 +7,10 @@ are included.
 `native.json` and `native.sarif` are byte-exact output from Semgrep OSS 1.162.0,
 using cicd's pinned image digest
 `sha256:9349edbadf90c3f3c0c3f55867625354e89680e6fa10d9034042af52fdb0e0d0`.
-The command was run with network disabled, this directory mounted at `/src`, an
+The capture predates the engine swap to Opengrep
+([specs/swap-semgrep-for-opengrep.md](../../specs/swap-semgrep-for-opengrep.md))
+and was not re-captured: it fixes the native metadata shape the projector reads,
+not the output of the engine cicd runs today. The command was run with network disabled, this directory mounted at `/src`, an
 empty output directory mounted at `/out`, and working directory `/src`:
 
 ```sh

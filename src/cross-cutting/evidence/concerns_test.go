@@ -172,6 +172,12 @@ func TestADenominatorIsOnlySummedWhenTheSumMeansSomething(t *testing.T) {
 	if got := foldExamined(nil); got != nil {
 		t.Errorf("no rows, no denominator, got %+v", got)
 	}
+	// Partial IS folded: each is a subset of its own row's Count, so the sum
+	// stays bounded by the folded Count. Dropping it would let a concern row
+	// read as fully examined while one of its tools said otherwise.
+	if got := foldExamined(mk(&Examined{Unit: "files", Count: 300, Partial: 7}, &Examined{Unit: "files", Count: 50})); got == nil || got.Partial != 7 || got.Count != 350 {
+		t.Errorf("partial must survive the fold: %+v", got)
+	}
 	// Total is deliberately not folded: two tools' scopes overlap invisibly.
 	withTotal := mk(&Examined{Unit: "files", Count: 3, Total: 10}, &Examined{Unit: "files", Count: 4, Total: 10})
 	if got := foldExamined(withTotal); got == nil || got.Total != 0 {

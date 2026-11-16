@@ -22,7 +22,7 @@ func byTool(rows []SourceStatus) map[string]SourceStatus {
 // never recovers a per-tool verdict because it was never written down.
 func TestPerToolSources_verdictsAreIndependent(t *testing.T) {
 	rows := perToolSources(scopeSource, SeverityHigh,
-		toolResult{Name: "semgrep", BySeverity: map[Severity]int{SeverityLow: 4}},
+		toolResult{Name: "opengrep", BySeverity: map[Severity]int{SeverityLow: 4}},
 		toolResult{Name: "gitleaks", BySeverity: map[Severity]int{}},
 		toolResult{Name: "trivy", BySeverity: map[Severity]int{SeverityHigh: 1}},
 	)
@@ -30,7 +30,7 @@ func TestPerToolSources_verdictsAreIndependent(t *testing.T) {
 		t.Fatalf("want one row per scanner, got %d", len(rows))
 	}
 	got := byTool(rows)
-	if !got["semgrep"].Passed {
+	if !got["opengrep"].Passed {
 		t.Errorf("semgrep found only LOW under a HIGH threshold — must pass")
 	}
 	if !got["gitleaks"].Passed {
@@ -64,7 +64,7 @@ func TestPerToolSources_andEqualsTheFusedVerdict(t *testing.T) {
 			fused := gatedPassed(true, !shouldFail(merged, threshold), threshold)
 
 			rows := perToolSources(scopeSource, threshold,
-				toolResult{Name: "semgrep", BySeverity: tc.sast},
+				toolResult{Name: "opengrep", BySeverity: tc.sast},
 				toolResult{Name: "trivy", BySeverity: tc.vuln},
 			)
 			and := true
@@ -85,11 +85,11 @@ func TestPerToolSources_andEqualsTheFusedVerdict(t *testing.T) {
 // failed verdict with the reason sitting unread in errors[].
 func TestPerToolSources_aRunErrorFailsOnlyItsOwnTool(t *testing.T) {
 	rows := perToolSources(scopeSource, SeverityNone,
-		toolResult{Name: "semgrep", BySeverity: map[Severity]int{}},
+		toolResult{Name: "opengrep", BySeverity: map[Severity]int{}},
 		toolResult{Name: "gitleaks", BySeverity: map[Severity]int{}, Err: errStub{}},
 	)
 	got := byTool(rows)
-	if !got["semgrep"].Passed {
+	if !got["opengrep"].Passed {
 		t.Errorf("semgrep ran and found nothing — gitleaks failing must not fail it")
 	}
 	if got["gitleaks"].Passed {
@@ -98,8 +98,8 @@ func TestPerToolSources_aRunErrorFailsOnlyItsOwnTool(t *testing.T) {
 	if got["gitleaks"].ErrorsCount != 1 {
 		t.Errorf("errorsCount = %d, want 1", got["gitleaks"].ErrorsCount)
 	}
-	if got["semgrep"].ErrorsCount != 0 {
-		t.Errorf("semgrep errorsCount = %d, want 0", got["semgrep"].ErrorsCount)
+	if got["opengrep"].ErrorsCount != 0 {
+		t.Errorf("opengrep errorsCount = %d, want 0", got["opengrep"].ErrorsCount)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestPerToolSources_countsSumToTheFusedTotal(t *testing.T) {
 	}
 
 	rows := perToolSources(scopeSource, SeverityHigh,
-		toolResult{Name: "semgrep", BySeverity: sast},
+		toolResult{Name: "opengrep", BySeverity: sast},
 		toolResult{Name: "gitleaks", BySeverity: secrets},
 		toolResult{Name: "trivy", BySeverity: vuln},
 	)
@@ -189,13 +189,13 @@ func (errStub) Error() string { return "scanner did not run" }
 // the split the rows exist to preserve is erased one field over.
 func TestEachRowStatesWhatItsScannerFound(t *testing.T) {
 	rows := byTool(perToolSources(scopeSource, SeverityNone,
-		toolResult{Name: "semgrep", BySeverity: map[Severity]int{SeverityHigh: 14}},
+		toolResult{Name: "opengrep", BySeverity: map[Severity]int{SeverityHigh: 14}},
 		toolResult{Name: "gitleaks", BySeverity: map[Severity]int{}},
 		toolResult{Name: "trivy", Err: errStub{}},
 	))
 
 	for name, want := range map[string]Outcome{
-		"semgrep":  OutcomeFindings,
+		"opengrep": OutcomeFindings,
 		"gitleaks": OutcomeClean,
 		"trivy":    OutcomeError,
 	} {
@@ -209,7 +209,7 @@ func TestEachRowStatesWhatItsScannerFound(t *testing.T) {
 	// pass the gate while the row still reports FINDINGS — which is exactly the
 	// information Passed cannot carry. A non-run is not a finding and NONE does
 	// not suppress it, so trivy fails the gate AND reports ERROR.
-	for name, wantPassed := range map[string]bool{"semgrep": true, "gitleaks": true, "trivy": false} {
+	for name, wantPassed := range map[string]bool{"opengrep": true, "gitleaks": true, "trivy": false} {
 		if rows[name].Passed != wantPassed {
 			t.Errorf("%s: passed = %v at threshold NONE, want %v; the gate contract must not move with this field",
 				name, rows[name].Passed, wantPassed)
@@ -222,7 +222,7 @@ func TestEachRowStatesWhatItsScannerFound(t *testing.T) {
 // counted.
 func TestTheEnvelopeOutcomeIsTheWorstOfItsRows(t *testing.T) {
 	rows := perToolSources(scopeSource, SeverityNone,
-		toolResult{Name: "semgrep", BySeverity: map[Severity]int{}},
+		toolResult{Name: "opengrep", BySeverity: map[Severity]int{}},
 		toolResult{Name: "gitleaks", BySeverity: map[Severity]int{SeverityHigh: 3}},
 	)
 	if got := sourcesOutcome(rows); got != OutcomeFindings {
@@ -230,7 +230,7 @@ func TestTheEnvelopeOutcomeIsTheWorstOfItsRows(t *testing.T) {
 	}
 
 	rows = perToolSources(scopeSource, SeverityNone,
-		toolResult{Name: "semgrep", BySeverity: map[Severity]int{SeverityHigh: 3}},
+		toolResult{Name: "opengrep", BySeverity: map[Severity]int{SeverityHigh: 3}},
 		toolResult{Name: "gitleaks", Err: errStub{}},
 	)
 	if got := sourcesOutcome(rows); got != OutcomeError {
@@ -250,7 +250,7 @@ func TestARowCarriesTheDenominatorItsZeroNeeds(t *testing.T) {
 		},
 		// A scanner that does not count in a unit it can name says nothing,
 		// rather than claiming a zero it never measured.
-		toolResult{Name: "semgrep", BySeverity: map[Severity]int{SeverityHigh: 10}},
+		toolResult{Name: "opengrep", BySeverity: map[Severity]int{SeverityHigh: 10}},
 	)
 
 	if rows[0].Examined == nil {

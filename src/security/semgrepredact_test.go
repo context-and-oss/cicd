@@ -177,7 +177,7 @@ func TestRedactSemgrepSARIFRefusesWhatItCannotRead(t *testing.T) {
 			if err == nil {
 				t.Fatalf("an unreadable report was passed on: %s", out)
 			}
-			if !strings.HasPrefix(err.Error(), "semgrep: ") {
+			if !strings.HasPrefix(err.Error(), "opengrep: ") {
 				t.Errorf("error %q does not name semgrep", err)
 			}
 			if strings.Contains(err.Error(), fakeSemgrepSecret) {

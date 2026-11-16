@@ -37,7 +37,7 @@ Multiple security layers protect against different threat vectors:
 
 | Layer                                  | Description                             | Tool              |
 | -------------------------------------- | --------------------------------------- | ----------------- |
-| [SAST](sast.md)                        | Static analysis before code runs        | Semgrep           |
+| [SAST](sast.md)                        | Static analysis before code runs        | Opengrep          |
 | [DAST](dast.md)                        | Dynamic testing of running applications | OWASP ZAP         |
 | [Dependency Scanning](supply-chain.md) | Identifying vulnerable libraries        | Trivy, Dependabot |
 | [Container Security](supply-chain.md)  | Multi-layer image scanning              | Trivy             |
@@ -48,9 +48,9 @@ No single layer is perfect - overlapping layers provide comprehensive coverage.
 
 | Stage                 | Security Activities                   | Tools             | Duration   |
 | --------------------- | ------------------------------------- | ----------------- | ---------- |
-| **Pre-commit (2)**    | Full fast suite: lint/test, SAST, secret scan, dependency scan, risk gate (light configs), plus the opt-in change-intent gate | Semgrep, Gitleaks, Trivy | < 2 min    |
-| **Pull Request (3)** | SAST, dependency scan, container scan | Semgrep, Trivy, Dependabot | < 5 min |
-| **Commit (4)**        | Heavy code + artifact gate: full source suite plus artifact SBOM/scan per shape (`--artifact container\|archive\|none`) | Semgrep, Gitleaks, Trivy | < 10 min   |
+| **Pre-commit (2)**    | Full fast suite: lint/test, SAST, secret scan, dependency scan, risk gate (light configs), plus the opt-in change-intent gate | Opengrep, Gitleaks, Trivy | < 2 min    |
+| **Pull Request (3)** | SAST, dependency scan, container scan | Opengrep, Trivy, Dependabot | < 5 min |
+| **Commit (4)**        | Heavy code + artifact gate: full source suite plus artifact SBOM/scan per shape (`--artifact container\|archive\|none`) | Opengrep, Gitleaks, Trivy | < 10 min   |
 | **Acceptance (5)**    | DAST baseline scan                    | OWASP ZAP         | < 15 min   |
 | **Extended (6)**      | DAST full scan                        | OWASP ZAP         | 1-4 hours  |
 | **Deployment (10)**   | Final container scan                  | Trivy             | < 5 min    |
@@ -59,7 +59,7 @@ No single layer is perfect - overlapping layers provide comprehensive coverage.
 ## Why Open-Source Tools
 
 The stack includes open-source engines, but that does not license every runtime
-input. Semgrep's default rules are fetched under the restrictive, non-Apache
+input. The default SAST rules come from the Semgrep rules repository and are fetched under the restrictive, non-Apache
 Semgrep Rules License: review [internal-use, hosted-service and redistribution limits](../../../../THIRD_PARTY_NOTICES.md#default-semgrep-rules--semgrep-rules-license-v10-not-apache-20).
 The stage matrix above is conceptual beyond cicd's implemented source/artifact
 and separately scheduled DAST pipelines, not an automatic deployment workflow.

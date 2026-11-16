@@ -1,0 +1,26 @@
+package main
+
+import (
+	"fmt"
+	"net/http"
+)
+
+// samefunc: source and sink in one function.
+func sameFunc(w http.ResponseWriter, r *http.Request) {
+	q := fmt.Sprintf("SELECT * FROM users WHERE id = %s", r.FormValue("id"))
+	_ = q
+}
+
+// crossfunc: the sink sits in a helper in this file.
+func crossFunc(w http.ResponseWriter, r *http.Request) {
+	_ = localQuery(r.FormValue("id"))
+}
+
+func localQuery(id string) string {
+	return fmt.Sprintf("SELECT * FROM orders WHERE id = %s", id)
+}
+
+// crossfile: the sink sits in repo.go.
+func crossFile(w http.ResponseWriter, r *http.Request) {
+	_ = BuildQuery(r.FormValue("id"))
+}

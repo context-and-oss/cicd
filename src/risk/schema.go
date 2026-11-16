@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const SchemaVersion = "1.7.0"
+const SchemaVersion = "1.8.0"
 
 type Severity string
 
@@ -140,4 +140,6 @@ type Examined struct {
 	Unit  string `json:"unit"`
 	Count int    `json:"count"`
 	Total int    `json:"total,omitempty"`
+	// Partial is how many of Count the tool named as read only in part.
+	Partial int `json:"partial,omitempty"`
 }

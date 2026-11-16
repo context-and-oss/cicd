@@ -117,21 +117,21 @@ func TestParseSarifSeveritiesOmitsAcceptedSuppressions(t *testing.T) {
     }`)
 
 	assertSeverities(t, parseSarifSeverities(doc), map[Severity]int{SeverityHigh: 3})
-	if got, want := sarifSuppressionWarning(doc), "semgrep: 3 findings suppressed in source"; got != want {
+	if got, want := sarifSuppressionWarning("opengrep", doc), "opengrep: 3 findings suppressed in source"; got != want {
 		t.Errorf("sarifSuppressionWarning = %q, want %q", got, want)
 	}
 }
 
 func TestSarifSuppressionWarningSingularAndInvalidInput(t *testing.T) {
 	one := json.RawMessage(`{"runs":[{"results":[{"suppressions":[{}]}]}]}`)
-	if got, want := sarifSuppressionWarning(one), "semgrep: 1 finding suppressed in source"; got != want {
+	if got, want := sarifSuppressionWarning("opengrep", one), "opengrep: 1 finding suppressed in source"; got != want {
 		t.Errorf("sarifSuppressionWarning = %q, want %q", got, want)
 	}
 	for _, raw := range []json.RawMessage{
 		json.RawMessage(`not json`),
 		json.RawMessage(`{"runs":[{"results":[{"suppressions":[{"status":"rejected"}]}]}]}`),
 	} {
-		if got := sarifSuppressionWarning(raw); got != "" {
+		if got := sarifSuppressionWarning("opengrep", raw); got != "" {
 			t.Errorf("sarifSuppressionWarning(%s) = %q, want empty", raw, got)
 		}
 	}

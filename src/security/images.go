@@ -18,9 +18,13 @@ package main
 //
 // No build tag: the unit-test build (-tags unit_test) must see these constants.
 const (
-	// renovate-image: semgrep/semgrep
-	semgrepVersion = "1.162.0"
-	semgrepImage   = "semgrep/semgrep:" + semgrepVersion + "@sha256:9349edbadf90c3f3c0c3f55867625354e89680e6fa10d9034042af52fdb0e0d0"
+	// The base the SAST engine runs on. Not a scanner: Opengrep ships as a
+	// release binary rather than an image, so the binary is pinned by sha256 in
+	// opengrep.go and placed on this base, whose python3 the scan script's
+	// helpers need. Same pin as src/quality/images.go.
+	// renovate-image: python
+	pythonTag   = "3.12-slim"
+	pythonImage = "python:" + pythonTag + "@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de"
 
 	// renovate-image: zricethezav/gitleaks
 	gitleaksVersion = "v8.30.1"
@@ -76,6 +80,12 @@ const (
 	// renovate-image: ghcr.io/zaproxy/zaproxy
 	zapVersion = "2.17.0"
 	zapImage   = "ghcr.io/zaproxy/zaproxy:" + zapVersion + "@sha256:8d387b1a63e3425beef4846e39719f5af2a787753af2d8b6558c6257d7a577a2"
+
+	// The GitHub Actions audit of SAST (zizmor.go). The image runs only the
+	// zizmor binary over a copy of the tree, offline.
+	// renovate-image: ghcr.io/zizmorcore/zizmor
+	zizmorVersion = "1.32.0"
+	zizmorImage   = "ghcr.io/zizmorcore/zizmor:" + zizmorVersion + "@sha256:3014cc8f68f663935f69b3c3e0e41f5ce102b268d97db13db0f62208747f860d"
 
 	// The Go toolchain the licence scan downloads the module graph with
 	// (goexec.go). Same pin as src/quality/images.go; it runs go mod edit and go

@@ -1,0 +1,10 @@
+ INFO zizmor: 🌈 zizmor v1.32.0
+ WARN collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: failed to parse input: did not find expected ',' or ']' at line 5 column 1, while parsing a flow sequence at line 4 column 6
+ WARN collect_inputs:collect_from_dir{path="."}:collect_from_generic_dir{path="." root=None}: zizmor::registry::input: failed to validate file://./.github/workflows/schemabad.yml as workflow: input does not match expected validation schema
+ INFO audit: zizmor: 🌈 completed ./.github/actions/act1/action.yml
+ INFO audit: zizmor: 🌈 completed ./.github/dependabot.yml
+ INFO audit: zizmor: 🌈 completed ./.github/workflows/clean.yml
+ INFO audit: zizmor: 🌈 completed ./.github/workflows/ignored.yml
+ INFO audit: zizmor: 🌈 completed ./.github/workflows/inject.yml
+ INFO audit: zizmor: 🌈 completed ./ignoredir/.github/workflows/c.yml
+ INFO audit: zizmor: 🌈 completed ./sub/.github/workflows/clean.yml

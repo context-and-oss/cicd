@@ -81,7 +81,7 @@ func writeConcernSummary(sb *strings.Builder, rep *ConcernReport) {
 		for _, c := range rep.Answered {
 			fmt.Fprintf(sb, "| %s | %s | %s | %s | %s | %s | %s |\n",
 				escapeCell(concernLabel(c.Concern)),
-				escapeCell(outcomeLabel(c.Outcome)),
+				escapeCell(rowOutcomeLabel(c.Outcome, c.Examined)),
 				escapeCell(examinedCell(c.Examined)),
 				humanCount(c.FindingsCount),
 				humanCount(c.ErrorsCount),

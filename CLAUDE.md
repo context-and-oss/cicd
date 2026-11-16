@@ -25,7 +25,7 @@ src/
     sarif/                  SARIF 2.1.0 document builder
 
   quality/                  Domain module — multi-language lint + unit test (Check), witnessed BYO test + coverage ratchet (Test)
-  security/                 Domain module — SAST, secrets, vuln scan, DAST (ScanSource, ScanImage, ScanArchive, ScanWeb)
+  security/                 Domain module — SAST (Opengrep + .NET Roslyn analyzers + zizmor), secrets, vuln scan, advisory cross-file taint, DAST (ScanSource, ScanTaint, ScanImage, ScanArchive, ScanWeb)
   build/                    Domain module — OCI build, CycloneDX SBOM, archive build (Build, Sbom, BuildArchive)
   notify/                   Domain module — Teams, GitHub, ADO notifications (Teams, BuildCard, Github, Ado, etc.)
   risk/                     Domain module — AI risk analysis + OPA policy gate (Scan, Check, Report, Proxy, Validate)
@@ -64,6 +64,18 @@ testdata/                 Language fixture apps used by integration tests
                           lockfile-free dependency-graph restore
   dotnet-mtp-app/         C# app on the Microsoft.Testing.Platform runner (MSTest 4,
                           net10.0, the global.json runner opt-in)
+  roslyn-sast/            .NET projects stored as *.fixture for the Roslyn analyzer
+                          leg: one finding per gate rule, a broken, a legacy and an
+                          F# project; materialised only by its smoke script
+  semgrep-github-actions/ GitHub Actions workflows stored as *.yml.fixture for the
+                          Opengrep parser regressions; materialised into a git
+                          clone by scripts/smoke/opengrep-github-actions.sh
+  interfile-taint/        Go, Java and JS flows into SQL in one function, across a
+                          function and across a file, plus a chain deeper than the
+                          default call depth, all *.fixture; the ScanTaint smoke
+  zizmor-workflows/       Workflows, an action, a Dependabot file and a zizmor.yml for
+                          the zizmor leg, all stored as *.fixture; materialised only
+                          by scripts/smoke/zizmor.sh; see its README
 ```
 
 `templates/` and `testdata/` stay at the repo root — they are consumed/referenced directly by teams and test fixtures, not part of the Dagger module graph.

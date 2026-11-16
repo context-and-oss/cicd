@@ -88,6 +88,8 @@ jobs:
     if: needs.classify-change.outputs.docs_only != 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -318,6 +320,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -527,7 +531,7 @@ jobs:
                 export --path /tmp/evidence-src.json
               # A scan that could not run must not read as clean. --fail-on NONE
               # suppresses findings, so these assertions — not the exit code — are
-              # what proves SAST executed: no leg reported an error, and semgrep
+              # what proves SAST executed: no leg reported an error, and opengrep
               # emitted a run with rules actually loaded. The `--config auto`
               # default failed exactly here (exit 2, empty report, zero findings,
               # green gate) and nothing in CI noticed. NONE no longer covers a
@@ -543,36 +547,10 @@ jobs:
                 and (.findingsCount > 0)
                 and ((.errors // []) | length == 0)
                 and ([.sarifReport.runs[]?
-                      | select(.tool.driver.name | test("semgrep"; "i"))
+                      | select(.tool.driver.name | test("opengrep"; "i"))
                       | select((.tool.driver.rules // []) | length > 0)] | length > 0)' \
                 /tmp/evidence-src.json
-              # Regression for Semgrep's GitHub Actions embedded-Bash parser.
-              # 1.161.0 reported all three fixture files as partially scanned:
-              # expressions inside a quoted URL, command substitution around a
-              # multiline printf, and a multiline Markdown argument. The scan
-              # still exited 0, so only the SARIF notifications exposed the gap.
-              # The fixture also carries a Go lock graph so main's Trivy leg has
-              # a real target; the assertion below remains specifically about
-              # Semgrep's warning and proves it examined all six fixture files,
-              # including the three YAML parser targets and unsafe.yml.
-              dagger -m "./$MODULE" call scan-source \
-                --src ./testdata/semgrep-github-actions \
-                --sast-rulesets p/security-audit,r/yaml.github-actions.security.gha-curl-pipe-shell.gha-curl-pipe-shell \
-                --fail-on NONE \
-                --commit-sha "$SHA" --branch "$BRANCH" --repo-url "$REPO" \
-                export --path /tmp/evidence-semgrep-gha.json
-              jq -e '.passed == true
-                and ((.errors // []) | length == 0)
-                and ([.warnings[]? | select(startswith("semgrep: PARTIAL SCAN"))] | length == 0)
-                and ([.warnings[]? | select(startswith("semgrep: RULE FALLBACK"))] | length == 1)
-                and ([.sarifReport.runs[]?
-                      | select(.tool.driver.name | test("semgrep"; "i"))
-                      | .results[]?
-                      | select(.ruleId | endswith("cicd.yaml.github-actions.security.gha-curl-pipe-shell"))] | length == 2)
-                and ([.sources[]?
-                      | select(.tool == "semgrep")
-                      | select(.examined.unit == "files" and .examined.count == 6)] | length == 1)' \
-                /tmp/evidence-semgrep-gha.json
+              bash scripts/smoke/opengrep-github-actions.sh
               # Secrets detection on source is proven here or nowhere. go-app's
               # fixture carries `gitleaks:allow` and every testdata path is
               # allowlisted when the repo root is the scan root, so no existing
@@ -605,6 +583,9 @@ jobs:
               bash scripts/ci/dagger-develop.sh src/composites/commit
               bash scripts/ci/dagger-develop.sh src/composites/precommit
               bash scripts/smoke/semgrep-inline.sh
+              bash scripts/smoke/roslyn-analyzers.sh
+              bash scripts/smoke/zizmor.sh
+              bash scripts/smoke/interfile-taint.sh
               # gitleaks history writes the commit author; it must not reach it either.
               bash scripts/smoke/gitleaks-identity.sh
               # Smoke-test path filtering and exclude
@@ -1006,6 +987,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Dagger CLI
         uses: ./.github/actions/install-dagger
@@ -1142,6 +1125,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # This job keeps one Dagger engine alive across application mode and all
       # three artifact shapes. On the default hosted image that workload has
@@ -1218,6 +1203,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Dagger CLI
         uses: ./.github/actions/install-dagger
@@ -1260,6 +1247,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Dagger CLI
         uses: ./.github/actions/install-dagger

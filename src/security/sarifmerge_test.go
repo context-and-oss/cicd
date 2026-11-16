@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -54,4 +55,33 @@ func TestMergeSARIF(t *testing.T) {
 			t.Fatalf("garbage+b = %s", got)
 		}
 	})
+}
+
+func TestMergeSARIFFoldsInOrder(t *testing.T) {
+	doc := func(id string) json.RawMessage {
+		return json.RawMessage(`{"$schema":"s","version":"2.1.0","runs":[{"tool":{"driver":{"name":"` + id + `"}}}]}`)
+	}
+	got := mergeSARIF(doc("a"), nil, doc("b"), doc("c"))
+	var parsed struct {
+		Runs []struct {
+			Tool struct {
+				Driver struct {
+					Name string `json:"name"`
+				} `json:"driver"`
+			} `json:"tool"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, r := range parsed.Runs {
+		names = append(names, r.Tool.Driver.Name)
+	}
+	if strings.Join(names, ",") != "a,b,c" {
+		t.Errorf("runs = %v, want a,b,c", names)
+	}
+	if mergeSARIF() != nil || mergeSARIF(nil, nil) != nil {
+		t.Error("merging nothing must be nil")
+	}
 }

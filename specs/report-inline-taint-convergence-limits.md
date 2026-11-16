@@ -58,3 +58,22 @@ new dependency or consumer flag is introduced.
 
 Loaded-rule membership, scanned-input equality and CLI success alone do not prove
 convergence. No capacity or native-qualification claim follows from these tests.
+
+## Amendment — Opengrep has no convergence signal to read
+
+The engine is now Opengrep 2.0.0 ([swap-semgrep-for-opengrep](swap-semgrep-for-opengrep.md)).
+Its `--time` payload has no `fixpoint_timeouts` key, and its taint fixpoint
+stops differently: each dataflow node is capped at a fixed number of visits and
+skipped past the cap, reported nowhere — not SARIF, not JSON, not timing, not
+the debug log. The mechanism above therefore has nothing to project. The inline
+pass no longer requests `--time`, the adapter no longer reconstructs
+convergence notices, and the Go reader no longer classifies a
+`Fixpoint timeout` descriptor.
+
+What survives is the policy: an engine-authored notice cicd has not measured
+is bucketed as unclassified and still renders `PARTIAL SCAN`
+(`TestAnUnmeasuredConvergenceNoticeStillReadsAsPartial`). The sentence above,
+"loaded-rule membership, scanned-input equality and CLI success alone do not
+prove convergence", is now true on both passes with no disclosure available on
+either. The bound is documented as a measured engine property, not reported
+per scan.

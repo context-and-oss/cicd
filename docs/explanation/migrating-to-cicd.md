@@ -153,7 +153,7 @@ Review these boundaries before replacing existing checks:
   `gitleaks:allow` or config suppression. Tree suppressions are disclosed, but
   the history leg is not shadowed; retain an existing history control until
   equivalent scope and enforcement are verified.
-- **Empty/auto Semgrep rulesets fail.** Empty rulesets and `auto` are rejected;
+- **Empty/auto SAST rulesets fail.** Empty rulesets and `auto` are rejected;
   loading no rules or missing a pinned rule floor is a non-run, not a clean
   pass. Omit the flag for the default pack or supply licensed, checked-in rules.
 - **Source inventory is not an archive inventory.** Repository-mode archive

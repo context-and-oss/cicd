@@ -1,0 +1,25 @@
+using Microsoft.Extensions.Logging;
+
+namespace Example.Web;
+
+// crossfile: the sinks sit here, the sources in OrdersController.cs.
+public class OrderAudit
+{
+    private readonly ILogger<OrderAudit> logger;
+
+    public OrderAudit(ILogger<OrderAudit> logger)
+    {
+        this.logger = logger;
+    }
+
+    public void Searched(string customer)
+    {
+        logger.LogWarning("Searched {Customer}", customer);
+        logger.LogWarning("Searched {Customer}", customer.ReplaceLineEndings(" "));
+    }
+
+    public void Connecting(string value)
+    {
+        logger.LogDebug("Connecting with {Value}", value);
+    }
+}

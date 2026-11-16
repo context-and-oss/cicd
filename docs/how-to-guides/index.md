@@ -19,6 +19,7 @@ application commands from source-checkout examples.
 | [Build once, assess it, deploy the retained output](build-once.md) | Share one prepared Node or .NET context across the commit composite's source checks and build, and get the deployable back beside its evidence |
 | [Adopt cicd incrementally](adopt-incrementally.md) | Hand an existing pipeline to cicd one stage at a time (agent-drivable); coexist with the legacy pipeline during the transition |
 | [Set up Azure DevOps authentication](set-up-azure-devops-auth.md) | Separate authorized module-source access from PR-comment OAuth access and optional feed/notification secrets |
+| [Run without GitHub Advanced Security](run-without-github-advanced-security.md) | What the workflows do when Code Scanning is off, what cicd covers in its place, and what nothing in cicd replaces |
 
 ## Pipeline execution
 

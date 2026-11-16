@@ -41,7 +41,7 @@ func (m *Commit) Run(
     failOn string,              // default HIGH
     // --- source gate (passthrough to dag.Stage2().Run) ---
     include []string,
-    sastRulesets string,        // default "p/security-audit" ("auto" is refused; never pass empty — semgrep false-pass footgun)
+    sastRulesets string,        // default "p/security-audit" ("auto" is refused; never pass empty — SAST false-pass footgun)
     diff *dagger.File,          // optional git diff <base>..HEAD (intent coupling checks only;
                                 // the risk infra scan reads the whole tree here)
     minCoverage float64, coverageMinLines int,
@@ -144,7 +144,7 @@ The three shapes are exercised by `scripts/smoke/commit-shapes.sh <shape>`.
 
 The exported directory contains:
 - `combined-evidence.json` — merged envelope (overall pass/fail + finding counts + findings)
-- `findings.sarif` — concatenated SARIF from all scanning modules (quality lint, semgrep, gitleaks, image secrets, infrastructure policy)
+- `findings.sarif` — concatenated SARIF from all scanning modules (quality lint, opengrep, gitleaks, image secrets, infrastructure policy)
 - `sbom.cdx.json` — merged CycloneDX SBOM (source-FS, plus image for the container shape)
 - `comment.md` — rendered PR comment
 

@@ -54,8 +54,9 @@ func (m *Commit) Run(
 	// Languages to include: go, node, python, dotnet (repeatable, optional).
 	// +optional
 	include []string,
-	// Semgrep rulesets for SAST (e.g. "p/security-audit,p/owasp-top-ten").
-	// Never pass empty, and never "auto" — both mean semgrep applies no rules.
+	// SAST rulesets in Semgrep rule syntax, run by Opengrep
+	// (e.g. "p/security-audit,p/owasp-top-ten").
+	// Never pass empty, and never "auto" — neither names a rule set the scan can apply.
 	// The security module now fails the gate instead of reporting zero findings
 	// (see security/CLAUDE.md).
 	// +default="p/security-audit"

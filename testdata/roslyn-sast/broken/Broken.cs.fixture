@@ -1,0 +1,6 @@
+namespace Fixture.Broken;
+
+public static class Broken
+{
+    public static int Value() => notDeclaredAnywhere;
+}

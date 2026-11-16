@@ -10,7 +10,7 @@
 // Why a pin at all. `--config p/security-audit` is resolved by the Semgrep
 // registry at scan time, and the registry changes the pack without a version.
 // Measured on the same consumer commit: 725 rules on 2026-10-21, 225 three
-// days later, and the evidence said "semgrep: 0 findings" both times. A
+// days later, and the evidence said "opengrep: 0 findings" both times. A
 // finding count is a measurement over the files examined AND the rules
 // applied; Examined carried the first denominator, and nothing carried the
 // second. The pack is now read from a fixed commit, the rules it must load are
@@ -123,7 +123,7 @@ func loadSemgrepPacks() ([]semgrepPack, error) {
 	for _, d := range semgrepPinnedPackDefs() {
 		p, err := parseSemgrepPack(d.Manifest)
 		if err != nil {
-			return nil, errors.New("semgrep: " + d.Name + " " + strings.TrimPrefix(err.Error(), "semgrep: "))
+			return nil, errors.New("opengrep: " + d.Name + " " + strings.TrimPrefix(err.Error(), "opengrep: "))
 		}
 		p.Name, p.GHAFallback = d.Name, d.GHAFallback
 		packs = append(packs, p)
@@ -143,7 +143,7 @@ func parseSemgrepPack(raw string) (semgrepPack, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		at := "semgrep: pinned rule manifest line " + strconv.Itoa(n+1)
+		at := "opengrep: pinned rule manifest line " + strconv.Itoa(n+1)
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
 			return semgrepPack{}, errors.New(at + ": want \"<path> <rule id>\", got " + strconv.Quote(line))
@@ -174,7 +174,7 @@ func parseSemgrepPack(raw string) (semgrepPack, error) {
 		p.IDs = append(p.IDs, id)
 	}
 	if len(p.IDs) == 0 {
-		return semgrepPack{}, errors.New("semgrep: pinned rule manifest lists no rules")
+		return semgrepPack{}, errors.New("opengrep: pinned rule manifest lists no rules")
 	}
 	for t := range tops {
 		p.Tops = append(p.Tops, t)
@@ -235,9 +235,12 @@ func semgrepPackStaging(files []string) string {
 
 // semgrepPlan is what a --sast-rulesets value turns into.
 type semgrepPlan struct {
-	// Inline adds the first-party DOM rule and analyses inline JavaScript for
-	// the audit/OWASP defaults. Secrets-only and custom-only scans stay explicit.
+	// Inline analyses inline JavaScript for the audit/OWASP defaults.
+	// Secrets-only and custom-only scans stay explicit.
 	Inline bool
+	// Own are cicd's first-party rules the plan passes and requires: all of
+	// them for the audit/OWASP defaults, the interfile ones for ScanTaint.
+	Own []semgrepFirstParty
 	// Args are the arguments passed to semgrep: --config pairs, then any
 	// --exclude-rule pairs.
 	Args []string
@@ -301,6 +304,12 @@ func semgrepPlanFor(rulesets string, packs []semgrepPack) (semgrepPlan, error) {
 		Langs:  map[string]bool{},
 		Inline: requested["p/security-audit"] || requested["p/owasp-top-ten"],
 	}
+	switch {
+	case plan.Inline:
+		plan.Own = semgrepFirstPartyRules()
+	case requested[taintPackName]:
+		plan.Own = semgrepInterfileFirstParty()
+	}
 	files := map[string]bool{}
 	tops := map[string]bool{}
 	floor := map[string]bool{}
@@ -342,8 +351,8 @@ func semgrepPlanFor(rulesets string, packs []semgrepPack) (semgrepPlan, error) {
 			if fallback {
 				plan.Args = append(plan.Args, "--config", semgrepGHAFallbackPath)
 			}
-			if plan.Inline {
-				plan.Args = append(plan.Args, "--config", semgrepDOMRulePath)
+			for _, r := range plan.Own {
+				plan.Args = append(plan.Args, "--config", r.Path())
 			}
 		case semgrepIsRegistryConfig(c):
 			plan.Live = append(plan.Live, c)
@@ -394,7 +403,7 @@ func semgrepLiveWarning(live []string) string {
 	if len(names) > 1 {
 		pinned = strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1] + " are"
 	}
-	return "semgrep: UNPINNED RULES — " + strings.Join(live, ", ") +
+	return "opengrep: UNPINNED RULES — " + strings.Join(live, ", ") +
 		" fetched live from the Semgrep registry at scan time; the rule count is recorded under sources[].rules but cannot be verified, " +
 		"so the same commit can be scanned with different rules on different days. Only " + pinned +
 		" pinned (semgrep-rules@" + semgrepRulesCommit[:12] + ")"
@@ -408,13 +417,14 @@ func semgrepLiveWarning(live []string) string {
 // set a scan used. Reading it after the run, rather than trusting the staging
 // step, also catches a rule semgrep dropped at load time.
 //
-// Apart from the separately required DOM and workflow-compatibility configs,
+// Apart from the separately required first-party (plan.Own) and
+// workflow-compatibility configs,
 // rules the scan loaded beyond the floor are not checked: a live pack or a
 // local config may add any number, and none of them can be attributed to the
 // pin. The floor is the claim cicd can stand behind; a ceiling is not. With
 // only pinned packs in the scan the ceiling holds by construction instead:
 // every file a pinned manifest names is in semgrep-security-audit.txt, whose
-// staged files load exactly its ids (measured: 724 plus cicd's one), so every
+// staged files load exactly its ids (measured: 724 plus cicd's own), so every
 // co-located rule is known to the plan and excluded.
 //
 // The RuleSet is returned with the error, so the findings of a scan that ran
@@ -433,7 +443,7 @@ func semgrepRuleSet(report []byte, plan semgrepPlan) (*RuleSet, error) {
 		} `json:"runs"`
 	}
 	if err := json.Unmarshal(report, &doc); err != nil {
-		return nil, errors.New("semgrep: could not read the loaded rules from the report: " + err.Error())
+		return nil, errors.New("opengrep: could not read the loaded rules from the report: " + err.Error())
 	}
 	loaded := map[string]bool{}
 	rs := &RuleSet{ByLanguage: map[string]int{}, Unpinned: plan.Live}
@@ -457,10 +467,12 @@ func semgrepRuleSet(report []byte, plan semgrepPlan) (*RuleSet, error) {
 	}
 
 	if rs.Count == 0 {
-		return rs, errors.New("semgrep: the scan loaded no rules, so it applied nothing; zero findings from it is not a result")
+		return rs, errors.New("opengrep: the scan loaded no rules, so it applied nothing; zero findings from it is not a result")
 	}
-	if plan.Inline && !loaded[semgrepDOMRuleLoadedID] {
-		return rs, errors.New("semgrep: cicd's required DOM-text-to-HTML rule did not load; the default scan is incomplete")
+	for _, r := range plan.Own {
+		if !loaded[r.LoadedID()] {
+			return rs, errors.New("opengrep: cicd's required " + r.What + " rule (" + r.ID + ") did not load; the scan is incomplete")
+		}
 	}
 	var missing []string
 	for _, id := range plan.Floor {
@@ -473,7 +485,7 @@ func semgrepRuleSet(report []byte, plan semgrepPlan) (*RuleSet, error) {
 		if len(shown) > 5 {
 			shown = shown[:5]
 		}
-		msg := fmt.Sprintf("semgrep: the pinned rule set loaded %d of the %d rules %s must apply (semgrep-rules@%s); missing: %s",
+		msg := fmt.Sprintf("opengrep: the pinned rule set loaded %d of the %d rules %s must apply (semgrep-rules@%s); missing: %s",
 			len(plan.Floor)-len(missing), len(plan.Floor), packs, semgrepRulesCommit[:12], strings.Join(shown, ", "))
 		if more := len(missing) - len(shown); more > 0 {
 			msg += fmt.Sprintf(" and %d more", more)
@@ -481,7 +493,7 @@ func semgrepRuleSet(report []byte, plan semgrepPlan) (*RuleSet, error) {
 		return rs, errors.New(msg + ". A rule set below its floor is not the scan that was asked for")
 	}
 	if semgrepUsesGHAFallback(plan.Args) && !loaded[semgrepGHAFallbackLoadedID] {
-		return rs, errors.New("semgrep: required workflow compatibility rule did not load; the scan is incomplete")
+		return rs, errors.New("opengrep: required workflow compatibility rule did not load; the scan is incomplete")
 	}
 	return rs, nil
 }

@@ -1,7 +1,10 @@
 name: CD
 
 on:
-  workflow_run:
+  # zizmor flags every workflow_run trigger. Both entry jobs below (gate,
+  # handoff) run only when the triggering run was a push to this repository,
+  # and every later job needs gate, so a fork's run reaches no step at all.
+  workflow_run: # zizmor: ignore[dangerous-triggers] -- every job requires a same-repository push; see the gate job
     workflows: ["CI"]
     types: [completed]
     branches: [main]
