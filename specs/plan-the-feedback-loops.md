@@ -68,6 +68,27 @@ reproducing test that cicd witnesses red then green, because a model's
 confidence in its own triage is a claim. High blast radius never produces an
 automatic PR.
 
+## Where the investigator runs
+
+A spike ran an issue-plus-fix investigator, driving an agent CLI against an
+Azure AI Foundry deployment, in GitHub Actions. The agent CLI sandboxes every
+command it runs with Linux namespaces.
+
+- On the runner, a VM, the sandbox started. It denied network access, hid other
+  processes' environments, and limited writes to the workspace. Each property
+  was checked against an unsandboxed positive control.
+- Inside a container the sandbox did not start, either under the default
+  profiles or with seccomp and AppArmor unconfined.
+
+The roadmap therefore runs the investigation on the runner instead of in a
+Dagger module. That is the first such exception, and `ROADMAP.md` states it
+with its reason. Only the witness and the evidence stay in Dagger.
+
+The sandbox does not restrict reads, so the job design carries the rest of the
+protection. The investigating job holds only a short-lived model token, and the
+token that opens a pull request lives in a later job that never runs alongside
+the agent.
+
 ## Rejected
 
 - Filing logs-to-fixes under Stage 11 `Observe`. That function returns a
@@ -81,6 +102,11 @@ automatic PR.
 - Muting recurring noise in Sentry or Azure. That hides the event without
   fixing the code that reports it, and needs a write identity on the telemetry
   source.
+- Running the investigator in a Dagger container without the agent's sandbox.
+  Model-chosen commands would get network access and the credential, and cicd
+  cannot restrict a container's egress.
+- A privileged container to let the sandbox start. It hands the most privilege
+  to the process running model-chosen commands, and it was not shown to work.
 - Running learn-from-bugs as a merge gate. "No change" is a valid outcome, and a
   gate whose pass state includes "the model decided nothing was needed" grades
   its own blind spot.
@@ -95,5 +121,7 @@ automatic PR.
   every dismissed group in one run.
 - Reopening a dismissed group just because it fired again, with no newer
   release and no regrowth.
+- Giving the investigating job a write token, or any secret besides the model
+  credential, because the agent's sandbox lets it read them.
 - Failing the run when the previous evidence is missing. That would turn a
   cache miss into an outage of the whole loop.

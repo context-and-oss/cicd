@@ -472,21 +472,55 @@ rule, review guidance, a configuration check, or **no change**.
 
 | Decision         | Value                                                                                           |
 |------------------|-------------------------------------------------------------------------------------------------|
-| Primary function | `Learn(ctx, src *dagger.Directory, issue *dagger.File, fix string, testCmd string, ...) (*dagger.File, error)` |
-| Isolation        | The investigator runs in a container on a copy of the checkout and returns a diff plus a structured report. It never edits the consumer's tree |
+| Primary function | `Learn(ctx, src *dagger.Directory, proposal *dagger.File, report *dagger.File, fix string, testCmd string, ...) (*dagger.File, error)`. It grades a proposal the investigator already made; it never runs the investigator |
+| Isolation        | The investigator runs **on the runner, not in Dagger**, under the agent CLI's own sandbox, on a copy of the checkout. It returns a diff plus a structured report and never edits the consumer's tree. See *Where the investigator runs* below |
 | Witnessing       | cicd reruns the proposed regression test itself through the witnessed BYO test of [ADR-002](docs/decisions/ADR-002-witnessed-test-execution.md). The test must fail on the fix's parent and pass on the fix. Validation the agent reports is a claim, not evidence |
 | Outcomes         | `applied`, `no_change`, `not_applied`, `apply_failed`, or did-not-run. `no_change` is valid but must give a reason; an agent timeout or an invalid report is never `no_change` |
 | Stage mapping    | The earliest practical detection point is recorded as a CD Model stage number, so findings aggregate into the [defect-stages mapping](docs/explanation/continuous-delivery/quality-gates/defect-prevention/defect-stages-mapping.md) over time |
 | Output           | A draft PR on its own branch, never trunk. The finding record travels as evidence and is not committed automatically |
 | Evidence         | Issue reference or hash, fix base and head SHAs, diff hash, outcome, witnessed red/green results, stage mapping. No raw issue body, diff or transcript |
 
-**Composite**: `src/composites/learn-from-bugs`, which runs Sanitize (issue text) → Learn →
-witnessed test → propose → evidence → notify.
+**Jobs**: the reusable workflow runs three jobs, in this order, and never runs two of them together:
 
-**Investigator tool**: TBD. It must be publicly installable and pinnable: a digest-pinned image in
-`images.go`, or `go run <module>@<version>`. cicd does not depend on a tool a consumer cannot
-fetch. It also reaches consumers through the Dagger module, never as a third-party `uses:` action,
-because of the doctrine that our own workflows use no third-party actions.
+1. **Investigate** (runner). Before it starts, `feedback.Sanitize` screens the issue text in
+   Dagger. The agent CLI then runs under its own sandbox, and the job uploads the diff and the report.
+   The job holds **only** a short-lived model credential (workload identity federation to an
+   OpenAI-compatible Responses endpoint such as Azure AI Foundry, with a role that can only call
+   models) and `contents: read`. It holds no write token and no other secret.
+2. **Witness and evidence** (Dagger, no model credential). `src/composites/learn-from-bugs` runs
+   `feedback.Learn`, which replays the proposed test red then green and writes the envelope, then
+   evidence and notify.
+3. **Propose** (runner). This job holds the token that opens the draft PR. It runs only after the
+   witness, and never alongside the agent.
+
+#### Where the investigator runs
+
+This is the first cicd step that is not a Dagger module. The reason was measured:
+
+- The agent CLI isolates each command it runs in Linux namespaces (bubblewrap). Inside a container
+  this cannot start:
+  - under the default container profiles, namespace creation is refused;
+  - with seccomp and AppArmor unconfined, setting up the sandbox's network still fails.
+- On a GitHub-hosted runner, which is a VM, the same sandbox starts. A measured spike confirmed
+  that it denies network access and hides other processes' environments, and that it limits writes
+  to the workspace.
+- Running the agent in a container without its own sandbox would give model-chosen commands network
+  access and read access to the credential. cicd has no way to restrict a Dagger container's egress
+  today, so a container is a weaker boundary than the runner, not an equal one.
+
+The sandbox limits writes, **not reads**. A command the agent runs can read files outside the
+workspace, including the model token. The job design is the mitigation: the investigating job
+holds nothing worth reading beyond a model token that expires within the hour and can only call
+models. The PR token lives in a later job. Microsoft-hosted Azure DevOps agents are VMs too, but
+this is unverified there.
+
+Revisit the container shape only if cicd can deny a Dagger container all egress except a
+credential-holding model proxy.
+
+**Investigator tool**: TBD. It must be publicly installable and pinnable at an exact version. cicd
+does not depend on a tool a consumer cannot fetch. The reusable workflow installs it with a pinned
+version in a `run:` step, never as a third-party `uses:` action, because of the doctrine that our
+own workflows use no third-party actions.
 
 ### Templates and sequencing
 
