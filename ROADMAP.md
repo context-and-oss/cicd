@@ -357,7 +357,7 @@ one subject. Its expression must pin all three of these:
 - `sub`: the trunk branch, such as `repo:<org>/*:ref:refs/heads/main`, so a pull request branch
   cannot obtain a token.
 - `job_workflow_ref`: cicd's reusable workflow **at a release tag**, such as
-  `context-and-oss/cicd/.github/workflows/learn-from-bugs.yml@refs/tags/*`. A `@*` ref also
+  `<cicd-repository>/.github/workflows/learn-from-bugs.yml@refs/tags/v*`. A `@*` ref also
   accepts a branch carrying a modified copy of the workflow.
 
 cicd is public, so `job_workflow_ref` alone would trust every repository on GitHub that calls the
