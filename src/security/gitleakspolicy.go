@@ -203,38 +203,117 @@ func gitleaksPolicyCollision(entries []string, p gitleaksPolicy, scope string) e
 //
 // A line scanner, not a TOML parser: it tracks the table header and looks for
 // a path key under [extend], and for the dotted extend.path and the inline
-// extend = { path = ... } spellings. A config that hides the key some other
-// way still loads it, so this narrows the door, and the docs say so.
+// extend = { path = ... } spellings. Keys and headers are compared as dotted
+// key lists, so a quoted or spaced spelling of the same key (["extend"],
+// [ 'extend' ], "extend".path, extend . path) is the same key, as it is to
+// TOML; a quoted key holding a dot ("extend.path") is one key, and is not.
+// A config that hides the key some other way (a multi-line inline table, a
+// header with a trailing comment inside the brackets) still loads it, so this
+// narrows the door, and the docs say so.
 func gitleaksConfigExtendsPath(toml string) bool {
-	table := ""
+	var table []string
 	for _, line := range strings.Split(toml, "\n") {
 		l := strings.TrimSpace(line)
 		if strings.HasPrefix(l, "#") {
 			continue
 		}
 		if strings.HasPrefix(l, "[") {
-			end := strings.IndexByte(l, ']')
-			if end < 0 {
+			// [[name]] is an array-of-tables header; its keys belong to
+			// that table, not to whatever header came before it.
+			body := strings.TrimPrefix(strings.TrimPrefix(l, "["), "[")
+			parts, rest, ok := tomlDottedKey(body)
+			if !ok || !strings.HasPrefix(strings.TrimSpace(rest), "]") {
+				table = nil
 				continue
 			}
-			table = strings.TrimSpace(strings.Trim(l[:end+1], "[]"))
+			table = parts
 			continue
 		}
-		key, val, ok := strings.Cut(l, "=")
+		key, rest, ok := tomlDottedKey(l)
 		if !ok {
 			continue
 		}
-		key = strings.Trim(strings.TrimSpace(key), `"'`)
+		rest = strings.TrimSpace(rest)
+		if !strings.HasPrefix(rest, "=") {
+			continue
+		}
+		full := append(append([]string{}, table...), key...)
 		switch {
-		case table == "extend" && key == "path":
+		case tomlKeyIs(full, "extend", "path"):
 			return true
-		case table == "" && key == "extend.path":
-			return true
-		case table == "" && key == "extend" && strings.Contains(val, "path"):
+		case tomlKeyIs(full, "extend") && strings.Contains(rest, "path"):
 			return true
 		}
 	}
 	return false
+}
+
+// tomlDottedKey reads a TOML dotted key from the start of s: bare or quoted
+// parts separated by dots, with whitespace allowed around each dot. It
+// returns the unquoted parts and what follows the key. A quoted part keeps
+// any dot it contains, so "a.b" is one part. Escape sequences in a basic
+// string are not decoded; a key that spells "extend" with an escape is one of
+// the hiding places the doc comment above admits.
+func tomlDottedKey(s string) (parts []string, rest string, ok bool) {
+	i := 0
+	for {
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+			i++
+		}
+		if i >= len(s) {
+			return nil, "", false
+		}
+		switch q := s[i]; q {
+		case '"', '\'':
+			j := i + 1
+			for j < len(s) && s[j] != q {
+				if q == '"' && s[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(s) {
+				return nil, "", false
+			}
+			parts = append(parts, s[i+1:j])
+			i = j + 1
+		default:
+			j := i
+			for j < len(s) && isTOMLBareKeyChar(s[j]) {
+				j++
+			}
+			if j == i {
+				return nil, "", false
+			}
+			parts = append(parts, s[i:j])
+			i = j
+		}
+		k := i
+		for k < len(s) && (s[k] == ' ' || s[k] == '\t') {
+			k++
+		}
+		if k < len(s) && s[k] == '.' {
+			i = k + 1
+			continue
+		}
+		return parts, s[i:], true
+	}
+}
+
+func isTOMLBareKeyChar(c byte) bool {
+	return c == '_' || c == '-' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+func tomlKeyIs(key []string, want ...string) bool {
+	if len(key) != len(want) {
+		return false
+	}
+	for i := range key {
+		if key[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // gitleaksPolicyArgs is what the primary tree leg appends when files were

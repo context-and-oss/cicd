@@ -200,6 +200,15 @@ func TestGitleaksConfigExtendsPath(t *testing.T) {
 		"[ extend ]\n\"path\" = \"x\"\n",
 		"title = \"x\"\nextend.path = \"base.toml\"\n",
 		"extend = { path = \"base.toml\" }\n",
+		"[\"extend\"]\npath = \"x.toml\"\n",
+		"[\"extend\" ]\npath = \"x.toml\"\n",
+		"[ 'extend' ]\npath = \"x.toml\"\n",
+		"\"extend\".path = \"x.toml\"\n",
+		"'extend'.path = \"x.toml\"\n",
+		"extend . path = \"x.toml\"\n",
+		"\"extend\" . 'path' = \"x.toml\"\n",
+		"'extend' = { path = \"x.toml\" }\n",
+		"[[rules]]\nid = \"x\"\n[extend]\npath = \"x.toml\"\n",
 	}
 	no := []string{
 		"",
@@ -208,6 +217,12 @@ func TestGitleaksConfigExtendsPath(t *testing.T) {
 		"[[allowlists]]\npaths = ['''^wwwroot/assets/[^/]+\\.js$''']\n",
 		"[[rules]]\nid = \"x\"\npath = '''\\.env$'''\n",
 		"[extend]\nuseDefault = true\n[[rules]]\npath = \"x\"\n",
+		"[extend]\nuseDefault = true\n[[ \"allowlists\" ]]\npath = \"x\"\n",
+		// One quoted key holding a dot is not the extend table's path.
+		"\"extend.path\" = \"x.toml\"\n",
+		"[\"extend.x\"]\npath = \"x.toml\"\n",
+		"[rules.extend]\npath = \"x.toml\"\n",
+		"[extended]\npath = \"x.toml\"\n",
 	}
 	for _, c := range yes {
 		if !gitleaksConfigExtendsPath(c) {
