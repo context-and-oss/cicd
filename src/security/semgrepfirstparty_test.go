@@ -10,14 +10,6 @@ import (
 	"testing"
 )
 
-func ownLoadedIDs(rules []semgrepFirstParty) []string {
-	var ids []string
-	for _, r := range rules {
-		ids = append(ids, r.LoadedID())
-	}
-	return ids
-}
-
 // A rule file under rules/ that no list names is a rule nobody runs, and it
 // reads exactly like one that runs and finds nothing.
 func TestEveryFirstPartyRuleFileIsWired(t *testing.T) {

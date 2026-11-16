@@ -276,6 +276,16 @@ func TestSemgrepFallbackDoesNotAddTheEmbeddedRuleTwice(t *testing.T) {
 	}
 }
 
+// ownLoadedIDs lives here, untagged, because the untagged rule and pack tests
+// call it too and must compile under the default tag set the module lint uses.
+func ownLoadedIDs(rules []semgrepFirstParty) []string {
+	var ids []string
+	for _, r := range rules {
+		ids = append(ids, r.LoadedID())
+	}
+	return ids
+}
+
 func sarifWithRules(ids ...string) []byte {
 	type rule struct {
 		ID string `json:"id"`
