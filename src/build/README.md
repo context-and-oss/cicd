@@ -13,7 +13,7 @@ source access. Verify the referenced release, or use `-m ./src/build` from a
 separate source checkout's root. Source credentials are separate from package feeds.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.8
+dagger -m github.com/context-and-oss/cicd/src/build@v5.2.0
 ```
 
 ## Usage
@@ -22,7 +22,7 @@ This is build inspection, not a CI evidence gate. Set `SHA` and `REPO_URL` first
 
 ```bash
 # Build an image
-dagger -m github.com/context-and-oss/cicd/src/build@v5.1.8 call build \
+dagger -m github.com/context-and-oss/cicd/src/build@v5.2.0 call build \
   --src=. --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL"
 ```
 

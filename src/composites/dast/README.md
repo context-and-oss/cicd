@@ -28,7 +28,7 @@ from a separate source checkout's root. Source credentials are separate from
 notification secrets.
 
 ```
-dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.2.0
 ```
 
 ## Usage
@@ -41,14 +41,14 @@ port 8080. Export success alone is not the verdict.
 set -eu
 rm -f ./dast-scan.json
 rm -rf ./dast-evidence
-dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8 call scan \
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.2.0 call scan \
   --app=container --src=. --dockerfile=Dockerfile --port=8080 \
   --mode=baseline --fail-on=HIGH \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./dast-scan.json || exit 1
 
 # Package even a failed scan verdict, preserving evidence for inspection.
-dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.1.8 call package \
+dagger -m github.com/context-and-oss/cicd/src/composites/dast@v5.2.0 call package \
   --evidence=./dast-scan.json \
   --commit-sha="$SHA" --branch=main --repo-url="$REPO_URL" \
   export --path=./dast-evidence || exit 1
