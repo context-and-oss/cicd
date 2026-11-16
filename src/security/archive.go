@@ -63,6 +63,23 @@ func (m *Security) ScanArchive(
 	// CLI does to a []string here.
 	// +optional
 	vulnAccept string,
+	// A gitleaks config for the build-output secrets scan, as a path relative
+	// to src — e.g. ".gitleaks.archive.toml". Read from the SOURCE tree, never
+	// from the output, mounted outside the scanned directory and passed as
+	// --config. Start it with [extend] useDefault = true to keep gitleaks'
+	// default rules; a config that leaves any out is disclosed as NARROWED
+	// RULES. Every finding it removes stays in the evidence as SUPPRESSED, with
+	// file, line and rule. An absolute path, a .. segment, a missing file and a
+	// symlink resolving outside src are refused; so is a config that sets
+	// [extend] path, and so is a .gitleaks.toml or .gitleaksignore at the
+	// output's root while this is set. Unset, the scan is unchanged.
+	// +optional
+	archiveGitleaksConfig string,
+	// A gitleaks ignore file (fingerprints, one per line) for the build-output
+	// secrets scan, as a path relative to src. The same rules as
+	// archiveGitleaksConfig; passed as --gitleaks-ignore-path.
+	// +optional
+	archiveGitleaksIgnore string,
 ) (*dagger.File, error) {
 	start := time.Now()
 	threshold := Severity(failOn)
@@ -81,6 +98,13 @@ func (m *Security) ScanArchive(
 	if err != nil {
 		return nil, err
 	}
+	// The same: a path that could only ever be refused is refused here, before
+	// any container exists. Whether it names a file is asked of src itself.
+	policy, err := parseGitleaksPolicy("archive-gitleaks-config", archiveGitleaksConfig,
+		"archive-gitleaks-ignore", archiveGitleaksIgnore)
+	if err != nil {
+		return nil, err
+	}
 
 	var vuln trivyResult
 	var err1, err3 error
@@ -91,7 +115,7 @@ func (m *Security) ScanArchive(
 		// inventory.go and the note in ScanSource.
 		inventory, err3 = inventoryResult(err1, vuln)
 	}
-	sarifSecrets, findingsSecrets, secretsScan, err2 := runGitleaksDir(ctx, outputDir)
+	sarifSecrets, findingsSecrets, secretsScan, err2 := runGitleaksDir(ctx, src, outputDir, policy)
 
 	var errs []string
 	for _, e := range []error{err1, err2, err3} {

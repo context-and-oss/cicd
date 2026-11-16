@@ -10,7 +10,10 @@
 // invalid-artifact refusal.
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // artifactShape is the --artifact selector after it has been accepted: the
 // artifact tail switches on it, so a value that is not one of these three
@@ -49,11 +52,15 @@ type commitInputs struct {
 	prepareTestLabel string
 	testCmd          string
 	testLegs         string
+	// The archive scan's gitleaks files, as passed; blank is unset.
+	archiveGitleaksConfig string
+	archiveGitleaksIgnore string
 }
 
 // validateCommitInputs runs the refusals in the order Run always applied
 // them — parallelism, the node project limit, the artifact selector, the
-// archive shape's two required inputs, then the preparation contract — and
+// archive shape's two required inputs and its gitleaks files, then the
+// preparation contract — and
 // returns the accepted shape. A caller that sees an error has had nothing
 // pulled or built yet.
 func validateCommitInputs(in commitInputs) (artifactShape, error) {
@@ -69,6 +76,14 @@ func validateCommitInputs(in commitInputs) (artifactShape, error) {
 	}
 	if shape == artifactArchive && (in.buildCmd == "" || in.outputPath == "") {
 		return "", fmt.Errorf("archive requires build-cmd and output-path")
+	}
+	// Only the archive shape runs a build-output secrets scan. Anywhere else
+	// the file would be read by nothing, and a caller who supplied an
+	// allowlist would believe it was the policy a scan ran under.
+	supplied := strings.TrimSpace(in.archiveGitleaksConfig) != "" || strings.TrimSpace(in.archiveGitleaksIgnore) != ""
+	if supplied && shape != artifactArchive {
+		return "", fmt.Errorf("archive-gitleaks-config and archive-gitleaks-ignore apply to --artifact archive only; "+
+			"the %s shape runs no build-output secrets scan, so nothing would read them", shape)
 	}
 	if err := validatePreparation(in.prepareCmd, in.prepareLanguage, in.toolchainImage, in.prepareTestLabel, in.testCmd, in.testLegs); err != nil {
 		return "", err

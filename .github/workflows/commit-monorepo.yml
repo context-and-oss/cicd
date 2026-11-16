@@ -47,6 +47,14 @@ on:
         description: 'Archive output directory, relative to checkout. Freshly produced by build-cmd.'
         type: string
         default: ''
+      archive-gitleaks-config:
+        description: 'Archive only: gitleaks config for the build-output secrets scan, relative to checkout and inside one of source-paths (the scan sees only the application source view; anything else is refused as missing). Never read from the output. Set, the output root must carry no .gitleaks.toml/.gitleaksignore. Removals are disclosed as SUPPRESSED, unloaded default rules as NARROWED RULES.'
+        type: string
+        default: ''
+      archive-gitleaks-ignore:
+        description: 'Archive only: gitleaks ignore file for the build-output secrets scan; same rules as archive-gitleaks-config.'
+        type: string
+        default: ''
       toolchain-image:
         description: 'Archive build toolchain override. Check legs select their own images.'
         type: string
@@ -206,6 +214,8 @@ jobs:
           PREPARE_TEST_LABEL: ${{ inputs.prepare-test-label }}
           BUILD_CMD: ${{ inputs.build-cmd }}
           OUTPUT_PATH: ${{ inputs.output-path }}
+          ARCHIVE_GITLEAKS_CONFIG: ${{ inputs.archive-gitleaks-config }}
+          ARCHIVE_GITLEAKS_IGNORE: ${{ inputs.archive-gitleaks-ignore }}
           TOOLCHAIN_IMAGE: ${{ inputs.toolchain-image }}
           FAIL_ON: ${{ inputs.fail-on }}
           SAST_RULESETS: ${{ inputs.sast-rulesets }}
@@ -229,6 +239,8 @@ jobs:
           done <<< "$SOURCE_PATHS"
           [[ -z "$BUILD_CMD" ]] || extra+=(--build-cmd "$BUILD_CMD")
           [[ -z "$OUTPUT_PATH" ]] || extra+=(--output-path "$OUTPUT_PATH")
+          [[ -z "$ARCHIVE_GITLEAKS_CONFIG" ]] || extra+=(--archive-gitleaks-config "$ARCHIVE_GITLEAKS_CONFIG")
+          [[ -z "$ARCHIVE_GITLEAKS_IGNORE" ]] || extra+=(--archive-gitleaks-ignore "$ARCHIVE_GITLEAKS_IGNORE")
           [[ -z "$TOOLCHAIN_IMAGE" ]] || extra+=(--toolchain-image "$TOOLCHAIN_IMAGE")
           [[ -z "$NPM_FEED_TOKEN" ]] || extra+=(--npm-token env:NPM_FEED_TOKEN)
           [[ -z "$NPM_FEED_ROUTING" ]] || extra+=(--npm-feed-routing "$NPM_FEED_ROUTING")

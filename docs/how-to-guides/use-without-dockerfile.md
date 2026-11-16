@@ -180,7 +180,8 @@ jobs:
     # Add only explicitly needed optional secrets by name.
 ```
 
-Optional inputs: `toolchain-image` and `fail-on`.
+Optional inputs: `toolchain-image`, `fail-on`, and the two gitleaks policy
+inputs described [below](#a-false-positive-in-the-build-output).
 
 ### Azure DevOps
 
@@ -197,6 +198,58 @@ variables:
 
 The template passes `--build-cmd`/`--output-path` only when `ARTIFACT` is
 `archive`, so the same file serves the container and none shapes unchanged.
+
+### A false positive in the build output
+
+The archive's secrets scan runs gitleaks' default rules over the output. A
+bundler's minified code can trip `generic-api-key` — an identifier ending in
+`Key` assigned a chained prop read such as `r.ariaDescribedBy`, in a hashed
+chunk, is one HIGH finding.
+Clear it with a gitleaks config **committed to your source tree**, not dropped
+into the output: a file in the output ships with the deployable and is written
+by the build being graded, so cicd will not take a policy from there when you
+supply one.
+
+```toml
+# .gitleaks.archive.toml, at the repository root
+[extend]
+useDefault = true          # without this, gitleaks loads ONLY your rules
+
+[[allowlists]]
+description = "minified UI-library prop reads in hashed bundles"
+condition = "AND"          # the default is OR: paths alone would hide a real key
+targetRules = ["generic-api-key"]
+paths = ['''^wwwroot/assets/[^/]+-[A-Za-z0-9_-]{8}\.js$''']
+regexTarget = "match"
+regexes = ['''=[a-z]\.aria[A-Z][A-Za-z]+[;,)}]?$''']
+```
+
+Then pass `archive-gitleaks-config: .gitleaks.archive.toml` to `commit.yml`
+(`ARCHIVE_GITLEAKS_CONFIG` in the Azure DevOps templates). An ignore file of
+gitleaks fingerprints goes in `archive-gitleaks-ignore` the same way.
+
+- **Keep `condition = "AND"`.** Measured on gitleaks 8.30.1, the same entry
+  without it removed a real-shaped key from a sibling bundle, because any one
+  matching condition allows the finding.
+- **Nothing is hidden.** Every finding the file removes is still in the
+  evidence, uncounted, and listed in `warnings[]` as `SUPPRESSED` with its
+  `file:line rule`; a default rule the config does not load is listed as
+  `NARROWED RULES`; and a `SUPPLIED POLICY` line records the path and a digest
+  of the file that graded the run.
+- **What is refused, and why.** A path that is absolute, contains `..`, or
+  resolves through a symlink outside the source tree; a file that does not
+  exist or is not a regular file; a config using `[extend] path` (gitleaks
+  would resolve it inside the output); an output whose root also carries a
+  `.gitleaks.toml` or `.gitleaksignore` (gitleaks always loads the latter, so
+  two policies would read as one); and either input on the `container` or
+  `none` shape, where nothing reads it. Each is a run that did not scan, never
+  a scan under the defaults.
+- **Monorepo fan-out.** In `commit-monorepo.yml` the path is relative to the
+  checkout but must sit inside one of the application's `source-paths`: each
+  application's scan sees only its own source view.
+
+Leave both unset and nothing changes: the output root's own scanner files are
+honoured and disclosed as before.
 
 ## Witnessed tests and coverage: quality test
 

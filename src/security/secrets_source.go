@@ -44,7 +44,7 @@ func runGitleaks(ctx context.Context, src *dagger.Directory) (json.RawMessage, [
 	if err != nil {
 		return nil, nil, gitleaksTreeScan{}, err
 	}
-	tree, scan, treeErr := runGitleaksTree(ctx, src, entries, "source tree")
+	tree, scan, treeErr := runGitleaksTree(ctx, src, entries, "source tree", gitleaksSupplied{})
 	if tree == nil {
 		return nil, nil, gitleaksTreeScan{}, treeErr
 	}
@@ -52,7 +52,7 @@ func runGitleaks(ctx context.Context, src *dagger.Directory) (json.RawMessage, [
 		return tree, gitleaksFindings(tree), scan, treeErr
 	}
 
-	history, _, _, err := runGitleaksLeg(ctx, src, true, "")
+	history, _, _, err := runGitleaksLeg(ctx, src, true, "", gitleaksSupplied{})
 	if err != nil {
 		// Unlike runSemgrep and runTrivyFS, this returns a report *and* an
 		// error. The tree scan already succeeded, and discarding its result
@@ -70,16 +70,100 @@ func runGitleaks(ctx context.Context, src *dagger.Directory) (json.RawMessage, [
 // runGitleaksDir scans a directory's files only, with no history leg. Built
 // archive outputs carry no git history at all, so asking for one could only
 // produce the "0 commits scanned" failure rather than any extra coverage.
-func runGitleaksDir(ctx context.Context, dir *dagger.Directory) (json.RawMessage, []finding, gitleaksTreeScan, error) {
+//
+// policy is the config and ignore file supplied from src, the source tree the
+// output was built from (gitleakspolicy.go). Unset, the scan is what it always
+// was. Set, a suppression file at the output's root refuses the scan, the
+// supplied files are resolved inside src and refused when they are not there
+// or reach outside it, and a refusal is the scan's error — a non-run, never a
+// scan that quietly fell back to gitleaks' defaults.
+func runGitleaksDir(ctx context.Context, src, dir *dagger.Directory, policy gitleaksPolicy) (json.RawMessage, []finding, gitleaksTreeScan, error) {
+	const scope = "build output"
 	entries, err := dir.Entries(ctx)
 	if err != nil {
 		return nil, nil, gitleaksTreeScan{}, err
 	}
-	sarif, scan, err := runGitleaksTree(ctx, dir, entries, "build output")
+	if err := gitleaksPolicyCollision(entries, policy, scope); err != nil {
+		return nil, nil, gitleaksTreeScan{}, err
+	}
+	supplied, err := resolveGitleaksPolicy(ctx, src, policy, scope)
+	if err != nil {
+		return nil, nil, gitleaksTreeScan{}, err
+	}
+	sarif, scan, err := runGitleaksTree(ctx, dir, entries, scope, supplied)
 	if sarif == nil {
 		return nil, nil, gitleaksTreeScan{}, err
 	}
+	if supplied.record != "" {
+		scan.Warnings = append([]string{supplied.record}, scan.Warnings...)
+	}
 	return sarif, gitleaksFindings(sarif), scan, err
+}
+
+// gitleaksSupplied is a gitleaksPolicy resolved: the files copied out of the
+// source tree, ready to mount, and the warnings[] line recording them. The
+// zero value is "nothing supplied".
+type gitleaksSupplied struct {
+	policy gitleaksPolicy
+	config *dagger.File
+	ignore *dagger.File
+	record string
+}
+
+// resolveGitleaksPolicy checks each supplied path against the source tree
+// with gitleaksPolicyResolveScript and copies the file out. The check runs in
+// the gitleaks image, which is already pulled for the scan and whose BusyBox
+// carries realpath.
+func resolveGitleaksPolicy(ctx context.Context, src *dagger.Directory, p gitleaksPolicy, scope string) (gitleaksSupplied, error) {
+	if !p.set() {
+		return gitleaksSupplied{}, nil
+	}
+	out := gitleaksSupplied{policy: p}
+	var configDigest, ignoreDigest string
+	resolve := func(what, rel, name string) (*dagger.File, string, error) {
+		ran := dag.Container().
+			From(gitleaksImage).
+			WithoutEntrypoint().
+			WithMountedDirectory("/src", src).
+			WithExec([]string{"sh", "-c", gitleaksPolicyResolveScript, "sh", "/cicd-out", "/src", rel, name})
+		status, err := ran.File("/cicd-out/" + name + ".status").Contents(ctx)
+		if err != nil {
+			return nil, "", errors.New(readbackError("gitleaks", "/cicd-out/"+name+".status", err))
+		}
+		if err := gitleaksPolicyStatusError(what, rel, status); err != nil {
+			return nil, "", err
+		}
+		f := ran.File("/cicd-out/" + name)
+		content, err := f.Contents(ctx)
+		if err != nil {
+			return nil, "", errors.New(readbackError("gitleaks", "/cicd-out/"+name, err))
+		}
+		return f, content, nil
+	}
+	if p.Config != "" {
+		f, content, err := resolve("config", p.Config, "config.toml")
+		if err != nil {
+			return gitleaksSupplied{}, err
+		}
+		if gitleaksConfigExtendsPath(content) {
+			return gitleaksSupplied{}, errors.New("gitleaks: the config " + p.Config + " sets [extend] path, which gitleaks " +
+				"resolves inside the " + scope + " it is scanning, so the " + scope + " would supply part of its own policy; " +
+				"it is refused and the " + scope + " was not scanned. Put the rules in the one file, or extend gitleaks' " +
+				"defaults with [extend] useDefault = true")
+		}
+		out.config = f
+		configDigest = gitleaksPolicyDigest(content)
+	}
+	if p.Ignore != "" {
+		f, content, err := resolve("ignore file", p.Ignore, "gitleaksignore")
+		if err != nil {
+			return gitleaksSupplied{}, err
+		}
+		out.ignore = f
+		ignoreDigest = gitleaksPolicyDigest(content)
+	}
+	out.record = gitleaksPolicyRecord(p, configDigest, ignoreDigest, scope)
+	return out, nil
 }
 
 // runGitleaksTree runs the tree leg and, beside it, the shadow that measures
@@ -90,13 +174,21 @@ func runGitleaksDir(ctx context.Context, dir *dagger.Directory) (json.RawMessage
 // failed history leg has: the findings the real scan reported are real, but a
 // pass resting on an acceptance cicd could not read is not one it can stand
 // behind. A nil report means the tree leg itself did not scan.
-func runGitleaksTree(ctx context.Context, src *dagger.Directory, entries []string, scope string) (json.RawMessage, gitleaksTreeScan, error) {
+//
+// supplied is the config and ignore file given from the source tree; with
+// either set the tree's own root files are already refused (runGitleaksDir),
+// so the disclosure names the supplied ones instead.
+func runGitleaksTree(ctx context.Context, src *dagger.Directory, entries []string, scope string, supplied gitleaksSupplied) (json.RawMessage, gitleaksTreeScan, error) {
 	hasConfig, hasIgnore := gitleaksSuppressionFiles(entries)
+	origin := gitleaksTreeOrigin(hasConfig)
+	if supplied.policy.set() {
+		origin = gitleaksSuppliedOrigin(supplied.policy)
+	}
 
 	shadowDone := make(chan gitleaksShadow, 1)
-	go func() { shadowDone <- runGitleaksShadow(ctx, src, hasConfig, hasIgnore) }()
+	go func() { shadowDone <- runGitleaksShadow(ctx, src, hasConfig, hasIgnore, supplied.policy.set()) }()
 
-	report, scan, ignored, err := runGitleaksLeg(ctx, src, false, scope)
+	report, scan, ignored, err := runGitleaksLeg(ctx, src, false, scope, supplied)
 	shadow := <-shadowDone
 	if err != nil {
 		return nil, gitleaksTreeScan{}, err
@@ -109,7 +201,7 @@ func runGitleaksTree(ctx context.Context, src *dagger.Directory, entries []strin
 		return report, scan, nil
 	}
 	disclosed, warnings := gitleaksDiscloseSuppressions(report, shadow.report,
-		parseGitleaksIgnored(ignored), shadow.marks, shadow.marksKnown, hasConfig, scope)
+		parseGitleaksIgnored(ignored), shadow.marks, shadow.marksKnown, origin, scope)
 	scan.Warnings = append(scan.Warnings, warnings...)
 	return disclosed, scan, nil
 }
@@ -127,7 +219,9 @@ type gitleaksShadow struct {
 // suppression could apply, scans a copy of the tree with every suppression
 // turned off. Both run in one container over the tree with .gitleaks.toml and
 // .gitleaksignore removed, so the mark list is of the tree the shadow scans.
-func runGitleaksShadow(ctx context.Context, src *dagger.Directory, hasConfig, hasIgnore bool) gitleaksShadow {
+// supplied is true when a config or ignore file was given from outside the
+// tree: there is then something to measure even with no root file.
+func runGitleaksShadow(ctx context.Context, src *dagger.Directory, hasConfig, hasIgnore, supplied bool) gitleaksShadow {
 	bare := src
 	if hasConfig {
 		bare = bare.WithoutFile(gitleaksConfigFile)
@@ -151,7 +245,7 @@ func runGitleaksShadow(ctx context.Context, src *dagger.Directory, hasConfig, ha
 		return gitleaksShadow{err: errors.New(readbackError("gitleaks", "/tmp/gitleaks.marks", err))}
 	}
 	marks, known := parseGitleaksAllowMarks(raw, exit)
-	if !gitleaksShadowNeeded(hasConfig, hasIgnore, marks, known) {
+	if !gitleaksShadowNeeded(hasConfig || supplied, hasIgnore, marks, known) {
 		return gitleaksShadow{marksKnown: true}
 	}
 
@@ -176,19 +270,31 @@ func joinGitleaksErrors(a, b error) error {
 // leg's input in the warnings it reads out of the log; the history leg returns
 // an empty scan. The tree leg also returns the fingerprints .gitleaksignore
 // removed, one per line (see gitleaksScript).
-func runGitleaksLeg(ctx context.Context, src *dagger.Directory, history bool, scope string) (json.RawMessage, gitleaksTreeScan, string, error) {
+//
+// supplied files are mounted outside /src and passed to the tree leg only, so
+// nothing is added to the tree being scanned.
+func runGitleaksLeg(ctx context.Context, src *dagger.Directory, history bool, scope string, supplied gitleaksSupplied) (json.RawMessage, gitleaksTreeScan, string, error) {
 	args := gitleaksTreeArgs()
 	if history {
 		args = gitleaksHistoryArgs()
 	}
 
-	ran := dag.Container().
+	ctr := dag.Container().
 		From(gitleaksImage).
 		// Bypass the image's entrypoint so sh runs the script.
 		WithoutEntrypoint().
 		WithMountedDirectory("/src", src).
-		WithWorkdir("/src").
-		WithExec(append([]string{"sh", "-c", gitleaksScript, "sh", "/tmp"}, args...))
+		WithWorkdir("/src")
+	if !history {
+		if supplied.config != nil {
+			ctr = ctr.WithMountedFile(gitleaksPolicyConfigPath, supplied.config)
+		}
+		if supplied.ignore != nil {
+			ctr = ctr.WithMountedFile(gitleaksPolicyIgnorePath, supplied.ignore)
+		}
+		args = append(args, gitleaksPolicyArgs(supplied.policy)...)
+	}
+	ran := ctr.WithExec(append([]string{"sh", "-c", gitleaksScript, "sh", "/tmp"}, args...))
 
 	report, err := gitleaksReadRun(ctx, ran, history)
 	if err != nil {

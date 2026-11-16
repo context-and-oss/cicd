@@ -1207,3 +1207,15 @@ counted result at the same place; and the history leg is **not** shadowed, so
 a suppression there stays undisclosed. Disclose, not refuse, for the same blast
 radius as `.trivyignore`. See
 [specs/disclose-gitleaks-suppressions.md](../../specs/disclose-gitleaks-suppressions.md).
+
+The build output is the one tree whose root files cicd will not take as policy
+on request: a `.gitleaks.toml` there ships with the deployable and is written by
+the build being graded. `--archive-gitleaks-config` and
+`--archive-gitleaks-ignore` read the policy from the **source tree** instead —
+spelling refused before any container runs, a symlink that leaves the tree
+refused by `realpath` containment, the file mounted outside the scanned
+directory — and the same disclosure names it as the supplied file, beside a
+`SUPPLIED POLICY` line recording its path and digest. Set, an output root that
+also carries either file is refused, because gitleaks loads a root
+`.gitleaksignore` whatever it is told. See
+[specs/take-the-archive-gitleaks-policy-from-the-source-tree.md](../../specs/take-the-archive-gitleaks-policy-from-the-source-tree.md).

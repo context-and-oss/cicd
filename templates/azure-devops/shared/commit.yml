@@ -60,6 +60,15 @@ variables:
   BUILD_CMD: ""
   # Where the archive build writes its output, relative to the repo root.
   OUTPUT_PATH: ""
+  # Archive only: a gitleaks config and/or ignore file for the build-output
+  # secrets scan, relative to the repo root and read from the source tree,
+  # never from the output. Empty keeps the default scan, which honours a
+  # .gitleaks.toml/.gitleaksignore at the output root; set, the output root
+  # must carry neither or the scan is refused. What they remove is listed as
+  # SUPPRESSED and every default rule the config does not load as NARROWED
+  # RULES — start the config with `[extend] useDefault = true`.
+  ARCHIVE_GITLEAKS_CONFIG: ""
+  ARCHIVE_GITLEAKS_IGNORE: ""
   # Toolchain image override for archive builds — the only digest-pinnable
   # level (ADR-004). Empty resolves from .nvmrc / global.json, falling back
   # to pinned defaults.
@@ -311,6 +320,14 @@ steps:
       fi
       if [ "${ARTIFACT:-container}" = "archive" ]; then
         extra+=(--build-cmd "$BUILD_CMD" --output-path "$OUTPUT_PATH")
+        case "${ARCHIVE_GITLEAKS_CONFIG:-}" in
+          ''|'$('*) ;;
+          *) extra+=(--archive-gitleaks-config "$ARCHIVE_GITLEAKS_CONFIG") ;;
+        esac
+        case "${ARCHIVE_GITLEAKS_IGNORE:-}" in
+          ''|'$('*) ;;
+          *) extra+=(--archive-gitleaks-ignore "$ARCHIVE_GITLEAKS_IGNORE") ;;
+        esac
       fi
       # --progress=plain so module warnings reach the pipeline log — default non-TTY progress hides stderr.
       # Licence policy. Unconditional, unlike the shape-specific flags: the
@@ -434,6 +451,8 @@ steps:
       ARTIFACT: $(ARTIFACT)
       BUILD_CMD: $(BUILD_CMD)
       OUTPUT_PATH: $(OUTPUT_PATH)
+      ARCHIVE_GITLEAKS_CONFIG: $(ARCHIVE_GITLEAKS_CONFIG)
+      ARCHIVE_GITLEAKS_IGNORE: $(ARCHIVE_GITLEAKS_IGNORE)
       TOOLCHAIN_IMAGE: $(TOOLCHAIN_IMAGE)
       DOCKERFILE: $(DOCKERFILE)
       PLATFORM: $(PLATFORM)
