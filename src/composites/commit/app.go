@@ -19,6 +19,8 @@ type appRunOptions struct {
 	parallelism                                                int
 	prepared                                                   *dagger.Container
 	prepareLanguage, prepareTestLabel, runURL                  string
+	// Resolved in the app's source view (scoped), not the whole checkout.
+	archiveGitleaksConfig, archiveGitleaksIgnore string
 }
 
 // appSourceView retains repository-relative paths and excludes all undeclared
@@ -123,7 +125,7 @@ func runApp(ctx context.Context, src *dagger.Directory, c appConfig, o appRunOpt
 			break
 		}
 		payload = dag.Build().Bundle(output)
-		capture("security", "archive", "secrets", dag.Security().ScanArchive(scoped, output, o.commitSha, o.branch, o.repoUrl, dagger.SecurityScanArchiveOpts{ArtifactOnly: true, FailOn: o.failOn}))
+		capture("security", "archive", "secrets", dag.Security().ScanArchive(scoped, output, o.commitSha, o.branch, o.repoUrl, dagger.SecurityScanArchiveOpts{ArtifactOnly: true, FailOn: o.failOn, ArchiveGitleaksConfig: o.archiveGitleaksConfig, ArchiveGitleaksIgnore: o.archiveGitleaksIgnore}))
 	case "none":
 		capture("build", "artifact-attestation", "", dag.Build().NoArtifact(o.commitSha, o.branch, o.repoUrl, dagger.BuildNoArtifactOpts{SbomDisabled: true}))
 	}

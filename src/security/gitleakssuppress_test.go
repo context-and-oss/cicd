@@ -81,7 +81,7 @@ func TestGitleaksDisclosesEachMechanism(t *testing.T) {
 		t.Fatal("marks unknown")
 	}
 
-	out, warnings := gitleaksDiscloseSuppressions(primary, shadow, ignored, marks, known, true, "source tree")
+	out, warnings := gitleaksDiscloseSuppressions(primary, shadow, ignored, marks, known, gitleaksTreeOrigin(true), "source tree")
 
 	if got := gitleaksFindings(out); len(got) != 1 || got[0].File != "c.go" {
 		t.Errorf("counted findings = %+v, want only c.go", got)
@@ -133,7 +133,7 @@ func TestGitleaksUnknownMarksBlameNothing(t *testing.T) {
 	if known || marks != nil {
 		t.Fatalf("exit 2 read as a known list: %v %v", marks, known)
 	}
-	_, warnings := gitleaksDiscloseSuppressions(primary, shadow, nil, marks, known, true, "build output")
+	_, warnings := gitleaksDiscloseSuppressions(primary, shadow, nil, marks, known, gitleaksTreeOrigin(true), "build output")
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "in the build output was removed by a suppression cicd could not identify") {
 		t.Errorf("warnings = %v", warnings)
 	}
@@ -144,7 +144,7 @@ func TestGitleaksUnknownMarksBlameNothing(t *testing.T) {
 func TestGitleaksNamesTheNarrowedRules(t *testing.T) {
 	primary := glSARIF([]string{"github-pat"}, glResult{"github-pat", "c.go", 1, 0})
 	shadow := glSARIF(glDefaults, glResult{"github-pat", "c.go", 1, 0})
-	out, warnings := gitleaksDiscloseSuppressions(primary, shadow, nil, nil, true, true, "source tree")
+	out, warnings := gitleaksDiscloseSuppressions(primary, shadow, nil, nil, true, gitleaksTreeOrigin(true), "source tree")
 	want := `gitleaks: NARROWED RULES — the source tree's .gitleaks.toml loads 1 rule and leaves out 2 of gitleaks' 3 default rules, which searched for nothing: "aws-access-token", "private-key"`
 	if len(warnings) != 1 || warnings[0] != want {
 		t.Errorf("warnings = %q", warnings)
@@ -153,7 +153,7 @@ func TestGitleaksNamesTheNarrowedRules(t *testing.T) {
 		t.Errorf("nothing suppressed, yet the report changed")
 	}
 	// Without a config the shadow's rules are the real scan's: nothing to name.
-	if _, w := gitleaksDiscloseSuppressions(primary, shadow, nil, nil, true, false, "source tree"); len(w) != 0 {
+	if _, w := gitleaksDiscloseSuppressions(primary, shadow, nil, nil, true, gitleaksTreeOrigin(false), "source tree"); len(w) != 0 {
 		t.Errorf("no config, warnings = %v", w)
 	}
 }
@@ -163,7 +163,7 @@ func TestGitleaksNamesTheNarrowedRules(t *testing.T) {
 func TestGitleaksDisclosureCountsDuplicates(t *testing.T) {
 	primary := glSARIF(glDefaults, glResult{"github-pat", "c.go", 1, 0})
 	shadow := glSARIF(glDefaults, glResult{"github-pat", "c.go", 1, 0}, glResult{"github-pat", "c.go", 1, 0})
-	out, warnings := gitleaksDiscloseSuppressions(primary, shadow, nil, nil, true, true, "source tree")
+	out, warnings := gitleaksDiscloseSuppressions(primary, shadow, nil, nil, true, gitleaksTreeOrigin(true), "source tree")
 	if len(suppressedBy(t, out)) != 1 || len(warnings) != 1 {
 		t.Errorf("warnings = %v", warnings)
 	}
@@ -178,7 +178,7 @@ func TestGitleaksDisclosureCountsDuplicates(t *testing.T) {
 func TestGitleaksSuppressedTreeResultDoesNotHideHistory(t *testing.T) {
 	primary := glSARIF(glDefaults)
 	shadow := glSARIF(glDefaults, glResult{"github-pat", "d.go", 7, 0})
-	tree, _ := gitleaksDiscloseSuppressions(primary, shadow, nil, nil, true, true, "source tree")
+	tree, _ := gitleaksDiscloseSuppressions(primary, shadow, nil, nil, true, gitleaksTreeOrigin(true), "source tree")
 	merged := mergeGitleaksSARIF(tree, glSARIF(glDefaults, glResult{"github-pat", "d.go", 7, 0}))
 	if n := len(gitleaksFindings(merged)); n != 1 {
 		t.Errorf("counted = %d, want the history finding", n)

@@ -149,14 +149,17 @@ const (
 
 // what is the mechanism as the warning names it; kind is the SARIF
 // suppression kind: a mark sits in the source, the other files beside it.
-func (s gitleaksSuppression) what() (what, kind string) {
+//
+// origin names the files: the scanned tree's own by default, or the ones
+// supplied from the source tree (gitleakspolicy.go).
+func (s gitleaksSuppression) what(origin gitleaksOrigin) (what, kind string) {
 	switch s {
 	case suppressedByIgnoreFile:
-		return "a fingerprint in " + gitleaksIgnoreFile, "external"
+		return "a fingerprint in " + origin.ignoreName(), "external"
 	case suppressedByAllowMark:
 		return "an inline gitleaks:allow", "inSource"
 	case suppressedByConfig:
-		return "the scanned tree's " + gitleaksConfigFile +
+		return origin.configName() +
 			" (an [allowlist] entry, or a default rule it disables, narrows or does not load)", "external"
 	default:
 		return "a suppression cicd could not identify (a gitleaks:allow inside an archive, " +
@@ -169,6 +172,10 @@ func (s gitleaksSuppression) what() (what, kind string) {
 // mechanism that removed anything, plus one naming the default rules the
 // tree's config does not load.
 //
+// origin says which config and ignore file applied and where they came from;
+// its hasConfig is what the NARROWED RULES check and the config attribution
+// rest on.
+//
 // shadow is the same tree scanned with every suppression off. ignored and
 // marks attribute what the difference holds; marksKnown false means the mark
 // list could not be read, and a finding no fingerprint explains is then not
@@ -179,10 +186,10 @@ func (s gitleaksSuppression) what() (what, kind string) {
 // saying the suppressed findings could not be attached: the disclosure is
 // lost, never the scan.
 func gitleaksDiscloseSuppressions(primary, shadow json.RawMessage, ignored []gitleaksFingerprint,
-	marks []gitleaksMark, marksKnown, hasConfig bool, scope string) (json.RawMessage, []string) {
+	marks []gitleaksMark, marksKnown bool, origin gitleaksOrigin, scope string) (json.RawMessage, []string) {
 	var warnings []string
-	if hasConfig {
-		if w := gitleaksNarrowedRules(primary, shadow, scope); w != "" {
+	if origin.hasConfig {
+		if w := gitleaksNarrowedRules(primary, shadow, origin.narrowedSubject(scope)); w != "" {
 			warnings = append(warnings, w)
 		}
 	}
@@ -225,7 +232,7 @@ func gitleaksDiscloseSuppressions(primary, shadow json.RawMessage, ignored []git
 			how = suppressedByAllowMark
 		// The mark grep cannot open an archive, so inside one a mark is never
 		// ruled out, and pinning the finding on the config could be wrong.
-		case marksKnown && hasConfig && !strings.Contains(file, "!"):
+		case marksKnown && origin.hasConfig && !strings.Contains(file, "!"):
 			how = suppressedByConfig
 		}
 		byMechanism[how] = append(byMechanism[how], file+":"+strconv.Itoa(r.line())+" "+r.RuleID)
@@ -234,7 +241,7 @@ func gitleaksDiscloseSuppressions(primary, shadow json.RawMessage, ignored []git
 		if err := json.Unmarshal(raw, &v); err != nil {
 			continue
 		}
-		what, kind := how.what()
+		what, kind := how.what(origin)
 		v["suppressions"] = []any{map[string]any{
 			"kind":          kind,
 			"status":        "accepted",
@@ -248,7 +255,7 @@ func gitleaksDiscloseSuppressions(primary, shadow json.RawMessage, ignored []git
 		if len(names) == 0 {
 			continue
 		}
-		what, _ := how.what()
+		what, _ := how.what(origin)
 		list, _ := gitleaksNameList(names)
 		warnings = append(warnings, "gitleaks: SUPPRESSED — "+plural(len(names), "finding", "findings")+
 			" in the "+scope+" "+oneOrMany(len(names), "was", "were")+" removed by "+what+
@@ -282,7 +289,8 @@ func gitleaksMarkedSpan(marked map[gitleaksMark]bool, file string, start, end in
 // load: the shadow ran on gitleaks' defaults, so its rule list is the default
 // set, and an id missing from the real scan's list is a rule nothing applied.
 // Zero rules is not reached here: gitleaksRunError refuses it as a non-run.
-func gitleaksNarrowedRules(primary, shadow json.RawMessage, scope string) string {
+// subject names the config, as gitleaksOrigin.narrowedSubject spells it.
+func gitleaksNarrowedRules(primary, shadow json.RawMessage, subject string) string {
 	loaded := gitleaksRuleIDs(primary)
 	defaults := gitleaksRuleIDs(shadow)
 	have := map[string]bool{}
@@ -299,7 +307,7 @@ func gitleaksNarrowedRules(primary, shadow json.RawMessage, scope string) string
 		return ""
 	}
 	list, _ := gitleaksNameList(missing)
-	return "gitleaks: NARROWED RULES — the " + scope + "'s " + gitleaksConfigFile + " loads " +
+	return "gitleaks: NARROWED RULES — " + subject + " loads " +
 		plural(len(loaded), "rule", "rules") + " and leaves out " + strconv.Itoa(len(missing)) +
 		" of gitleaks' " + strconv.Itoa(len(defaults)) + " default rules, which searched for nothing: " + list
 }
