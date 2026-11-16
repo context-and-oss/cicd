@@ -52,6 +52,19 @@ func TestValidateCommitInputs(t *testing.T) {
 			i.toolchainImage = "node:22-alpine"
 			i.testCmd = "npm test"
 		}), artifactContainer, ""},
+		// The archive scan's gitleaks files are read by the archive shape
+		// alone; anywhere else they would be read by nothing.
+		{"archive with gitleaks config", with(func(i *commitInputs) {
+			i.artifact = "archive"
+			i.buildCmd = "make"
+			i.outputPath = "dist"
+			i.archiveGitleaksConfig = ".gitleaks.archive.toml"
+		}), artifactArchive, ""},
+		{"blank gitleaks files are unset", with(func(i *commitInputs) { i.archiveGitleaksConfig = "  "; i.archiveGitleaksIgnore = "\n" }), artifactContainer, ""},
+		{"gitleaks config on container", with(func(i *commitInputs) { i.archiveGitleaksConfig = ".gitleaks.archive.toml" }), "",
+			"archive-gitleaks-config and archive-gitleaks-ignore apply to --artifact archive only; the container shape runs no build-output secrets scan, so nothing would read them"},
+		{"gitleaks ignore on none", with(func(i *commitInputs) { i.artifact = "none"; i.archiveGitleaksIgnore = ".gitleaksignore.archive" }), "",
+			"archive-gitleaks-config and archive-gitleaks-ignore apply to --artifact archive only; the none shape runs no build-output secrets scan, so nothing would read them"},
 		// Order: every input wrong names parallelism, the first check Run ever ran.
 		{"every input wrong names parallelism", commitInputs{parallelism: 9, nodeProjectLimit: 0, artifact: "x", prepareLanguage: "node"}, "", "parallelism must be an integer from 1 to 4, got 9"},
 		// ...then the node limit before the artifact selector.

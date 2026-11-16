@@ -136,6 +136,26 @@ func (m *Commit) Run(
 	// package metadata.
 	// +default=true
 	licenseFull bool,
+	// A gitleaks config for the archive shape's build-output secrets scan, as
+	// a path relative to src — e.g. ".gitleaks.archive.toml". Read from the
+	// SOURCE tree, never from the build output, and passed to gitleaks as
+	// --config. Begin it with [extend] useDefault = true to keep gitleaks'
+	// default rules. Every finding it removes stays in the evidence as
+	// SUPPRESSED (file:line rule), a default rule it leaves out is disclosed as
+	// NARROWED RULES, and the path and a digest of the file are recorded in
+	// warnings[]. Refused: an absolute path, a .. segment, a missing file, a
+	// symlink resolving outside src, a config setting [extend] path, a
+	// .gitleaks.toml or .gitleaksignore at the output's root, and any
+	// --artifact other than archive. In application mode the path resolves in
+	// the app's source view, so it must lie inside one of its source paths.
+	// See src/security/gitleakspolicy.go.
+	// +optional
+	archiveGitleaksConfig string,
+	// A gitleaks ignore file (fingerprints) for the same scan, as a path
+	// relative to src, passed as --gitleaks-ignore-path. The same rules as
+	// archiveGitleaksConfig.
+	// +optional
+	archiveGitleaksIgnore string,
 	// Toolchain container image override for the BYO test command and the archive
 	// build — the only digest-pinnable level (ADR-004). On the test side it
 	// applies to testCmd only; a leg names its own.
@@ -218,6 +238,7 @@ func (m *Commit) Run(
 		buildCmd: buildCmd, outputPath: outputPath,
 		prepareCmd: prepareCmd, prepareLanguage: prepareLanguage, toolchainImage: toolchainImage,
 		prepareTestLabel: prepareTestLabel, testCmd: testCmd, testLegs: testLegs,
+		archiveGitleaksConfig: archiveGitleaksConfig, archiveGitleaksIgnore: archiveGitleaksIgnore,
 	})
 	if err != nil {
 		return nil, err
@@ -246,7 +267,8 @@ func (m *Commit) Run(
 			commitSha: commitSha, branch: branch, repoUrl: repoUrl,
 			buildCmd: buildCmd, outputPath: outputPath, toolchainImage: toolchainImage,
 			npmFeedURL: npmFeedUrl, npmFeedRouting: npmFeedRouting, npmToken: npmToken, nugetFeedURL: nugetFeedUrl, nugetToken: nugetToken,
-			licenseGate: licenseGate, licenseAllow: licenseAllow, parallelism: parallelism, prepared: prepared, prepareLanguage: prepareLanguage, prepareTestLabel: prepareTestLabel, runURL: runUrl})
+			licenseGate: licenseGate, licenseAllow: licenseAllow, parallelism: parallelism, prepared: prepared, prepareLanguage: prepareLanguage, prepareTestLabel: prepareTestLabel, runURL: runUrl,
+			archiveGitleaksConfig: archiveGitleaksConfig, archiveGitleaksIgnore: archiveGitleaksIgnore})
 	}
 	// Source gate: every code check runs for every shape via one stage-2 call.
 	//
@@ -361,6 +383,10 @@ func (m *Commit) Run(
 					NugetFeedURL: nugetFeedUrl,
 					NugetToken:   nugetToken,
 					VulnAccept:   vulnAccept,
+					// Read from src, the tree the output was built from; see
+					// the parameters' doc above.
+					ArchiveGitleaksConfig: archiveGitleaksConfig,
+					ArchiveGitleaksIgnore: archiveGitleaksIgnore,
 				},
 			),
 		}

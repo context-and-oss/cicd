@@ -69,7 +69,7 @@ func (m *Commit) Run(
 | `--artifact` | Artifact tail (after the source gate) | SBOM source |
 |--------------|----------------------------------------|-------------|
 | `container` (default) | `Build` → `Sbom(image)` + `ScanImage(verifySecrets)` | image SBOM + source-FS SBOM |
-| `archive` | `BuildArchive` → `ScanArchive` (built-output secrets) — errors if `build-cmd`/`output-path` empty | source-FS SBOM |
+| `archive` | `BuildArchive` → `ScanArchive` (built-output secrets; `--archive-gitleaks-config` / `--archive-gitleaks-ignore` take its gitleaks policy from the source tree, and are refused on the other shapes) — errors if `build-cmd`/`output-path` empty | source-FS SBOM |
 | `none` | *(no build)* → `build.NoArtifact` (the "nothing was attested" record) | source-FS SBOM only (stage-2 scan-source Trivy-FS CycloneDX) |
 
 Any other value errors with `invalid --artifact`. The container shape emits two

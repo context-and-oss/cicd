@@ -182,6 +182,16 @@ on:
         required: false
         type: string
         default: ''
+      archive-gitleaks-config:
+        description: 'Archive shape only: a gitleaks config for the build-output secrets scan, as a path relative to the source root (e.g. ".gitleaks.archive.toml"). Read from the source tree, never from the build output. Empty keeps the default scan, which honours a .gitleaks.toml/.gitleaksignore at the output root. Set, the output root must carry neither, or the scan is refused. Every finding the config removes is listed as SUPPRESSED and every default rule it does not load as NARROWED RULES; start it with [extend] useDefault = true. Refused on the container and none shapes.'
+        required: false
+        type: string
+        default: ''
+      archive-gitleaks-ignore:
+        description: 'Archive shape only: a gitleaks ignore file (fingerprints) for the build-output secrets scan, as a path relative to the source root. Same source-tree rule, collision refusal and SUPPRESSED disclosure as archive-gitleaks-config. Refused on the container and none shapes.'
+        required: false
+        type: string
+        default: ''
       deploy-pages:
         description: 'Publish a GitHub Pages evidence dashboard after the pipeline runs. Requires GitHub Pages enabled (Settings → Pages → Source: GitHub Actions).'
         required: false
@@ -480,6 +490,8 @@ jobs:
           PREPARE_TEST_LABEL: ${{ inputs.prepare-test-label }}
           BUILD_CMD: ${{ inputs.build-cmd }}
           OUTPUT_PATH: ${{ inputs.output-path }}
+          ARCHIVE_GITLEAKS_CONFIG: ${{ inputs.archive-gitleaks-config }}
+          ARCHIVE_GITLEAKS_IGNORE: ${{ inputs.archive-gitleaks-ignore }}
           FAIL_ON: ${{ inputs.fail-on }}
           NPM_FEED_URL: ${{ inputs.npm-feed-url }}
           NPM_FEED_ROUTING: ${{ inputs.npm-feed-routing }}
@@ -558,6 +570,11 @@ jobs:
           if [ -n "$OUTPUT_PATH" ]; then
             extra+=(--output-path "$OUTPUT_PATH")
           fi
+          # Build-output secrets policy, read from the source tree. Not ignored
+          # on the other shapes: the composite refuses them there, because
+          # nothing would read them.
+          [[ -z "$ARCHIVE_GITLEAKS_CONFIG" ]] || extra+=(--archive-gitleaks-config "$ARCHIVE_GITLEAKS_CONFIG")
+          [[ -z "$ARCHIVE_GITLEAKS_IGNORE" ]] || extra+=(--archive-gitleaks-ignore "$ARCHIVE_GITLEAKS_IGNORE")
           # Licence policy. Unconditional, unlike the coverage flags: the licence
           # leg reads the dependency manifests, so it has something to say on
           # every repo whether or not the consumer brought a test command.
@@ -761,7 +778,7 @@ jobs:
 
       - name: Upload SARIF to Code Scanning
         if: always() && steps.code-scanning.outputs.enabled == 'true'
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           sarif_file: ./audit-evidence/findings.sarif
           category: cicd-commit

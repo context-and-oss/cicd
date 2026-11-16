@@ -177,7 +177,15 @@ dagger -m ./src/security call scan-sbom \
   and a root `.gitleaks.toml` removed: the shadow scan's extra results put back
   as accepted SARIF suppressions (never counted), one `SUPPRESSED` warning per
   mechanism, and the `NARROWED RULES` warning (untagged; see "A gitleaks
-  suppression is disclosed, never trusted silently")
+  suppression is disclosed, never trusted silently"). Who wrote the policy
+  is a `gitleaksOrigin`, so a supplied file is named as itself in every line
+- `gitleakspolicy.go` — `ScanArchive`'s `--archive-gitleaks-config` /
+  `--archive-gitleaks-ignore`: the path spelling rule, the in-container
+  resolve script (`realpath` containment; status `ok`, `missing`, `escape`,
+  `notfile`, `unreadable`), the refusal of an output root that also carries a
+  scanner file, the refusal of `[extend] path`, the mount outside `/src`, and
+  the `SUPPLIED POLICY` record (untagged; see
+  [specs/take-the-archive-gitleaks-policy-from-the-source-tree.md](../../specs/take-the-archive-gitleaks-policy-from-the-source-tree.md))
 - `secrets_image.go` — TruffleHog image entropy scan (the container call only)
 - `trufflehogreport.go` — TruffleHog argument shape, output parsing and SARIF
   (see "A TruffleHog finding without a location is not a finding")
