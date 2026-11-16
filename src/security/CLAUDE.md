@@ -17,6 +17,23 @@ func (m *Security) ScanSource(
     vulnAccept string,      // optional — "<id>=<reason>" risk acceptances, ONE PER LINE, disclosed in warnings[]
 ) (*dagger.File, error)     // evidence.json
 
+// Archive scan: lockfile SBOM + dependency vulns from src, secrets scan of the built output
+func (m *Security) ScanArchive(
+    ctx context.Context,
+    src *dagger.Directory,
+    outputDir *dagger.Directory, // the built output — the artifact that ships
+    failOn string,          // default HIGH
+    commitSha, branch, repoUrl string,
+    nugetFeedUrl string, nugetToken *dagger.Secret, // optional — as ScanSource
+    artifactOnly bool,      // optional — skip the src legs (the composite's app mode)
+    vulnAccept string,      // optional — as ScanSource
+    gitleaksConfig string,  // optional — gitleaks config for the built-output scan, relative to src
+                            // (e.g. ".gitleaks.archive.toml"); copied to the root of the scan's
+                            // copy of outputDir, never into the artifact. Missing path: error.
+                            // Output already carrying a root .gitleaks.toml: error. "[extend] path"
+                            // resolves against the scanned output and is not supported.
+) (*dagger.File, error)     // evidence.json
+
 // Image scan: secrets entropy (TruffleHog) + image vuln scan (Trivy image)
 func (m *Security) ScanImage(
     ctx context.Context,
@@ -123,6 +140,11 @@ dagger -m ./src/security call scan-sbom \
   as accepted SARIF suppressions (never counted), one `SUPPRESSED` warning per
   mechanism, and the `NARROWED RULES` warning (untagged; see "A gitleaks
   suppression is disclosed, never trusted silently")
+- `gitleaksconfig.go` — `ScanArchive --gitleaks-config`: the path shape rule,
+  the one-config-per-scan refusal, the missing-file error, and
+  `gitleaksConfigOrigin`, which makes the `SUPPRESSED` / `NARROWED RULES`
+  wording name the supplied file and its source path (untagged; see
+  `specs/supply-the-archive-gitleaks-config.md`)
 - `secrets_image.go` — TruffleHog image entropy scan (the container call only)
 - `trufflehogreport.go` — TruffleHog argument shape, output parsing and SARIF
   (see "A TruffleHog finding without a location is not a finding")

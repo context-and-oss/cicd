@@ -30,7 +30,7 @@ dagger -m github.com/context-and-oss/cicd/src/security@v5.1.8
 |----------|-------------|
 | `scan-source` | SAST + secrets + filesystem vuln scan on source code |
 | `scan-licenses` | Source/dependency licence declarations and configured policy; findings warn by default |
-| `scan-archive` | Source vuln scan + secrets scan of a built archive directory |
+| `scan-archive` | Source vuln scan + secrets scan of a built archive directory; `--gitleaks-config <path>` (relative to `--src`) supplies the gitleaks config for the built-output scan without shipping it in the artifact |
 | `scan-image` | Secrets entropy + image vuln scan on a built container |
 | `scan-sbom` | Rescan of an existing CycloneDX SBOM against today's vulnerability database |
 | `scan-web` | Dynamic analysis (DAST) via OWASP ZAP against a live HTTP/S target |

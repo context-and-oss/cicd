@@ -149,14 +149,14 @@ const (
 
 // what is the mechanism as the warning names it; kind is the SARIF
 // suppression kind: a mark sits in the source, the other files beside it.
-func (s gitleaksSuppression) what() (what, kind string) {
+func (s gitleaksSuppression) what(config gitleaksConfigOrigin) (what, kind string) {
 	switch s {
 	case suppressedByIgnoreFile:
 		return "a fingerprint in " + gitleaksIgnoreFile, "external"
 	case suppressedByAllowMark:
 		return "an inline gitleaks:allow", "inSource"
 	case suppressedByConfig:
-		return "the scanned tree's " + gitleaksConfigFile +
+		return config.phrase("the scanned tree's "+gitleaksConfigFile) +
 			" (an [allowlist] entry, or a default rule it disables, narrows or does not load)", "external"
 	default:
 		return "a suppression cicd could not identify (a gitleaks:allow inside an archive, " +
@@ -179,10 +179,10 @@ func (s gitleaksSuppression) what() (what, kind string) {
 // saying the suppressed findings could not be attached: the disclosure is
 // lost, never the scan.
 func gitleaksDiscloseSuppressions(primary, shadow json.RawMessage, ignored []gitleaksFingerprint,
-	marks []gitleaksMark, marksKnown, hasConfig bool, scope string) (json.RawMessage, []string) {
+	marks []gitleaksMark, marksKnown bool, config gitleaksConfigOrigin, scope string) (json.RawMessage, []string) {
 	var warnings []string
-	if hasConfig {
-		if w := gitleaksNarrowedRules(primary, shadow, scope); w != "" {
+	if config.present {
+		if w := gitleaksNarrowedRules(primary, shadow, config, scope); w != "" {
 			warnings = append(warnings, w)
 		}
 	}
@@ -225,7 +225,7 @@ func gitleaksDiscloseSuppressions(primary, shadow json.RawMessage, ignored []git
 			how = suppressedByAllowMark
 		// The mark grep cannot open an archive, so inside one a mark is never
 		// ruled out, and pinning the finding on the config could be wrong.
-		case marksKnown && hasConfig && !strings.Contains(file, "!"):
+		case marksKnown && config.present && !strings.Contains(file, "!"):
 			how = suppressedByConfig
 		}
 		byMechanism[how] = append(byMechanism[how], file+":"+strconv.Itoa(r.line())+" "+r.RuleID)
@@ -234,7 +234,7 @@ func gitleaksDiscloseSuppressions(primary, shadow json.RawMessage, ignored []git
 		if err := json.Unmarshal(raw, &v); err != nil {
 			continue
 		}
-		what, kind := how.what()
+		what, kind := how.what(config)
 		v["suppressions"] = []any{map[string]any{
 			"kind":          kind,
 			"status":        "accepted",
@@ -248,7 +248,7 @@ func gitleaksDiscloseSuppressions(primary, shadow json.RawMessage, ignored []git
 		if len(names) == 0 {
 			continue
 		}
-		what, _ := how.what()
+		what, _ := how.what(config)
 		list, _ := gitleaksNameList(names)
 		warnings = append(warnings, "gitleaks: SUPPRESSED — "+plural(len(names), "finding", "findings")+
 			" in the "+scope+" "+oneOrMany(len(names), "was", "were")+" removed by "+what+
@@ -282,7 +282,8 @@ func gitleaksMarkedSpan(marked map[gitleaksMark]bool, file string, start, end in
 // load: the shadow ran on gitleaks' defaults, so its rule list is the default
 // set, and an id missing from the real scan's list is a rule nothing applied.
 // Zero rules is not reached here: gitleaksRunError refuses it as a non-run.
-func gitleaksNarrowedRules(primary, shadow json.RawMessage, scope string) string {
+// config names the file when it was supplied from the source tree.
+func gitleaksNarrowedRules(primary, shadow json.RawMessage, config gitleaksConfigOrigin, scope string) string {
 	loaded := gitleaksRuleIDs(primary)
 	defaults := gitleaksRuleIDs(shadow)
 	have := map[string]bool{}
@@ -299,7 +300,7 @@ func gitleaksNarrowedRules(primary, shadow json.RawMessage, scope string) string
 		return ""
 	}
 	list, _ := gitleaksNameList(missing)
-	return "gitleaks: NARROWED RULES — the " + scope + "'s " + gitleaksConfigFile + " loads " +
+	return "gitleaks: NARROWED RULES — " + config.phrase("the "+scope+"'s "+gitleaksConfigFile) + " loads " +
 		plural(len(loaded), "rule", "rules") + " and leaves out " + strconv.Itoa(len(missing)) +
 		" of gitleaks' " + strconv.Itoa(len(defaults)) + " default rules, which searched for nothing: " + list
 }

@@ -778,6 +778,44 @@ jobs:
             *) ;;
           esac
 
+      - name: Run module tests (security archive gitleaks config)
+        # Its own step: the security step above sits at the run-body size
+        # ceiling, and a step over it stops the whole workflow from starting.
+        run: |
+          case "$MODULE" in
+            src/security)
+              # The consumer-supplied archive config (/tmp/sa-dist is the
+              # built output the security step exported). The fixture's
+              # .gitleaks.archive.toml accepts the planted key by rule and
+              # secret, so the scan passes at HIGH with no counted finding —
+              # and the acceptance must be legible: a SUPPRESSED warning that
+              # names the supplied file and leaked.env, and the finding kept
+              # in the SARIF as an accepted suppression. The bundle itself
+              # must not gain a .gitleaks.toml. --artifact-only: node-app's
+              # lockfile fails HIGH on dependency vulns, which is the security
+              # step's measurement, not this one's.
+              dagger -m ./src/security call scan-archive --src ./testdata/node-app --output-dir /tmp/sa-dist --artifact-only --gitleaks-config .gitleaks.archive.toml --fail-on HIGH --commit-sha local --branch main --repo-url https://example.com export --path /tmp/sa-cfg.json
+              jq -e '.passed and (.findingsCount == 0) and ((.errors // []) | length == 0)' /tmp/sa-cfg.json
+              jq -e 'any(.warnings[]?; test("SUPPRESSED") and test("supplied from .gitleaks.archive.toml in the source tree") and test("leaked.env"))' /tmp/sa-cfg.json
+              jq -e '[.sarifReport.runs[]?.results[]? | select(.suppressions[]?.status == "accepted") | select(.locations[]?.physicalLocation.artifactLocation.uri | test("leaked.env"))] | length > 0' /tmp/sa-cfg.json
+              test ! -e /tmp/sa-dist/.gitleaks.toml
+              # A path the source tree does not hold is cicd's own error before
+              # any container runs — never a scan that ran without the config.
+              if dagger -m ./src/security call scan-archive --src ./testdata/node-app --output-dir /tmp/sa-dist --gitleaks-config does-not-exist.toml --fail-on NONE --commit-sha local --branch main --repo-url https://example.com export --path /tmp/sa-missing.json 2>/tmp/sa-missing.err; then
+                echo "a missing --gitleaks-config was accepted"; exit 1
+              fi
+              grep -q 'not found in the source tree' /tmp/sa-missing.err
+              # One config per scan: an output that already carries a root
+              # .gitleaks.toml beside a supplied config is refused.
+              cp -R /tmp/sa-dist /tmp/sa-dist-cfg && printf '[extend]\nuseDefault = true\n' > /tmp/sa-dist-cfg/.gitleaks.toml
+              if dagger -m ./src/security call scan-archive --src ./testdata/node-app --output-dir /tmp/sa-dist-cfg --gitleaks-config .gitleaks.archive.toml --fail-on NONE --commit-sha local --branch main --repo-url https://example.com export --path /tmp/sa-conflict.json 2>/tmp/sa-conflict.err; then
+                echo "two gitleaks configs for one scan were accepted"; exit 1
+              fi
+              grep -q 'one config per scan' /tmp/sa-conflict.err
+              ;;
+            *) ;;
+          esac
+
       - name: Run module tests (remaining modules)
         run: |
           case "$MODULE" in

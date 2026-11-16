@@ -56,6 +56,7 @@ func (m *Commit) Run(
     platform string,            // default "linux/amd64"
     // --- archive shape ---
     buildCmd, outputPath string, // both required for --artifact archive
+    archiveGitleaksConfig string, // optional — gitleaks config for the built-output secrets scan, relative to src
     // --- heavier secrets ---
     verifySecrets bool,         // default false — image live-verified secrets (container only)
     // --- delivery ---

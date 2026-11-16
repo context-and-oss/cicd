@@ -198,6 +198,46 @@ variables:
 The template passes `--build-cmd`/`--output-path` only when `ARTIFACT` is
 `archive`, so the same file serves the container and none shapes unchanged.
 
+### Accepting a false positive in the bundle
+
+The built-output secrets scan reads a gitleaks config from one place: the root
+of the output. Your source tree's `.gitleaks.toml` never reaches it, and a
+`.gitleaksignore` fingerprint goes stale as soon as the bundler moves a line.
+Instead of shipping scanner config inside the deployable, keep a second file in
+the source tree and name it:
+
+```toml
+# .gitleaks.archive.toml — applied to the built output only
+[extend]
+useDefault = true          # keep gitleaks' default rules; without it none load
+
+[[allowlists]]
+description = "vendor sample token embedded by the SDK's docs page"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"     # match the value, not the file
+regexes = ['''^sk_test_[A-Za-z0-9]{24}$''']
+```
+
+Then pass it: `--archive-gitleaks-config .gitleaks.archive.toml` on the
+composite, `archive-gitleaks-config:` on the GitHub Actions caller, or
+`ARCHIVE_GITLEAKS_CONFIG` on Azure DevOps. cicd reads the file before any
+container runs (a path that does not exist is an error, not a scan that ran
+without it), copies it to the root of the scan's own copy of the output, and
+leaves the artifact untouched.
+
+Prefer an `[[allowlists]]` entry with `regexTarget = "secret"` that names the
+one value over a `paths` allowlist: a path entry blinds every rule to the whole
+file, so the next real key dropped into the same bundle passes too. Whatever
+the config removes is still disclosed in the evidence — a `SUPPRESSED` warning
+naming the supplied file and each `"file:line rule"` it removed, and a
+`NARROWED RULES` warning if it leaves out a default rule — so a reviewer reads
+the acceptance in `warnings[]`, not by diffing a config.
+
+Two things are refused: a `[extend] path` pointing at your source config
+(gitleaks resolves it against the scanned output, not the source tree), and an
+output that already carries its own root `.gitleaks.toml` beside a supplied
+config — one config per scan.
+
 ## Witnessed tests and coverage: quality test
 
 Both the pre-commit and the commit stage can execute **your** test command and

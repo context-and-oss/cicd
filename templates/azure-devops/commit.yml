@@ -74,6 +74,12 @@ variables:
   BUILD_CMD: ""
   # Where the archive build writes its output, relative to the repo root.
   OUTPUT_PATH: ""
+  # Optional, archive only: a self-contained gitleaks config
+  # ("[extend] useDefault = true"), relative to the repo root, applied to the
+  # built-output secrets scan. Never written into the artifact; every finding
+  # it removes is disclosed in the evidence. Prefer a rule-scoped
+  # regexTarget = "secret" allowlist over a path allowlist.
+  ARCHIVE_GITLEAKS_CONFIG: ""
   # Toolchain image override for archive builds — the only digest-pinnable
   # level (ADR-004). Empty resolves from .nvmrc / global.json, falling back
   # to pinned defaults.
@@ -325,6 +331,10 @@ steps:
       fi
       if [ "${ARTIFACT:-container}" = "archive" ]; then
         extra+=(--build-cmd "$BUILD_CMD" --output-path "$OUTPUT_PATH")
+        case "${ARCHIVE_GITLEAKS_CONFIG:-}" in
+          ''|'$('*) ;;
+          *) extra+=(--archive-gitleaks-config "$ARCHIVE_GITLEAKS_CONFIG") ;;
+        esac
       fi
       # --progress=plain so module warnings reach the pipeline log — default non-TTY progress hides stderr.
       # Licence policy. Unconditional, unlike the shape-specific flags: the
@@ -448,6 +458,7 @@ steps:
       ARTIFACT: $(ARTIFACT)
       BUILD_CMD: $(BUILD_CMD)
       OUTPUT_PATH: $(OUTPUT_PATH)
+      ARCHIVE_GITLEAKS_CONFIG: $(ARCHIVE_GITLEAKS_CONFIG)
       TOOLCHAIN_IMAGE: $(TOOLCHAIN_IMAGE)
       DOCKERFILE: $(DOCKERFILE)
       PLATFORM: $(PLATFORM)

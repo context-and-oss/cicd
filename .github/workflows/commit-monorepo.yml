@@ -47,6 +47,10 @@ on:
         description: 'Archive output directory, relative to checkout. Freshly produced by build-cmd.'
         type: string
         default: ''
+      archive-gitleaks-config:
+        description: 'Archive shape only: path, relative to checkout, of a self-contained gitleaks config applied to the built-output secrets scan. Never written into the artifact; every finding it removes is disclosed.'
+        type: string
+        default: ''
       toolchain-image:
         description: 'Archive build toolchain override. Check legs select their own images.'
         type: string
@@ -206,6 +210,7 @@ jobs:
           PREPARE_TEST_LABEL: ${{ inputs.prepare-test-label }}
           BUILD_CMD: ${{ inputs.build-cmd }}
           OUTPUT_PATH: ${{ inputs.output-path }}
+          ARCHIVE_GITLEAKS_CONFIG: ${{ inputs.archive-gitleaks-config }}
           TOOLCHAIN_IMAGE: ${{ inputs.toolchain-image }}
           FAIL_ON: ${{ inputs.fail-on }}
           SAST_RULESETS: ${{ inputs.sast-rulesets }}
@@ -229,6 +234,7 @@ jobs:
           done <<< "$SOURCE_PATHS"
           [[ -z "$BUILD_CMD" ]] || extra+=(--build-cmd "$BUILD_CMD")
           [[ -z "$OUTPUT_PATH" ]] || extra+=(--output-path "$OUTPUT_PATH")
+          [[ -z "$ARCHIVE_GITLEAKS_CONFIG" ]] || extra+=(--archive-gitleaks-config "$ARCHIVE_GITLEAKS_CONFIG")
           [[ -z "$TOOLCHAIN_IMAGE" ]] || extra+=(--toolchain-image "$TOOLCHAIN_IMAGE")
           [[ -z "$NPM_FEED_TOKEN" ]] || extra+=(--npm-token env:NPM_FEED_TOKEN)
           [[ -z "$NPM_FEED_ROUTING" ]] || extra+=(--npm-feed-routing "$NPM_FEED_ROUTING")

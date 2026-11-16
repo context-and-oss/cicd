@@ -1,0 +1,15 @@
+# gitleaks config for the built-output secrets scan of this fixture, supplied
+# to security.ScanArchive through --gitleaks-config (never shipped in dist/).
+#
+# [extend] useDefault keeps gitleaks' default rules; without it a config that
+# declares no [[rules]] loads none and the scan searches for nothing.
+[extend]
+useDefault = true
+
+# Accept the one planted value by rule and by secret, not by path: a path
+# allowlist would blind every rule to the whole of leaked.env.
+[[allowlists]]
+description = "planted fixture key, not a credential"
+targetRules = ["aws-access-token"]
+regexTarget = "secret"
+regexes = ['''^AKIAPLANTEDFAKE4CICD$''']

@@ -1201,6 +1201,21 @@ only when the mark list is known and the finding is outside an archive, and
 fails the row — the findings reported are real, but a pass cicd cannot read the
 basis of is not one it can stand behind.
 
+The archive scan reads a config from the same place, the root of the built
+output, which the source tree's config never reaches — so a false positive in
+a bundle could be accepted only by shipping scanner config inside the
+deployable or by a `.gitleaksignore` fingerprint the next build moves.
+`ScanArchive --gitleaks-config` names a file relative to `src`; cicd reads it
+before any container runs (a missing path is its own error, never a scan that
+ran without it) and copies it to the root of the scan's copy of the output,
+never into the artifact, so the shadow scan, the `SUPPRESSED` line and
+`NARROWED RULES` all apply unchanged. Those lines then name "the gitleaks
+config supplied from `<path>` in the source tree" instead of "the scanned
+tree's `.gitleaks.toml`", because an acceptance is legible only when the
+reader can find the file that made it. An output that already carries a root
+`.gitleaks.toml` beside a supplied config is refused: one config per scan.
+See [specs/supply-the-archive-gitleaks-config.md](../../specs/supply-the-archive-gitleaks-config.md).
+
 Traps: a suppressed tree result must not
 stand for its location in `mergeGitleaksSARIF`, or it hides the history leg's
 counted result at the same place; and the history leg is **not** shadowed, so

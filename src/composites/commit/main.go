@@ -173,6 +173,14 @@ func (m *Commit) Run(
 	// Required for --artifact archive.
 	// +optional
 	outputPath string,
+	// Archive shape only: path, relative to the source root, of a self-contained
+	// gitleaks config ("[extend] useDefault = true") applied to the built-output
+	// secrets scan. Copied to the root of the scan's copy of the output, never
+	// into the bundle; every finding it removes is disclosed in warnings[] and
+	// kept in the SARIF as an accepted suppression. Ignored by the container
+	// and none shapes, like buildCmd. See security.ScanArchive.
+	// +optional
+	archiveGitleaksConfig string,
 	// --- heavier secrets ---
 	// Restrict image secrets findings to live-verified credentials (adds
 	// TruffleHog's --only-verified). Opt-in "heavier secrets" gate; container shape only.
@@ -243,7 +251,7 @@ func (m *Commit) Run(
 		}
 		return runApp(ctx, src, config, appRunOptions{artifact: artifact, failOn: failOn, sastRulesets: sastRulesets,
 			commitSha: commitSha, branch: branch, repoUrl: repoUrl,
-			buildCmd: buildCmd, outputPath: outputPath, toolchainImage: toolchainImage,
+			buildCmd: buildCmd, outputPath: outputPath, toolchainImage: toolchainImage, archiveGitleaksConfig: archiveGitleaksConfig,
 			npmFeedURL: npmFeedUrl, npmFeedRouting: npmFeedRouting, npmToken: npmToken, nugetFeedURL: nugetFeedUrl, nugetToken: nugetToken,
 			licenseGate: licenseGate, licenseAllow: licenseAllow, parallelism: parallelism, prepared: prepared, prepareLanguage: prepareLanguage, prepareTestLabel: prepareTestLabel, runURL: runUrl})
 	}
@@ -357,9 +365,10 @@ func (m *Commit) Run(
 					// .NET restore would run a second time, anonymously, and fail
 					// against the private feed the first one reached. Identical
 					// inputs make it a cache hit instead.
-					NugetFeedURL: nugetFeedUrl,
-					NugetToken:   nugetToken,
-					VulnAccept:   vulnAccept,
+					NugetFeedURL:   nugetFeedUrl,
+					NugetToken:     nugetToken,
+					VulnAccept:     vulnAccept,
+					GitleaksConfig: archiveGitleaksConfig,
 				},
 			),
 		}

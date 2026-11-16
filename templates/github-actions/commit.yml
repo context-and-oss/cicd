@@ -80,6 +80,9 @@ jobs:
       # directory it writes. Both run witnessed in a cicd toolchain container.
       # build-cmd: npm ci && npm run build
       # output-path: dist
+      # A false positive in the bundle? Supply a self-contained gitleaks config
+      # (never shipped in the artifact); every finding it removes is disclosed.
+      # archive-gitleaks-config: .gitleaks.archive.toml
       # Toolchain image override — the only digest-pinnable level (ADR-004).
       # When omitted, resolved from .nvmrc / global.json, falling back to
       # pinned defaults (node:22-alpine, dotnet/sdk:8.0, ...).

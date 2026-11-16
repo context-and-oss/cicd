@@ -22,7 +22,8 @@
       { "name": "commitSha", "type": "String",    "required": true },
       { "name": "branch",    "type": "String",    "required": true },
       { "name": "repoUrl",   "type": "String",    "required": true },
-      { "name": "failOn",    "type": "String",    "required": false, "default": "HIGH" }
+      { "name": "failOn",    "type": "String",    "required": false, "default": "HIGH" },
+      { "name": "gitleaksConfig", "type": "String", "required": false }
     ],
     "outputSchema": "evidence-1"
   },

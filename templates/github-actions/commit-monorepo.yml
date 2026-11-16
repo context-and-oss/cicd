@@ -62,5 +62,8 @@ jobs:
       artifact: archive
       build-cmd: sh ci/app-a-build.sh
       output-path: dist/app-a
+      # Optional: a self-contained gitleaks config for the built-output
+      # secrets scan, never shipped in the artifact.
+      # archive-gitleaks-config: .gitleaks.archive.toml
       # Set toolchain-image to the consumer's combined build image if this
       # command builds both Node and .NET. Each check leg can select its own.

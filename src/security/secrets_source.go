@@ -44,7 +44,7 @@ func runGitleaks(ctx context.Context, src *dagger.Directory) (json.RawMessage, [
 	if err != nil {
 		return nil, nil, gitleaksTreeScan{}, err
 	}
-	tree, scan, treeErr := runGitleaksTree(ctx, src, entries, "source tree")
+	tree, scan, treeErr := runGitleaksTree(ctx, src, entries, "source tree", gitleaksConfigOrigin{})
 	if tree == nil {
 		return nil, nil, gitleaksTreeScan{}, treeErr
 	}
@@ -70,12 +70,25 @@ func runGitleaks(ctx context.Context, src *dagger.Directory) (json.RawMessage, [
 // runGitleaksDir scans a directory's files only, with no history leg. Built
 // archive outputs carry no git history at all, so asking for one could only
 // produce the "0 commits scanned" failure rather than any extra coverage.
-func runGitleaksDir(ctx context.Context, dir *dagger.Directory) (json.RawMessage, []finding, gitleaksTreeScan, error) {
+//
+// config, when not nil, is the consumer's gitleaks config read from the
+// source tree (origin.supplied names it); it is copied to the root of the
+// scan's copy of dir, where gitleaks reads it exactly as it would a config
+// the output carried, so the shadow, NARROWED RULES and the zero-rules
+// non-run apply unchanged. dir itself is not written to, so the artifact
+// never ships it. An output root that already carries its own config is
+// refused by the caller before any scan (gitleaksConfigConflict in
+// ScanArchive's preflight), so here the copy never replaces one.
+func runGitleaksDir(ctx context.Context, dir *dagger.Directory, config *dagger.File, origin gitleaksConfigOrigin) (json.RawMessage, []finding, gitleaksTreeScan, error) {
 	entries, err := dir.Entries(ctx)
 	if err != nil {
 		return nil, nil, gitleaksTreeScan{}, err
 	}
-	sarif, scan, err := runGitleaksTree(ctx, dir, entries, "build output")
+	if config != nil {
+		dir = dir.WithFile(gitleaksConfigFile, config)
+		entries = append(entries, gitleaksConfigFile)
+	}
+	sarif, scan, err := runGitleaksTree(ctx, dir, entries, "build output", origin)
 	if sarif == nil {
 		return nil, nil, gitleaksTreeScan{}, err
 	}
@@ -90,8 +103,9 @@ func runGitleaksDir(ctx context.Context, dir *dagger.Directory) (json.RawMessage
 // failed history leg has: the findings the real scan reported are real, but a
 // pass resting on an acceptance cicd could not read is not one it can stand
 // behind. A nil report means the tree leg itself did not scan.
-func runGitleaksTree(ctx context.Context, src *dagger.Directory, entries []string, scope string) (json.RawMessage, gitleaksTreeScan, error) {
+func runGitleaksTree(ctx context.Context, src *dagger.Directory, entries []string, scope string, origin gitleaksConfigOrigin) (json.RawMessage, gitleaksTreeScan, error) {
 	hasConfig, hasIgnore := gitleaksSuppressionFiles(entries)
+	origin.present = hasConfig
 
 	shadowDone := make(chan gitleaksShadow, 1)
 	go func() { shadowDone <- runGitleaksShadow(ctx, src, hasConfig, hasIgnore) }()
@@ -109,7 +123,7 @@ func runGitleaksTree(ctx context.Context, src *dagger.Directory, entries []strin
 		return report, scan, nil
 	}
 	disclosed, warnings := gitleaksDiscloseSuppressions(report, shadow.report,
-		parseGitleaksIgnored(ignored), shadow.marks, shadow.marksKnown, hasConfig, scope)
+		parseGitleaksIgnored(ignored), shadow.marks, shadow.marksKnown, origin, scope)
 	scan.Warnings = append(scan.Warnings, warnings...)
 	return disclosed, scan, nil
 }

@@ -63,6 +63,22 @@ func (m *Security) ScanArchive(
 	// CLI does to a []string here.
 	// +optional
 	vulnAccept string,
+	// Path, relative to src, of a gitleaks config to apply to the built-output
+	// secrets scan — e.g. ".gitleaks.archive.toml". cicd copies it to the root
+	// of the scan's copy of outputDir, never into the artifact, so gitleaks
+	// reads it as it would a .gitleaks.toml the output carried: every finding
+	// it removes is disclosed in warnings[] (SUPPRESSED) and kept in the SARIF
+	// as an accepted suppression, and a default rule it leaves out is named
+	// (NARROWED RULES). It must be self-contained: start it with
+	// "[extend] useDefault = true" to keep gitleaks' default rules, and prefer
+	// an [[allowlists]] entry with regexTarget = "secret" that names the one
+	// value over a path allowlist that blinds a whole file. "[extend] path"
+	// resolves against the scanned output, not the source tree, and is not
+	// supported. A path the source tree does not hold is an error, and so is an
+	// outputDir that already carries a .gitleaks.toml at its root — one config
+	// per scan.
+	// +optional
+	gitleaksConfig string,
 ) (*dagger.File, error) {
 	start := time.Now()
 	threshold := Severity(failOn)
@@ -82,6 +98,34 @@ func (m *Security) ScanArchive(
 		return nil, err
 	}
 
+	// Resolved before any container is built, so a config the source tree does
+	// not hold is refused in cicd's words rather than failing inside the scan.
+	if err := checkGitleaksConfigPath(gitleaksConfig); err != nil {
+		return nil, err
+	}
+	var gitleaksCfg *dagger.File
+	if gitleaksConfig != "" {
+		matches, err := src.Glob(ctx, gitleaksConfig)
+		if err != nil {
+			return nil, fmt.Errorf("gitleaks-config: could not list the source tree: %v", err)
+		}
+		if !gitleaksConfigPresent(matches, gitleaksConfig) {
+			return nil, gitleaksConfigMissing(gitleaksConfig)
+		}
+		gitleaksCfg = src.File(gitleaksConfig)
+		// One config per scan, decided here and not inside the scan: an
+		// output root that already carries its own .gitleaks.toml is an
+		// input cicd refuses, not a run that failed.
+		entries, err := outputDir.Entries(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("gitleaks-config: could not list the build output root: %v", err)
+		}
+		if err := gitleaksConfigConflict(entries, gitleaksConfig); err != nil {
+			return nil, err
+		}
+	}
+	configOrigin := gitleaksConfigOrigin{supplied: gitleaksConfig}
+
 	var vuln trivyResult
 	var err1, err3 error
 	var inventory toolResult
@@ -91,7 +135,13 @@ func (m *Security) ScanArchive(
 		// inventory.go and the note in ScanSource.
 		inventory, err3 = inventoryResult(err1, vuln)
 	}
-	sarifSecrets, findingsSecrets, secretsScan, err2 := runGitleaksDir(ctx, outputDir)
+	sarifSecrets, findingsSecrets, secretsScan, err2 := runGitleaksDir(ctx, outputDir, gitleaksCfg, configOrigin)
+	if err2 != nil && gitleaksConfig != "" {
+		// A non-run under a supplied config — zero rules loaded, a config
+		// gitleaks could not parse — names the file, so the reader knows which
+		// .gitleaks.toml the message is about.
+		err2 = fmt.Errorf("%w (the scan ran with the gitleaks config supplied from %s in the source tree)", err2, gitleaksConfig)
+	}
 
 	var errs []string
 	for _, e := range []error{err1, err2, err3} {

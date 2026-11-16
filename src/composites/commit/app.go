@@ -11,14 +11,14 @@ import (
 )
 
 type appRunOptions struct {
-	artifact, failOn, sastRulesets, commitSha, branch, repoUrl string
-	buildCmd, outputPath, toolchainImage                       string
-	npmFeedURL, npmFeedRouting, nugetFeedURL, licenseGate      string
-	licenseAllow                                               []string
-	npmToken, nugetToken                                       *dagger.Secret
-	parallelism                                                int
-	prepared                                                   *dagger.Container
-	prepareLanguage, prepareTestLabel, runURL                  string
+	artifact, failOn, sastRulesets, commitSha, branch, repoUrl  string
+	buildCmd, outputPath, toolchainImage, archiveGitleaksConfig string
+	npmFeedURL, npmFeedRouting, nugetFeedURL, licenseGate       string
+	licenseAllow                                                []string
+	npmToken, nugetToken                                        *dagger.Secret
+	parallelism                                                 int
+	prepared                                                    *dagger.Container
+	prepareLanguage, prepareTestLabel, runURL                   string
 }
 
 // appSourceView retains repository-relative paths and excludes all undeclared
@@ -123,7 +123,15 @@ func runApp(ctx context.Context, src *dagger.Directory, c appConfig, o appRunOpt
 			break
 		}
 		payload = dag.Build().Bundle(output)
-		capture("security", "archive", "secrets", dag.Security().ScanArchive(scoped, output, o.commitSha, o.branch, o.repoUrl, dagger.SecurityScanArchiveOpts{ArtifactOnly: true, FailOn: o.failOn}))
+		// The gitleaks config is repository-relative and may sit outside the
+		// app's declared paths, so it is added onto the scoped view from the
+		// whole checkout; ScanArchive reads it from there and errors in its
+		// own words when the checkout does not hold it.
+		archiveSrc := scoped
+		if o.archiveGitleaksConfig != "" {
+			archiveSrc = scoped.WithFile(o.archiveGitleaksConfig, src.File(o.archiveGitleaksConfig))
+		}
+		capture("security", "archive", "secrets", dag.Security().ScanArchive(archiveSrc, output, o.commitSha, o.branch, o.repoUrl, dagger.SecurityScanArchiveOpts{ArtifactOnly: true, FailOn: o.failOn, GitleaksConfig: o.archiveGitleaksConfig}))
 	case "none":
 		capture("build", "artifact-attestation", "", dag.Build().NoArtifact(o.commitSha, o.branch, o.repoUrl, dagger.BuildNoArtifactOpts{SbomDisabled: true}))
 	}
