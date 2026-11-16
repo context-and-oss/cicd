@@ -173,22 +173,22 @@ jobs:
           # (scripts/ci/write-release-intent.py) precisely so a release passes
           # this gate rather than being exempted from it. Dogfooding it here is
           # what keeps both of those honest.
-          # The two accepted vulnerabilities below are the whole reason
+          # The four accepted vulnerabilities below are the whole reason
           # --vuln-accept exists, and this is the file that has to keep them
-          # honest. Both are otel log exporters at v0.16.0 that Dagger's
-          # codegen writes into every module's go.mod as a `replace` line and
-          # rewrites on every `dagger develop` (measured in CAPS-058: bumping
-          # them to v0.20.0 compiles and vets clean, and the next codegen run
-          # reverted it — so a committed bump would leave go.mod advertising a
-          # version the runtime does not use, which is a green scan over a
-          # dependency that is not in the build).
+          # honest. The first two are otel log exporters at v0.16.0 that
+          # Dagger's codegen writes into every module's go.mod as a `replace`
+          # line and rewrites on every `dagger develop` (measured in CAPS-058:
+          # bumping them to v0.20.0 compiles and vets clean, and the next
+          # codegen run reverted it — so a committed bump would leave go.mod
+          # advertising a version the runtime does not use, which is a green
+          # scan over a dependency that is not in the build).
           #
-          # Unlike the .trivyignore this replaces, these two rows reach the
+          # Unlike the .trivyignore this replaces, these rows reach the
           # evidence: the scan still finds them, they leave the counts with a
           # warnings[] line quoting the reason, and if a Dagger bump fixes
           # them the acceptance goes UNUSED and says so in the same place.
           # That is the removal condition — a DAGGER_VERSION bump whose
-          # codegen emits otel >= 1.43.0 makes these two lines start
+          # codegen emits otel >= 1.43.0 makes the first two lines start
           # complaining, at which point delete them rather than renew them.
           #
           # CVE-2026-81872 (GHSA-hjf4-fphr-2h65, published 2026-09-29) is the
@@ -197,7 +197,21 @@ jobs:
           # that emits sdk/log >= 0.21.0, because that is where it is fixed.
           # See CAPS-064.
           #
-          # ONE --vuln-accept flag holding BOTH acceptances, one per line. Two
+          # CVE-2026-128085 (GHSA-q7gw-24fr-5p69, published 2026-11-13) is the
+          # fourth, and it is narrower than it looks. The advisory names three
+          # packages, otel/sdk, otel/trace and otel/sdk/log, and this line
+          # accepts only the last: the other two are at the fixed v1.47.0 in
+          # every module's go.mod, because the require block and cicd's own
+          # trace replace are cicd's to move and were moved. sdk/log is not,
+          # for the same codegen reason as the three rows above. The Go SDK's
+          # go.mod at Dagger v0.21.11 and on main still carries the v0.16.0
+          # log replace, so a DAGGER_VERSION bump clears nothing today. The
+          # reason names the shape the covered rows must have, fifteen rows
+          # all naming otel/sdk/log, so the "covered N finding(s)" warning is
+          # readable as a regression check for the other two packages. See
+          # specs/lift-the-otel-pins-cicd-owns-before-accepting.md.
+          #
+          # ONE --vuln-accept flag holding ALL acceptances, one per line. Two
           # flags is what this file shipped with and it did not work: Dagger
           # exposes a []string parameter as a pflag StringSlice, which CSV-parses
           # its value, so these two reasons arrived as seven fragments cut at
@@ -225,7 +239,8 @@ jobs:
             --require-intent \
             --vuln-accept "CVE-2026-39882=go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.16.0 is written into every module's go.mod by Dagger's codegen and reverted on every dagger develop, so cicd cannot pin the fix; the exporter talks to the Dagger engine's own telemetry endpoint on the runner, never to a peer a consumer controls, so a hostile OTLP endpoint means an already-compromised engine. Remove on a DAGGER_VERSION bump whose codegen emits otel >= 1.43.0.
             CVE-2026-81871=go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.16.0, same replace line and same codegen ownership as CVE-2026-39882, and the same runner-local telemetry endpoint. Remove on a DAGGER_VERSION bump whose codegen emits otel >= 1.43.0.
-            CVE-2026-81872=go.opentelemetry.io/otel/sdk/log v0.16.0, held by the same codegen replace line as CVE-2026-39882, so cicd cannot pin the fix; the busy-spin needs the export buffer full, and the only exporter is the Dagger engine's own runner-local telemetry endpoint, so the worst case is CPU burned inside one CI run with no data exposed. Remove on a DAGGER_VERSION bump whose codegen emits sdk/log >= 0.21.0." \
+            CVE-2026-81872=go.opentelemetry.io/otel/sdk/log v0.16.0, held by the same codegen replace line as CVE-2026-39882, so cicd cannot pin the fix; the busy-spin needs the export buffer full, and the only exporter is the Dagger engine's own runner-local telemetry endpoint, so the worst case is CPU burned inside one CI run with no data exposed. Remove on a DAGGER_VERSION bump whose codegen emits sdk/log >= 0.21.0.
+            CVE-2026-128085=go.opentelemetry.io/otel/sdk/log v0.16.0, held by the same codegen replace line as CVE-2026-39882, so cicd cannot pin the fix. This accepts the sdk/log rows only, fifteen of them, one per module: otel/sdk and otel/trace, the other two packages the advisory names, are at the fixed v1.47.0 in every module's go.mod, so a covered row naming either of them, or a sixteenth row, is a regression and not something this line accepts. The length-limit bypass lets an attribute of U+FFFD runes outgrow its limit on a log record, and the only log records are the Dagger engine's own telemetry about this run, delivered to the engine on the runner, so the worst case is an oversized attribute inside one CI run's trace with no data leaving it. Remove on a DAGGER_VERSION bump whose codegen emits sdk/log >= 1.47.0." \
             --commit-sha "$COMMIT_SHA" \
             --branch "$BRANCH_NAME" \
             --repo-url "$REPO_URL" \
