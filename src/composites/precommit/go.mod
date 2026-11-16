@@ -19,7 +19,13 @@ replace go.opentelemetry.io/otel => go.opentelemetry.io/otel v1.46.0
 
 replace go.opentelemetry.io/otel/metric => go.opentelemetry.io/otel/metric v1.46.0
 
-replace go.opentelemetry.io/otel/trace => go.opentelemetry.io/otel/trace v1.46.0
+// otel/trace is a module-owned replace too, but it is held at v1.47.0, not
+// v1.46.0: the cycle above runs between core and otel/log, not through trace,
+// and trace v1.47.0 compiles and vets against core v1.46.0 in every module.
+// v1.47.0 is where CVE-2026-128085 is fixed in trace, so this is the one pin
+// of the otel core family cicd can lift on its own. See
+// specs/lift-the-otel-pins-cicd-owns-before-accepting.md.
+replace go.opentelemetry.io/otel/trace => go.opentelemetry.io/otel/trace v1.47.0
 
 require (
 	dagger.io/dagger v0.20.6-0.20260415192040-7058e9313c72
@@ -47,11 +53,11 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.46.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.46.0 // indirect
-	go.opentelemetry.io/otel/log v0.20.0 // indirect
+	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/metric v1.47.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.46.0
+	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/sdk/log v0.20.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
