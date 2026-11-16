@@ -1,7 +1,8 @@
 # Roadmap
 
 **Nothing on this page is implemented.** This is a design record for the *remaining* stages of the
-[CD Model](docs/explanation/continuous-delivery/cd-model/stages.md): every module, composite,
+[CD Model](docs/explanation/continuous-delivery/cd-model/stages.md), and for the feedback loops
+that run between stages: every module, composite,
 function signature and evidence field below is a decision captured ahead of implementation so the
 work can proceed without re-interviewing. Names and signatures here are proposals and will change
 when the code is written. TBD items are explicitly marked, and no phase has a delivery date.
@@ -290,6 +291,248 @@ Two composites are planned for stages 7–12:
 
 ---
 
+## Feedback loops — from late stages back to early ones
+
+**Status**: Shape decided; investigator tool and source adapter fields TBD.
+
+The two loops below are not stages. Each one reads from a late stage and writes to an early one.
+Like the shipped `src/composites/dast`, each runs on its own cadence in its own workflow, no other
+composite calls it, and it never gates a merge. Each produces a **proposal**: an issue or a draft
+pull request. That proposal enters the CD Model at Stage 1 like any other change, so the fix or the
+prevention passes Stages 2–4 like any other change. cicd never merges, never pushes to trunk, and
+never writes back to a telemetry source. ADR-001 keeps publishing out of cicd for the same reason.
+
+```text
+Stage 1 ─► 2 ─► 3 ─► 4 ─► … ─► 10 ─► 11 (Live)
+      ▲              │               │
+      │              │ fix merged    │ Sentry / Azure logs
+      │              ▼               ▼
+      ├────── learn-from-bugs  logs-to-fixes
+      │       draft PR: test,        │
+      │       check or guidance      │
+      └─ issue / draft PR (the fix) ─┘
+```
+
+The loops chain together. When a fix proposed by logs-to-fixes merges, that merge triggers
+learn-from-bugs, using the logs-to-fixes brief as the issue.
+
+### Module: `src/feedback`
+
+There is one domain module with three functions. The two loops share a sanitiser and a model
+contract, so they share a module. They do not share a composite.
+
+| Function   | Role                                                                                       |
+|------------|--------------------------------------------------------------------------------------------|
+| `Sanitize` | Deterministic personal-data and credential screen. It runs before every model call in either loop |
+| `Triage`   | Logs-to-fixes: groups and classifies telemetry, then writes one brief per qualifying group |
+| `Learn`    | Learn-from-bugs: turns an issue plus its fix into a witnessed prevention proposal          |
+
+Model access follows the `risk` module's contract: native `dag.LLM()`, or an OpenAI-compatible
+`--llm-url` with `--llm-token` as a `*dagger.Secret`. A second model path is not introduced.
+
+### Shared: sanitise before any model sees the text
+
+Both loops send untrusted text to a model: log records in one, issue text in the other. Consumer
+logs are expected to carry no personal data. `Sanitize` runs anyway, because nothing measures that
+expectation until something checks.
+
+- **What it screens**: email addresses, phone numbers, payment card numbers, national identifiers,
+  credentials and tokens, and public IP addresses. The patterns are deterministic, with no model
+  involved.
+- **Parks the record; does not redact it**: a record with a hit is left out of every prompt. Redacting
+  one field and sending the rest only moves the miss to the next field.
+- **Evidence**: records examined, records parked, and hit counts by kind (`pii:email`). A hit's value
+  is never recorded.
+- **Exact bytes**: the screen runs on the exact prompt bytes sent to the model, not on the source
+  record before templating.
+- **A screen that could not run refuses the run**. It never reports zero hits.
+- **Content is data**: log messages and issue bodies are framed as data, never as instructions,
+  because both are attacker-reachable.
+
+### Loop A — logs to fixes (Stage 11 → Stage 1)
+
+**Sources**: Sentry, and Azure through the Log Analytics workspace (workspace-based Application
+Insights included). There are no other sources. The loop uses **Stage 11's source adapters and
+read-only telemetry identity**; it does not ship its own clients. For that reason the Sentry and Log
+Analytics adapters are designed once, together with the Stage 11 source contract, and serve both.
+
+| Decision         | Value                                                                                          |
+|------------------|------------------------------------------------------------------------------------------------|
+| Primary function | `Triage(ctx, sources *dagger.File, rules *dagger.File, window string, previous *dagger.File, ...) (*dagger.File, error)`, where `previous` is the last run's evidence (optional) |
+| Window           | Bounded per source by a persisted high-water mark; the evidence records the window queried     |
+| Grouping         | Deterministic fingerprint: exception type + crash-site file + function, with the title only as a fallback. The model breaks ties and never invents a key |
+| Classification   | `bug` / `noise` / `env` / `needs_info`, with confidence and blast radius. Consumer rules win over the model |
+| Ownership        | A group whose stack never touches the consumer's own code is reported and never proposed        |
+| Output           | One brief per qualifying `bug` group. Default is dry run: the evidence lists the proposals that would open. The issue is always the unit of record, and a draft PR is only ever attached to one. See *Issue or pull request* below |
+| Limits           | A per-run cap on groups proposed; groups beyond the cap are counted, not dropped silently      |
+| Writes           | None to Sentry or Azure: no resolve, no mute. The issue/PR token is a separate identity from the telemetry identity |
+| Evidence         | Per source: window, records examined, groups, classifications, parked counts by kind, groups suppressed (by dismissal, by rule, by pre-gate reason), briefs, proposals opened and updated. An unreachable or unauthorised source goes in `errors[]` and never reads as "no errors" |
+
+**Composite**: `src/composites/logs-to-fixes`, which runs Sanitize → Triage → propose → evidence →
+notify. It is triggered by a schedule or an alert, never by a commit.
+
+#### A false positive is decided once
+
+The loop has to remember what a human already decided. Otherwise it re-proposes the same group on
+every run.
+
+- **The issue tracker is the record of decisions.** Each issue carries its group's fingerprint in a
+  hidden marker. Before proposing, the loop reads the tracker (GitHub or Azure DevOps). If an issue
+  for that fingerprint is open, it gets an updated comment, never a duplicate. If someone closed it
+  as *not planned* / *won't fix*, the group is dismissed. cicd keeps no state of its own, because
+  people already make these decisions in the tracker. If the tracker cannot be read, nothing is
+  proposed, and that goes in `errors[]`, because an unread record of decisions looks the same as an
+  empty one.
+- **A dismissed group stays dismissed until something material changes.** It comes back only if:
+  - it fires in a release newer than the dismissal **and** its rate has grown past the regrowth
+    factor, or
+  - it was closed as *fixed* and fires again in a release newer than the fix. That is reopened and
+    labelled as a regression.
+
+  Firing again on its own never brings it back.
+- **Rules for whole classes of noise.** Consumer rules already win over the model. When several
+  groups that share a pattern (origin, exception type, third-party frame) have been dismissed, the
+  loop proposes a rule as a pull request to the consumer's rules file. Once a human merges it, that
+  class is filtered before any model call.
+- **A deterministic pre-gate before proposing.** It requires:
+  - a frame in the consumer's own code, with a source-mapped path;
+  - not seen only on old releases;
+  - a minimum event or user volume;
+  - persistence across more than one run, so a single spike is not proposed.
+
+  Each refusal is counted in the evidence by reason.
+- **A decided group is not triaged again.** cicd keeps no state, and a `noise` verdict never reaches
+  the tracker, so the memory is the **previous run's evidence**, passed back in as an optional
+  input (a workflow artifact or cache entry). A group already classified there is triaged again
+  only in a newer release that also crosses the regrowth factor. Dismissed and already-proposed
+  groups cost no model call, and the model gets no repeated chance to change its mind about the
+  same noise. The pre-gate's persistence check reads the same input. When the input is missing or
+  unreadable, the run still works: it re-triages everything, skips the persistence check (which
+  only makes proposals stricter), and says both things in the evidence. A missing memory costs
+  money, and the evidence shows that it cost money.
+- **Regrowth is a rate, not a count.** It is measured as events per affected user, or per request
+  where the source has request counts, against the rate when the group was decided. An absolute
+  count trips whenever traffic grows, which would reopen harmless noise every time usage rises.
+- **Precision is measured, and the loop cuts back automatically.** The evidence records every
+  proposal and its outcome (merged, dismissed, still open), and precision is computed per
+  classification and fix class. When precision for a class falls below the consumer's floor, that
+  class drops one level, from PR to issue or from issue to dry run, and the evidence says so. Only a
+  human raises it again.
+
+#### Issue or pull request
+
+The **issue is always the record**. A draft PR is optional, and it links to its issue. A PR is never
+opened without an issue, because the issue is where dedupe, dismissal and discussion happen, and
+learn-from-bugs takes it as input.
+
+Confidence and blast radius decide the outcome, but neither is enough to open a PR. Model confidence
+is reported by the model itself. The evidence for a PR is a reproducing test that cicd runs itself
+through the witnessed BYO test of
+[ADR-002](docs/decisions/ADR-002-witnessed-test-execution.md): it must fail on the current code and
+pass with the proposed fix.
+
+| Triage result | Outcome |
+|---|---|
+| `noise` / `env`, or matched by a rule | Nothing proposed; counted in the evidence |
+| `noise` with its crash site in the consumer's own code, persisting past the reporting-noise threshold | Issue with fix class `reporting-noise` (see below). The same PR rules apply as for a bug |
+| `needs_info`, or confidence below the issue floor | No issue; listed in the run summary, and looked at again if volume grows past the regrowth factor |
+| `bug`, confidence at or above the issue floor, **or** high blast radius | Issue with the brief |
+| `bug`, confidence at or above the PR floor, low or medium blast radius, allowlisted fix class, own code | Issue **plus** a draft PR from the consumer-supplied fix command, kept only if the reproducing test is witnessed red then green |
+| The row above, but no test could be witnessed | Issue only; the proposed patch goes on the issue as text |
+
+**Recurring noise in the consumer's own code is a reporting defect.** If an exception is expected
+(a cancelled request, a client disconnect), the code should not report it as one. Because the loop
+never mutes anything in Sentry or Azure, the lasting fix belongs in the code. The fix class
+`reporting-noise` proposes that change: drop the event in the Sentry SDK's `beforeSend`, filter it
+in an Application Insights telemetry processor, or lower the log level. Its witnessed test, when
+there is one, asserts that the expected condition is no longer reported. Rules stay for noise from
+code the consumer does not own, where no code change is possible. A rule hides a class for good,
+while a `reporting-noise` fix removes it at the source.
+
+**High blast radius never gets an automatic PR**, at any confidence. A human has to design that
+fix. Every floor, the regrowth factor and the precision floor are consumer configuration. The
+defaults are conservative, and the default mode is dry run. A consumer raises them once the
+measured precision justifies it.
+
+### Loop B — learn from bugs (fix merged → Stages 1–2)
+
+**Input**: an issue (text, or a link) plus the exact fix (a commit, a `BASE..HEAD` range, or a
+merged pull request).
+
+**Triggers**:
+
+- A fix landing on trunk at Stage 4.
+- An on-demand run after a Stage 11 post-mortem; see
+  [incident response](docs/explanation/continuous-delivery/deployment/incident-response.md).
+- A merged logs-to-fixes proposal.
+
+**Question**: which stage should have caught this, and what is the smallest change that would catch
+the next one? The answer is one of: a regression test, a contract or schema check, a lint or static
+rule, review guidance, a configuration check, or **no change**.
+
+| Decision         | Value                                                                                           |
+|------------------|-------------------------------------------------------------------------------------------------|
+| Primary function | `Learn(ctx, src *dagger.Directory, proposal *dagger.File, report *dagger.File, fix string, testCmd string, ...) (*dagger.File, error)`. It grades a proposal the investigator already made; it never runs the investigator |
+| Isolation        | The investigator runs **on the runner, not in Dagger**, under the agent CLI's own sandbox, on a copy of the checkout. It returns a diff plus a structured report and never edits the consumer's tree. See *Where the investigator runs* below |
+| Witnessing       | cicd reruns the proposed regression test itself through the witnessed BYO test of [ADR-002](docs/decisions/ADR-002-witnessed-test-execution.md). The test must fail on the fix's parent and pass on the fix. Validation the agent reports is a claim, not evidence |
+| Outcomes         | `applied`, `no_change`, `not_applied`, `apply_failed`, or did-not-run. `no_change` is valid but must give a reason; an agent timeout or an invalid report is never `no_change` |
+| Stage mapping    | The earliest practical detection point is recorded as a CD Model stage number, so findings aggregate into the [defect-stages mapping](docs/explanation/continuous-delivery/quality-gates/defect-prevention/defect-stages-mapping.md) over time |
+| Output           | A draft PR on its own branch, never trunk. The finding record travels as evidence and is not committed automatically |
+| Evidence         | Issue reference or hash, fix base and head SHAs, diff hash, outcome, witnessed red/green results, stage mapping. No raw issue body, diff or transcript |
+
+**Jobs**: the reusable workflow runs three jobs, in this order, and never runs two of them together:
+
+1. **Investigate** (runner). Before it starts, `feedback.Sanitize` screens the issue text in
+   Dagger. The agent CLI then runs under its own sandbox, and the job uploads the diff and the report.
+   The job holds **only** a short-lived model credential (workload identity federation to an
+   OpenAI-compatible Responses endpoint such as Azure AI Foundry, with a role that can only call
+   models) and `contents: read`. It holds no write token and no other secret.
+2. **Witness and evidence** (Dagger, no model credential). `src/composites/learn-from-bugs` runs
+   `feedback.Learn`, which replays the proposed test red then green and writes the envelope, then
+   evidence and notify.
+3. **Propose** (runner). This job holds the token that opens the draft PR. It runs only after the
+   witness, and never alongside the agent.
+
+#### Where the investigator runs
+
+This is the first cicd step that is not a Dagger module. The reason was measured:
+
+- The agent CLI isolates each command it runs in Linux namespaces (bubblewrap). Inside a container
+  this cannot start:
+  - under the default container profiles, namespace creation is refused;
+  - with seccomp and AppArmor unconfined, setting up the sandbox's network still fails.
+- On a GitHub-hosted runner, which is a VM, the same sandbox starts. A measured spike confirmed
+  that it denies network access and hides other processes' environments, and that it limits writes
+  to the workspace.
+- Running the agent in a container without its own sandbox would give model-chosen commands network
+  access and read access to the credential. cicd has no way to restrict a Dagger container's egress
+  today, so a container is a weaker boundary than the runner, not an equal one.
+
+The sandbox limits writes, **not reads**. A command the agent runs can read files outside the
+workspace, including the model token. The job design is the mitigation: the investigating job
+holds nothing worth reading beyond a model token that expires within the hour and can only call
+models. The PR token lives in a later job. Microsoft-hosted Azure DevOps agents are VMs too, but
+this is unverified there.
+
+Revisit the container shape only if cicd can deny a Dagger container all egress except a
+credential-holding model proxy.
+
+**Investigator tool**: TBD. It must be publicly installable and pinnable at an exact version. cicd
+does not depend on a tool a consumer cannot fetch. The reusable workflow installs it with a pinned
+version in a `run:` step, never as a third-party `uses:` action, because of the doctrine that our
+own workflows use no third-party actions.
+
+### Templates and sequencing
+
+- Reusable workflows: `logs-to-fixes.yml` (schedule plus manual) and `learn-from-bugs.yml` (trunk
+  push filtered to fixes, plus manual), with matching Azure DevOps starters.
+- **Learn-from-bugs comes first**. It depends on nothing unbuilt, since the witnessed BYO test
+  already ships.
+- **Logs-to-fixes lands with the Stage 11 source contract**, because building it earlier would
+  create a second set of Sentry and Log Analytics clients that Stage 11 would later have to replace.
+
+---
+
 ## Conventions carried forward from Phase 1
 
 All Phase 2 and Phase 3 modules follow the same conventions established in Phase 1:
@@ -318,3 +561,11 @@ All Phase 2 and Phase 3 modules follow the same conventions established in Phase
 | Stage 11 normalized signal schema  | Log Analytics hub + multi-source adapters decided; SLO/quorum details TBD |
 | Auth role sets per provider        | WIF/managed-identity policy decided; exact least-privilege roles TBD |
 | Stage 12 Release Toggling platform | TBD                             |
+| Learn-from-bugs investigator tool  | TBD — must be public and pinnable |
+| Logs-to-fixes fix command for draft PRs | TBD — consumer-supplied; issue-only until decided |
+| Sanitiser pattern set and parking policy | Shape decided; per-kind patterns TBD |
+| Logs-to-fixes default floors (issue, PR, precision), regrowth factor, minimum volume | Shape decided; values TBD |
+| Tracker fingerprint marker format (GitHub and Azure DevOps) | TBD |
+| Previous-run evidence transport (artifact or cache) and retention | TBD |
+| Rate denominator per source (users or requests) | TBD |
+| Reporting-noise threshold | TBD |
