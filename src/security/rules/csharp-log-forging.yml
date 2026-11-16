@@ -1,0 +1,101 @@
+# cicd's first-party C# log-forging rule (CWE-117). ScanSource runs it inside
+# one function under the audit and OWASP defaults; ScanTaint runs it across
+# functions and files, which is what options.interfile asks for. WARNING is
+# MEDIUM, below the default --fail-on HIGH: it is measured, not yet a gate.
+# See specs/cover-csharp-log-injection.md.
+rules:
+  - id: cicd.csharp.log-forging
+    languages: [csharp]
+    severity: WARNING
+    message: >-
+      Request input reaches a log entry unencoded. A value with a line break
+      can forge a log entry in a plain-text sink. Remove CR and LF first
+      (ReplaceLineEndings, Replace), or log a parsed value.
+    metadata:
+      category: security
+      cwe: ["CWE-117: Improper Output Neutralization for Logs"]
+      technology: [aspnetcore]
+    options:
+      interfile: true
+      taint_assume_safe_numbers: true
+      taint_assume_safe_booleans: true
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              $RET $METHOD(..., [$ATTR] $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^From(Query|Route|Body|Header|Form)$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?!(int|long|short|byte|uint|ulong|ushort|sbyte|bool|decimal|double|float|Guid|DateTime|DateTimeOffset|DateOnly|TimeOnly|TimeSpan|CancellationToken)\??$)
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              $RET $METHOD(..., [$ATTR(...)] $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^From(Query|Route|Body|Header|Form)$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: ^(?!(int|long|short|byte|uint|ulong|ushort|sbyte|bool|decimal|double|float|Guid|DateTime|DateTimeOffset|DateOnly|TimeOnly|TimeSpan|CancellationToken)\??$)
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              class $CLASS : $BASE { ... }
+          - metavariable-regex:
+              metavariable: $BASE
+              regex: Controller
+          - pattern-inside: |
+              public $RET $METHOD(..., string $PARAM, ...) { ... }
+          - pattern: $PARAM
+      - pattern-either:
+          - pattern: $CTX.Request.$PART
+          - pattern: Request.$PART
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $LOGGER.$LOG(...)
+          - metavariable-regex:
+              metavariable: $LOG
+              regex: ^(Log|LogTrace|LogDebug|LogInformation|LogWarning|LogError|LogCritical|BeginScope)$
+      - pattern: Console.Write(...)
+      - pattern: Console.WriteLine(...)
+    pattern-sanitizers:
+      - pattern: $S.ReplaceLineEndings(...)
+      - pattern: $S.Replace("\n", ...)
+      - pattern: $S.Replace("\r", ...)
+      - pattern: $S.Replace(Environment.NewLine, ...)
+      # Only a literal pattern that names a line break, any whitespace or a
+      # negated class can remove one; Regex.Replace(s, "foo", "bar") cannot.
+      # The static form only: an instance's Replace(input, replacement) takes
+      # no pattern, and string.Replace has the same shape.
+      - patterns:
+          - pattern: Regex.Replace($S, $PAT, ...)
+          - metavariable-regex:
+              metavariable: $PAT
+              regex: ^@?"[^"]*(\\[rns]|\[\^|\\p\{C)
+      - pattern: $X.Length
+      - pattern: $X.Count
+      # A member named as an id, a count or a date is taken to be a parsed
+      # value, not text: the rule sees names, not the property's declared
+      # type, and a Guid or DateTime cannot carry a line break.
+      - patterns:
+          - pattern: $O.$P
+          - metavariable-regex:
+              metavariable: $P
+              regex: ^(?:\w*[a-z0-9])?(?:Id|Ids|Guid|Count|Index|Date|Time|Timestamp|StatusCode)$
+      # Where the engine knows the declared type, a value type that cannot
+      # hold a line break ends the flow.
+      - pattern: (Guid $X)
+      - pattern: (Guid? $X)
+      - pattern: (DateTime $X)
+      - pattern: (DateTimeOffset $X)
+      - pattern: (DateOnly $X)
+      - pattern: (TimeSpan $X)
+      - pattern: (HttpStatusCode $X)
+      - pattern: int.Parse(...)
+      - pattern: Guid.Parse(...)
+      - pattern: Uri.EscapeDataString(...)
+      - pattern: JsonSerializer.Serialize(...)

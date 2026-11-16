@@ -163,7 +163,10 @@ func TestSemgrepPlanInterceptsThePinnedPack(t *testing.T) {
 	for _, top := range p.Tops {
 		want = append(want, "--config", "/"+top)
 	}
-	want = append(want, "--config", semgrepGHAFallbackPath, "--config", semgrepDOMRulePath)
+	want = append(want, "--config", semgrepGHAFallbackPath)
+	for _, r := range semgrepFirstPartyRules() {
+		want = append(want, "--config", r.Path())
+	}
 	if strings.Join(plan.Args, " ") != strings.Join(want, " ") {
 		t.Fatalf("default args = %v, want %v", plan.Args, want)
 	}
@@ -291,14 +294,14 @@ func sarifWithRules(ids ...string) []byte {
 func TestSemgrepRuleSetHoldsThePinnedPackToItsFloor(t *testing.T) {
 	p := mustPack(t, "p/security-audit")
 	plan := mustPlan(t, defaultSastRulesets)
-	full := append(append([]string(nil), p.IDs...), semgrepGHAFallbackLoadedID, semgrepDOMRuleLoadedID)
+	full := append(append(append([]string(nil), p.IDs...), semgrepGHAFallbackLoadedID), ownLoadedIDs(semgrepFirstPartyRules())...)
 
 	rs, err := semgrepRuleSet(sarifWithRules(full...), plan)
 	if err != nil {
 		t.Fatalf("the full pinned set was refused: %v", err)
 	}
-	if rs.Count != 726 || rs.ByLanguage["cicd"] != 2 || rs.ByLanguage["python"] != 200 || rs.ByLanguage["other"] != 0 {
-		t.Fatalf("rule set = %+v, want 726 with python 200 and cicd 2", rs)
+	if rs.Count != 728 || rs.ByLanguage["cicd"] != 4 || rs.ByLanguage["python"] != 200 || rs.ByLanguage["other"] != 0 {
+		t.Fatalf("rule set = %+v, want 728 with python 200 and cicd 4", rs)
 	}
 	if rs.Pinned != "p/security-audit = "+semgrepRulesRepo+"@"+semgrepRulesCommit || rs.Unpinned != nil {
 		t.Fatalf("rule set provenance = %q / %v", rs.Pinned, rs.Unpinned)
@@ -325,12 +328,12 @@ func TestSemgrepRuleSetHoldsThePinnedPackToItsFloor(t *testing.T) {
 			t.Errorf("floor error %q does not name %q", err, want)
 		}
 	}
-	if rs == nil || rs.Count != 725 {
+	if rs == nil || rs.Count != 727 {
 		t.Fatalf("the rule set read below the floor was dropped: %+v", rs)
 	}
 
 	// The measured drift: the registry served 225 rules for the same pack.
-	_, err = semgrepRuleSet(sarifWithRules(append(append([]string(nil), full[:225]...), semgrepDOMRuleLoadedID)...), plan)
+	_, err = semgrepRuleSet(sarifWithRules(append(append([]string(nil), full[:225]...), ownLoadedIDs(semgrepFirstPartyRules())...)...), plan)
 	if err == nil || !strings.Contains(err.Error(), "and 494 more") {
 		t.Fatalf("a 225-rule set under the pinned pack = %v, want a floor error capped at five ids", err)
 	}
@@ -343,7 +346,7 @@ func TestSemgrepRuleSetNamesEveryPinnedPack(t *testing.T) {
 	if strings.Join(plan.Pinned, ",") != "p/owasp-top-ten,p/secrets" || len(plan.Floor) != 594 {
 		t.Fatalf("owasp + secrets plan = pinned %v, floor %d", plan.Pinned, len(plan.Floor))
 	}
-	full := append(append([]string(nil), plan.Floor...), semgrepGHAFallbackLoadedID, semgrepDOMRuleLoadedID)
+	full := append(append(append([]string(nil), plan.Floor...), semgrepGHAFallbackLoadedID), ownLoadedIDs(plan.Own)...)
 	rs, err := semgrepRuleSet(sarifWithRules(full...), plan)
 	if err != nil || rs.Pinned != "p/owasp-top-ten, p/secrets = "+semgrepRulesRepo+"@"+semgrepRulesCommit {
 		t.Fatalf("full owasp + secrets set = %+v, %v", rs, err)
@@ -402,7 +405,7 @@ func TestNonRunMatrixSemgrepRuleSet(t *testing.T) {
 
 	// Positive control: the matrix does not pass because the fold refuses
 	// everything.
-	if _, err := semgrepRuleSet(sarifWithRules(append(append([]string(nil), p.IDs...), semgrepGHAFallbackLoadedID, semgrepDOMRuleLoadedID)...), pinned); err != nil {
+	if _, err := semgrepRuleSet(sarifWithRules(append(append(append([]string(nil), p.IDs...), semgrepGHAFallbackLoadedID), ownLoadedIDs(pinned.Own)...)...), pinned); err != nil {
 		t.Fatalf("control: the full pinned set errored: %v", err)
 	}
 }

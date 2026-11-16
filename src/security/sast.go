@@ -129,8 +129,10 @@ func runSemgrepOnce(ctx context.Context, src *dagger.Directory, args []string, p
 		WithEnvVariable(pyyamlWheelEnv, assets.WheelPath()).
 		WithNewFile(semgrepGHAAdapterPath, semgrepGHAAdapter).
 		WithNewFile(semgrepMetadataPath, semgrepMetadataScript).
-		WithNewFile(semgrepDOMRulePath, semgrepDOMRule).
 		WithNewFile(semgrepInlineWarnings, "[]")
+	for _, r := range semgrepFirstPartyRules() {
+		ctr = ctr.WithNewFile(r.Path(), r.Body)
+	}
 	if plan.Inline {
 		ctr = ctr.
 			WithNewFile(semgrepInlinePath, semgrepInlineScript).

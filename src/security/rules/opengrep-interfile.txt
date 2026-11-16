@@ -13,7 +13,8 @@
 #
 # 23 are taint-mode rules and 4 are search-mode (the hardcoded-secret express
 # and jose rules, and the directory-listing check). No C# rule at this commit
-# sets the flag, so a .NET tree gets nothing from ScanTaint.
+# sets the flag; ScanTaint adds cicd's own C# rules (csharp-log-forging.yml,
+# csharp-secret-in-log.yml beside this file) to the plan, outside this list.
 #
 # Every rule here must be loaded, or the scan is a non-run, as for the other
 # manifests. Bumping the semgrep-rules commit regenerates this file; see

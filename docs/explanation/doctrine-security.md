@@ -383,9 +383,11 @@ Three further doors, each closed in `taint.go`:
   `--interfile-depth -1` as two arguments is an unknown option to Opengrep's
   parser and exits 2; cicd passes `--interfile-depth=N` as one.
 
-Trap: no pinned C# rule is marked interfile upstream, so the step adds nothing
-for C#, and every run says so. Cross-method flow in .NET is the Roslyn leg's.
-Spec: [report-cross-file-taint-as-advice](../../specs/report-cross-file-taint-as-advice.md).
+Trap: no pinned C# rule is marked interfile upstream. For C# the step follows
+only cicd's own log-forging and secret-in-log rules, and every run names that
+scope; any other cross-method flow in .NET is the Roslyn leg's.
+Spec: [report-cross-file-taint-as-advice](../../specs/report-cross-file-taint-as-advice.md),
+and for the C# rules [cover-csharp-log-injection](../../specs/cover-csharp-log-injection.md).
 
 ## A dependency scan that resolved nothing is not a clean dependency scan
 

@@ -197,6 +197,32 @@ and inter-module/inter-file flows are not covered by the adapter. Original
 rewritten onto extracted files; a custom-only or secrets-only selection does not
 gain the new default rule or inline pass.
 
+#### C# log injection and secrets in logs
+
+No pinned C# rule follows request input into a log call, so the `p/security-audit`
+and `p/owasp-top-ten` defaults also run two first-party C# taint rules:
+
+| Rule id | CWE | Source → sink |
+|---|---|---|
+| `cicd-rules.cicd.csharp.log-forging` | 117 | `[FromQuery]`/`[FromRoute]`/`[FromBody]`/`[FromHeader]`/`[FromForm]` parameters, public `string` parameters of a `*Controller` class and `Request.*` → `ILogger.Log*`/`BeginScope`, `Console.Write*` |
+| `cicd-rules.cicd.csharp.secret-in-log` | 532 | an identifier or member named as a credential (`Password`, `ApiKey`, `ConnectionString`, `AccountKey`, …) → the same sinks |
+
+`scan-source` follows them inside one function; [`scan-taint`](#scan-taint) follows
+them across functions and files. Both are WARNING, which cicd counts as MEDIUM:
+under the default `--fail-on HIGH` they are reported and do not fail the step.
+`scan-source --fail-on MEDIUM` gates on them.
+
+Log forging is cleared by `ReplaceLineEndings`, `Replace("\n"|"\r"|Environment.NewLine, …)`,
+a static `Regex.Replace` whose literal pattern names a line break, whitespace or
+a negated class, a parse (`int.Parse`, `Guid.Parse`), `Uri.EscapeDataString` or
+`JsonSerializer.Serialize`. Two shortcuts are heuristics, not proof: a member whose
+name ends in `Id`, `Count`, `Date`, `Time` and similar is taken to be a parsed value,
+and one `Replace("\n", …)` counts although `\r` survives it. A helper of your own
+is not a sanitizer by its name; a reviewed `nosemgrep` suppression is. A structured
+log sink that encodes values already (a JSON formatter) makes a finding
+low-impact rather than wrong. A secret is cleared by testing it
+(`IsNullOrEmpty`, `== null`), taking its `Length` or hashing it.
+
 #### .NET without a committed lockfile
 
 Trivy resolves NuGet dependencies from `packages.lock.json`, `packages.config` or
@@ -282,8 +308,10 @@ checks source declarations only and defers dependency licence assessment.
 
 `scan-source` follows untrusted input inside one function. `scan-taint` runs
 Opengrep's interfile analysis over the pinned audit and OWASP rules whose
-authors marked them interfile (Go, Java, JavaScript and TypeScript; no C# rule
-is), so a request parameter handed to a helper in another file and
+authors marked them interfile (Go, Java, JavaScript and TypeScript), plus
+cicd's own C# log-forging and secret-in-log rules (see
+[C# log injection](#c-log-injection-and-secrets-in-logs)), so a request
+parameter handed to a helper in another file and
 concatenated into SQL there is found. It runs the same rules twice, with and
 without interfile analysis, and reports only what the second run adds:
 `scan-source` already reports the rest, and the aggregate would count it twice.

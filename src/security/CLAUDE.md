@@ -97,9 +97,9 @@ dagger -m ./src/security call scan-sbom \
   the stamp conditional or move it after a step that can be killed
 - `taint.go` — **untagged**: `ScanTaint`'s every decision. The interfile
   manifest (`rules/opengrep-interfile.txt`, the pinned audit/OWASP rules marked
-  `interfile` upstream), the plan, the gate and depth refusals, the arguments
-  (`--interfile-depth=N` as one argument: Opengrep reads a separate `-1` as an
-  unknown option), and `analyseTaint`: errors from either run, the rule floor on
+  `interfile` upstream, plus cicd's own interfile C# rules), the plan, the gate
+  and depth refusals, the arguments (`--interfile-depth=N` as one argument:
+  Opengrep reads a separate `-1` as an unknown option), and `analyseTaint`: errors from either run, the rule floor on
   both, the multiset delta that drops what the single-function run also finds,
   the `automationDetails.id` stamp, and the scope, depth-cap and advisory
   warnings. The entry in `main.go` only runs the two scans. The real-engine
@@ -345,9 +345,10 @@ cannot silently narrow a named pinned pack while still reporting zero findings.
 
 ## Inline JavaScript and the DOM rule
 
-`semgrepinline.go` embeds `semgrep_inline.py` and the first-party
-`rules/dom-text-to-html.yml`. Audit/OWASP plans add the DOM rule to the ordinary
-scan and defend its loaded id separately from the upstream manifest. The Python
+`semgrepinline.go` embeds `semgrep_inline.py`; the first-party
+`rules/dom-text-to-html.yml` is one of cicd's own rules (next section).
+Audit/OWASP plans add the DOM rule to the ordinary scan and defend its loaded id
+separately from the upstream manifest. The Python
 adapter uses the ordinary JSON report's selected HTML/HTM paths, never a second
 walk that could bypass `.semgrepignore`. It runs selected pinned JS/TS rules in
 the same image on extracted script scopes, checks both input and rule coverage,
@@ -391,6 +392,33 @@ sanitizer may need reviewed `nosemgrep` (Opengrep also honours `noopengrep`); ne
 The Python unit suite is invoked by the canonical Go module-unit runner; the real
 source-module regression is `scripts/smoke/semgrep-inline.sh`. Rationale and traps:
 [specs/scan-inline-javascript-as-code.md](../../specs/scan-inline-javascript-as-code.md).
+
+## cicd's own Opengrep rules
+
+`semgrepfirstparty.go` (**untagged**) is the one list of first-party rule files:
+`rules/dom-text-to-html.yml`, `rules/csharp-log-forging.yml` (CWE-117) and
+`rules/csharp-secret-in-log.yml` (CWE-532). Each entry names its file, id,
+loaded id (`cicd-rules.<id>`) and whether it is interfile. `semgrepPlanFor` puts
+all of them in an audit/OWASP plan's `Own` and only the interfile ones in
+ScanTaint's; `sast.go` writes every one the plan names, and `semgrepRuleSet`
+requires each one's loaded id, naming the rule that did not load.
+
+- **A rule file nothing wires is a rule nobody runs.**
+  `TestEveryFirstPartyRuleFileIsWired` fails on a `rules/*.yml` missing from the
+  list, an embedded body that differs from the file, or an `Interfile` flag that
+  disagrees with the rule's own `options.interfile`.
+- **The C# rules are measured, not gated.** WARNING is MEDIUM, under the default
+  `--fail-on HIGH`; `TestCSharpRulesStayBelowTheDefaultGate` holds it. Raising
+  one is a decision with its own measurement, not an edit.
+- **Their sanitizers trade recall for noise, by name.** An `Id`/`Count`/`Date`
+  member ends a log-forging flow because the rule cannot see declared types; a
+  regex sanitizer counts only as the static `Regex.Replace` with a literal
+  line-break or negated-class pattern, never an instance `Replace`, whose
+  (input, replacement) shape `string.Replace` shares. Widen neither without the
+  fixture case that proves it.
+- The real-engine regression is `scripts/smoke/interfile-taint.sh` over
+  `testdata/interfile-taint/csharp`. See
+  [specs/cover-csharp-log-injection.md](../../specs/cover-csharp-log-injection.md).
 
 ## SAST scope & noise control
 

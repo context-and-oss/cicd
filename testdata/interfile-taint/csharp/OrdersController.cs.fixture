@@ -1,0 +1,43 @@
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+
+namespace Example.Web;
+
+public class OrdersController : ControllerBase
+{
+    private readonly ILogger<OrdersController> logger;
+    private readonly OrderAudit audit;
+    private readonly StorageOptions options;
+
+    public OrdersController(ILogger<OrdersController> logger, OrderAudit audit, StorageOptions options)
+    {
+        this.logger = logger;
+        this.audit = audit;
+        this.options = options;
+    }
+
+    // samefunc: source and sink in one function.
+    [HttpGet("orders")]
+    public IActionResult Search([FromQuery] string customer)
+    {
+        logger.LogInformation("Search for {Customer}", customer);
+        logger.LogInformation("Search length {Length}", customer.Length);
+        Record(customer);
+        audit.Searched(customer);
+        logger.LogDebug("Storage key {Key}", options.AccountKey);
+        audit.Connecting(options.ConnectionString);
+        return Ok();
+    }
+
+    // crossfunc: the sink sits in a helper in this file.
+    private void Record(string customer)
+    {
+        logger.LogInformation("Recorded {Customer}", customer);
+    }
+}
+
+public class StorageOptions
+{
+    public string AccountKey { get; set; } = "";
+    public string ConnectionString { get; set; } = "";
+}

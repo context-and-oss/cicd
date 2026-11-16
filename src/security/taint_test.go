@@ -139,6 +139,12 @@ type taintHit struct {
 	suppressed bool
 }
 
+// taintLoaded is every id a complete run of the plan loads: the manifest's
+// floor and cicd's own interfile rules.
+func taintLoaded(plan semgrepPlan) []string {
+	return append(append([]string(nil), plan.Floor...), ownLoadedIDs(plan.Own)...)
+}
+
 func taintSARIF(t *testing.T, ruleIDs []string, hits []taintHit, notes []map[string]any) json.RawMessage {
 	t.Helper()
 	var rules []map[string]any
@@ -241,9 +247,9 @@ func TestTaintDeltaRefusesUnreadableShapes(t *testing.T) {
 
 func TestAnalyseTaintReportsOnlyTheDelta(t *testing.T) {
 	plan := taintPlanForTest(t)
-	base := semgrepScan{SARIF: taintSARIF(t, plan.Floor, []taintHit{{taintSQL, "go/handlers.go", 10, 7, false}}, nil)}
+	base := semgrepScan{SARIF: taintSARIF(t, taintLoaded(plan), []taintHit{{taintSQL, "go/handlers.go", 10, 7, false}}, nil)}
 	inter := semgrepScan{
-		SARIF: taintSARIF(t, plan.Floor, []taintHit{
+		SARIF: taintSARIF(t, taintLoaded(plan), []taintHit{
 			{taintSQL, "go/handlers.go", 10, 7, false},
 			{taintSQL, "go/handlers.go", 20, 9, false},
 			{taintSQL, "go/repo.go", 6, 9, false},
@@ -257,8 +263,8 @@ func TestAnalyseTaintReportsOnlyTheDelta(t *testing.T) {
 	if res.BySeverity[SeverityHigh] != 2 || len(res.BySeverity) != 1 {
 		t.Errorf("BySeverity = %v, want 2 HIGH", res.BySeverity)
 	}
-	if res.Rules == nil || res.Rules.Count != 27 {
-		t.Errorf("Rules = %+v, want 27", res.Rules)
+	if res.Rules == nil || res.Rules.Count != 29 || res.Rules.ByLanguage["cicd"] != 2 {
+		t.Errorf("Rules = %+v, want 29: the 27 upstream and cicd's 2 C# rules", res.Rules)
 	}
 	if res.Examined == nil || res.Examined.Count != 3 || res.Examined.Partial != 0 {
 		t.Errorf("Examined = %+v", res.Examined)
@@ -280,7 +286,7 @@ func TestAnalyseTaintReportsOnlyTheDelta(t *testing.T) {
 
 func TestAnalyseTaintBaselineFailureKeepsFindingsAndFails(t *testing.T) {
 	plan := taintPlanForTest(t)
-	inter := semgrepScan{SARIF: taintSARIF(t, plan.Floor, []taintHit{
+	inter := semgrepScan{SARIF: taintSARIF(t, taintLoaded(plan), []taintHit{
 		{taintSQL, "go/handlers.go", 10, 7, false},
 		{taintSQL, "go/repo.go", 6, 9, false},
 	}, nil)}
@@ -296,7 +302,7 @@ func TestAnalyseTaintBaselineFailureKeepsFindingsAndFails(t *testing.T) {
 
 func TestAnalyseTaintInterfileFailureIsAnError(t *testing.T) {
 	plan := taintPlanForTest(t)
-	base := semgrepScan{SARIF: taintSARIF(t, plan.Floor, nil, nil)}
+	base := semgrepScan{SARIF: taintSARIF(t, taintLoaded(plan), nil, nil)}
 	res := analyseTaint(base, semgrepScan{}, nil, errors.New("opengrep did not run (exit 137)"), plan, 3)
 	if len(res.Errs) != 1 || !strings.Contains(res.Errs[0], "interfile run did not complete") ||
 		!strings.Contains(res.Errs[0], "out of memory") {
@@ -309,8 +315,8 @@ func TestAnalyseTaintInterfileFailureIsAnError(t *testing.T) {
 
 func TestAnalyseTaintBelowFloorIsAnError(t *testing.T) {
 	plan := taintPlanForTest(t)
-	inter := semgrepScan{SARIF: taintSARIF(t, plan.Floor[:20], nil, nil)}
-	base := semgrepScan{SARIF: taintSARIF(t, plan.Floor, nil, nil)}
+	inter := semgrepScan{SARIF: taintSARIF(t, append(plan.Floor[:20:20], ownLoadedIDs(plan.Own)...), nil, nil)}
+	base := semgrepScan{SARIF: taintSARIF(t, taintLoaded(plan), nil, nil)}
 	res := analyseTaint(base, inter, nil, nil, plan, 3)
 	if len(res.Errs) != 1 || !strings.Contains(res.Errs[0], "loaded 20 of the 27") {
 		t.Fatalf("errs = %v", res.Errs)
@@ -319,8 +325,8 @@ func TestAnalyseTaintBelowFloorIsAnError(t *testing.T) {
 
 func TestAnalyseTaintLostAndSuppressed(t *testing.T) {
 	plan := taintPlanForTest(t)
-	base := semgrepScan{SARIF: taintSARIF(t, plan.Floor, []taintHit{{taintSQL, "a.go", 1, 1, false}}, nil)}
-	inter := semgrepScan{SARIF: taintSARIF(t, plan.Floor, []taintHit{{taintSQL, "b.go", 2, 2, true}}, nil)}
+	base := semgrepScan{SARIF: taintSARIF(t, taintLoaded(plan), []taintHit{{taintSQL, "a.go", 1, 1, false}}, nil)}
+	inter := semgrepScan{SARIF: taintSARIF(t, taintLoaded(plan), []taintHit{{taintSQL, "b.go", 2, 2, true}}, nil)}
 	res := analyseTaint(base, inter, nil, nil, plan, 3)
 	all := strings.Join(res.Warnings, "\n")
 	if !strings.Contains(all, "1 finding(s) the single-function scan") {
@@ -347,7 +353,7 @@ func TestTaintNotificationsDepthCapAndWholeProgramTimeout(t *testing.T) {
 		{"descriptor": map[string]any{"id": "SemgrepWarning"}, "level": "warning", "message": map[string]any{"text": measuredDepthCap}},
 		{"descriptor": map[string]any{"id": "Timeout"}, "level": "warning", "message": map[string]any{"text": measuredRuleTimeout}},
 	}
-	raw := taintSARIF(t, plan.Floor, nil, notes)
+	raw := taintSARIF(t, taintLoaded(plan), nil, notes)
 
 	n := parseSemgrepNotifications(raw)
 	if !slices.Equal(n.DepthCapped, []string{taintSQL}) || n.Depth != "3" {
@@ -360,7 +366,7 @@ func TestTaintNotificationsDepthCapAndWholeProgramTimeout(t *testing.T) {
 		t.Errorf("misfiled: timeouts=%d unclassified=%v partial=%d", n.Timeouts, n.Unclassified, n.partialFiles())
 	}
 
-	res := analyseTaint(semgrepScan{SARIF: taintSARIF(t, plan.Floor, nil, nil)},
+	res := analyseTaint(semgrepScan{SARIF: taintSARIF(t, taintLoaded(plan), nil, nil)},
 		semgrepScan{SARIF: raw, Examined: &Examined{Unit: "files", Count: 6}}, nil, nil, plan, 3)
 	all := strings.Join(res.Warnings, "\n")
 	for _, want := range []string{"DEPTH CAPPED", "stopped at call depth 3", "PARTIAL SCAN", "ran out of time in interfile analysis"} {
@@ -382,7 +388,7 @@ func TestTaintNotificationsFileTimeoutUnchanged(t *testing.T) {
 }
 
 func TestTaintWarningsWording(t *testing.T) {
-	if w := taintScopeWarning(-1); !strings.Contains(w, "call depth unlimited") || !strings.Contains(w, "none for C#") {
+	if w := taintScopeWarning(-1); !strings.Contains(w, "call depth unlimited") || !strings.Contains(w, "C# log-forging and secret-in-log") {
 		t.Errorf("scope warning: %s", w)
 	}
 	if w := taintAdvisoryWarning(4); !strings.Contains(w, "4 cross-function") || !strings.Contains(w, `"warn"`) {

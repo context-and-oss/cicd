@@ -22,6 +22,8 @@ a SQL string:
 | `go/` | `tainted-sql-string` across a function and across a file |
 | `java/` | the same for Spring request parameters |
 | `js/` | `express-sequelize-injection` across a function and across a `require` |
+| `csharp/` | cicd's own `log-forging` and `secret-in-log` rules: request input and a credential into `ILogger`, in one function (ScanSource's, below the default gate), across a function and across a file (ScanTaint's); `.Length` and `ReplaceLineEndings` as negatives |
 | `deep/` | a chain five calls deep: not followed at the default depth of 3, which the evidence names as `DEPTH CAPPED`; followed with `--interfile-depth=-1` |
 
-There is no C# directory: no pinned C# rule is marked interfile upstream.
+No pinned C# rule is marked interfile upstream, so `csharp/` drives cicd's own
+rules into a log call rather than into SQL.

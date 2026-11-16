@@ -235,9 +235,12 @@ func semgrepPackStaging(files []string) string {
 
 // semgrepPlan is what a --sast-rulesets value turns into.
 type semgrepPlan struct {
-	// Inline adds the first-party DOM rule and analyses inline JavaScript for
-	// the audit/OWASP defaults. Secrets-only and custom-only scans stay explicit.
+	// Inline analyses inline JavaScript for the audit/OWASP defaults.
+	// Secrets-only and custom-only scans stay explicit.
 	Inline bool
+	// Own are cicd's first-party rules the plan passes and requires: all of
+	// them for the audit/OWASP defaults, the interfile ones for ScanTaint.
+	Own []semgrepFirstParty
 	// Args are the arguments passed to semgrep: --config pairs, then any
 	// --exclude-rule pairs.
 	Args []string
@@ -301,6 +304,12 @@ func semgrepPlanFor(rulesets string, packs []semgrepPack) (semgrepPlan, error) {
 		Langs:  map[string]bool{},
 		Inline: requested["p/security-audit"] || requested["p/owasp-top-ten"],
 	}
+	switch {
+	case plan.Inline:
+		plan.Own = semgrepFirstPartyRules()
+	case requested[taintPackName]:
+		plan.Own = semgrepInterfileFirstParty()
+	}
 	files := map[string]bool{}
 	tops := map[string]bool{}
 	floor := map[string]bool{}
@@ -342,8 +351,8 @@ func semgrepPlanFor(rulesets string, packs []semgrepPack) (semgrepPlan, error) {
 			if fallback {
 				plan.Args = append(plan.Args, "--config", semgrepGHAFallbackPath)
 			}
-			if plan.Inline {
-				plan.Args = append(plan.Args, "--config", semgrepDOMRulePath)
+			for _, r := range plan.Own {
+				plan.Args = append(plan.Args, "--config", r.Path())
 			}
 		case semgrepIsRegistryConfig(c):
 			plan.Live = append(plan.Live, c)
@@ -408,13 +417,14 @@ func semgrepLiveWarning(live []string) string {
 // set a scan used. Reading it after the run, rather than trusting the staging
 // step, also catches a rule semgrep dropped at load time.
 //
-// Apart from the separately required DOM and workflow-compatibility configs,
+// Apart from the separately required first-party (plan.Own) and
+// workflow-compatibility configs,
 // rules the scan loaded beyond the floor are not checked: a live pack or a
 // local config may add any number, and none of them can be attributed to the
 // pin. The floor is the claim cicd can stand behind; a ceiling is not. With
 // only pinned packs in the scan the ceiling holds by construction instead:
 // every file a pinned manifest names is in semgrep-security-audit.txt, whose
-// staged files load exactly its ids (measured: 724 plus cicd's one), so every
+// staged files load exactly its ids (measured: 724 plus cicd's own), so every
 // co-located rule is known to the plan and excluded.
 //
 // The RuleSet is returned with the error, so the findings of a scan that ran
@@ -459,8 +469,10 @@ func semgrepRuleSet(report []byte, plan semgrepPlan) (*RuleSet, error) {
 	if rs.Count == 0 {
 		return rs, errors.New("opengrep: the scan loaded no rules, so it applied nothing; zero findings from it is not a result")
 	}
-	if plan.Inline && !loaded[semgrepDOMRuleLoadedID] {
-		return rs, errors.New("opengrep: cicd's required DOM-text-to-HTML rule did not load; the default scan is incomplete")
+	for _, r := range plan.Own {
+		if !loaded[r.LoadedID()] {
+			return rs, errors.New("opengrep: cicd's required " + r.What + " rule (" + r.ID + ") did not load; the scan is incomplete")
+		}
 	}
 	var missing []string
 	for _, id := range plan.Floor {

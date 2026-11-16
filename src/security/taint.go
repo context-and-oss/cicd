@@ -57,6 +57,8 @@ func loadTaintPlan() (semgrepPlan, error) {
 		return semgrepPlan{}, errors.New("opengrep: " + taintPackName + " " + strings.TrimPrefix(err.Error(), "opengrep: "))
 	}
 	tp.Name = taintPackName
+	// semgrepPlanFor adds cicd's interfile first-party rules (plan.Own) for
+	// this pack: they are not in semgrep-rules, so the manifest cannot name them.
 	return semgrepPlanFor(taintPackName, append(packs, tp))
 }
 
@@ -199,7 +201,8 @@ func taintScopeWarning(depth int) string {
 	}
 	return taintToolName + ": cross-function and cross-file taint over the " + taintPackName +
 		" rules (the pinned audit and OWASP rules whose authors marked them interfile: Go, Java, " +
-		"JavaScript and TypeScript; none for C#), call depth " + d + ". Findings the single-function " +
+		"JavaScript and TypeScript; and cicd's own C# log-forging and secret-in-log rules), call depth " + d +
+		". Findings the single-function " +
 		"scan of the same rules also makes are left to ScanSource and not repeated here."
 }
 

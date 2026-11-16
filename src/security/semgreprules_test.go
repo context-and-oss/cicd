@@ -81,7 +81,7 @@ func TestWorkflowReplacementMustActuallyLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids := append(append([]string{}, plan.Floor...), semgrepDOMRuleLoadedID)
+	ids := append(append([]string{}, plan.Floor...), ownLoadedIDs(plan.Own)...)
 	if _, err := semgrepRuleSet(sarifWithRules(ids...), plan); err == nil || !strings.Contains(err.Error(), "workflow compatibility") {
 		t.Fatalf("missing generated replacement must fail: %v", err)
 	}
