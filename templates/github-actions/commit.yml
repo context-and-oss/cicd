@@ -44,11 +44,6 @@ permissions:
   contents: read
   security-events: write
   actions: read
-  # Required only if you enable deploy-pages below — a reusable workflow can
-  # never request more token scopes than its caller grants, so these must live
-  # here, not just in the reusable workflow.
-  # pages: write
-  # id-token: write
 
 jobs:
   commit:
@@ -136,12 +131,6 @@ jobs:
       # and let the project .npmrc route its scopes (@scope:registry=<feed>).
       # npm-feed-routing: npmrc
       # nuget-feed-url: https://nuget.internal.example.com
-      #
-      # ─── delivery ─────────────────────────────────────────────────────
-      # Publish a live evidence dashboard to GitHub Pages after every commit.
-      # Also: enable Pages (Settings → Pages → Source: GitHub Actions) and
-      # uncomment pages/id-token in the permissions block above.
-      # deploy-pages: true
     secrets:
       TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
       NPM_FEED_TOKEN: ${{ secrets.NPM_FEED_TOKEN }}

@@ -81,7 +81,7 @@ jobs:
       artifact: archive # the added line
       build-cmd: "npm ci && npm run build" # unchanged
       output-path: dist # unchanged
-      # unchanged and still optional: toolchain-image, fail-on, deploy-pages
+      # unchanged and still optional: toolchain-image, fail-on
     # Add only explicitly needed optional secrets by name.
 ```
 
