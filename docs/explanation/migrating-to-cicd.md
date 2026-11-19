@@ -82,7 +82,7 @@ Optional notification and private-feed secrets are deliberately omitted.
 # .github/workflows/precommit.yml — the caller stub
 jobs:
   precommit:
-    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v6.0.0
+    uses: context-and-oss/cicd/.github/workflows/precommit.yml@v6.0.1
     with:
       test-cmd: npm ci --ignore-scripts && ./node_modules/.bin/vitest run --coverage --coverage.reporter=json-summary --coverage.reportsDirectory=/tmp/cov
       coverage-path: /tmp/cov/coverage-summary.json

@@ -47,7 +47,7 @@ security scan from the root of your application repository:
 
 ```bash
 rm -f ./evidence-security.json &&
-dagger -m github.com/context-and-oss/cicd/src/security@v6.0.0 call scan-source \
+dagger -m github.com/context-and-oss/cicd/src/security@v6.0.1 call scan-source \
   --src . \
   --fail-on HIGH \
   --commit-sha "$(git rev-parse HEAD)" \
@@ -115,7 +115,7 @@ Call a domain module directly when you want one capability:
 
 ```bash
 rm -f ./evidence-quality.json &&
-dagger -m github.com/context-and-oss/cicd/src/quality@v6.0.0 call check \
+dagger -m github.com/context-and-oss/cicd/src/quality@v6.0.1 call check \
   --src . \
   --include go \
   --fail-on HIGH \
