@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- No feed serves this package, so the restore fails. In a solution
+         build that failure stops the build of every project in it. -->
+    <PackageReference Include="Cicd.Fixture.DoesNotExist" Version="0.0.1" />
+  </ItemGroup>
+</Project>

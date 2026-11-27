@@ -67,6 +67,8 @@ testdata/                 Language fixture apps used by integration tests
   roslyn-sast/            .NET projects stored as *.fixture for the Roslyn analyzer
                           leg: one finding per gate rule, a broken, a legacy and an
                           F# project; materialised only by its smoke script
+  roslyn-sast-fallback/   a project whose restore fails beside one that builds,
+                          *.fixture: the Roslyn leg's per-project fallback
   semgrep-github-actions/ GitHub Actions workflows stored as *.yml.fixture for the
                           Opengrep parser regressions; materialised into a git
                           clone by scripts/smoke/opengrep-github-actions.sh

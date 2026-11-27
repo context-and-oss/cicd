@@ -43,6 +43,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -65,6 +66,7 @@ const (
 	roslynDir          = "/cicd-roslyn"
 	roslynOutDir       = roslynDir + "/out"
 	roslynTargetsPath  = roslynDir + "/cicd.targets"
+	roslynSolutionPath = roslynDir + "/cicd-roslyn.sln"
 	roslynProjectsPath = "/tmp/roslyn.projects"
 	roslynFailedPath   = "/tmp/roslyn.failed"
 	roslynOutPath      = "/tmp/roslyn.out"
@@ -84,8 +86,9 @@ const (
 // rules are written for C# and Visual Basic.
 var roslynProjectGlobs = []string{"**/*.csproj", "**/*.vbproj", "**/*.fsproj"}
 
-// roslynBuildArgs are the arguments every per-project build gets after the
-// project path. Global properties, so they win over anything the project
+// roslynBuildArgs are the arguments every build gets after the solution or
+// project path: the combined build (which adds -m) and each per-project
+// fallback build. Global properties, so they win over anything the project
 // file sets and flow into every project it references:
 //
 //   - AnalysisModeSecurity=All turns on every rule in the security category,
@@ -100,10 +103,11 @@ var roslynProjectGlobs = []string{"**/*.csproj", "**/*.vbproj", "**/*.fsproj"}
 //   - CustomAfterMicrosoftCommonTargets imports the one file that sets where
 //     the compiler writes its SARIF (roslynTargets).
 //   - No node reuse and no shared compilation: nothing outlives the exec.
+//     The combined build's worker nodes end with that one call.
 //
-// Not --no-incremental: a referenced project built during an earlier
-// project's build has already left its log, and rebuilding it would only
-// repeat the work.
+// Not --no-incremental: a project the combined build already compiled, or
+// that an earlier fallback build compiled as a reference, has already left
+// its log, and rebuilding it would only repeat the work.
 var roslynBuildArgs = []string{
 	"-nologo",
 	"-v:q",
@@ -134,6 +138,19 @@ var roslynBuildArgs = []string{
 // A GUID rather than a name derived from the path: a flattened path can
 // exceed a filename's length, and two target frameworks of one project need
 // two files.
+//
+// The other two targets stand in for the exit status a per-project build used
+// to give: every project is built by one MSBuild call, which has one exit
+// status for all of them. Each build instance writes a .started marker naming
+// its project before BeforeBuild and a .built marker after Build. The start
+// hooks BeforeBuild, the first target of Build's DependsOnTargets chain, not
+// Build itself: MSBuild runs a target's DependsOnTargets before its
+// BeforeTargets hooks, so a hook on Build would run only once the compile had
+// already succeeded (measured). MSBuild runs an AfterTargets target only when
+// the target it follows succeeded, so a .started with no matching .built is a
+// build that failed (roslynMarkerFailures). A multi-targeted project's outer
+// build does not import this file; its inner builds, one per framework, each
+// mark their own.
 const roslynTargets = `<Project>
   <Target Name="CicdRoslynErrorLog" BeforeTargets="CoreCompile">
     <PropertyGroup>
@@ -143,27 +160,79 @@ const roslynTargets = `<Project>
     <MakeDir Directories="` + roslynOutDir + `" />
     <WriteLinesToFile File="` + roslynOutDir + `/$(CicdRoslynLogId).project" Lines="$([MSBuild]::Escape($(MSBuildProjectFullPath)))" Overwrite="true" />
   </Target>
+  <Target Name="CicdRoslynBuildStarted" BeforeTargets="BeforeBuild">
+    <PropertyGroup>
+      <CicdRoslynBuildId>$([System.Guid]::NewGuid().ToString('N'))</CicdRoslynBuildId>
+    </PropertyGroup>
+    <MakeDir Directories="` + roslynOutDir + `" />
+    <WriteLinesToFile File="` + roslynOutDir + `/$(CicdRoslynBuildId).started" Lines="$([MSBuild]::Escape($(MSBuildProjectFullPath)))" Overwrite="true" />
+  </Target>
+  <Target Name="CicdRoslynBuildDone" AfterTargets="Build">
+    <WriteLinesToFile File="` + roslynOutDir + `/$(CicdRoslynBuildId).built" Lines="$(CicdRoslynBuildId)" Overwrite="true" />
+  </Target>
 </Project>
 `
 
-// roslynBuildScript renders the shell body of the build.
+// roslynMarkerFailures names every project with a build instance that started
+// and did not finish. started maps a marker id to the mount-relative project
+// its .started file names ("" when it named a file outside the tree, which is
+// ignored); built is the set of ids with a .built file. Sorted, each project
+// once.
+func roslynMarkerFailures(started map[string]string, built map[string]bool) []string {
+	failed := map[string]bool{}
+	for id, project := range started {
+		if project != "" && !built[id] {
+			failed[project] = true
+		}
+	}
+	return sortedKeys(failed)
+}
+
+// roslynScriptPrologue starts both build scripts: the log directory, and
+// every status file Go reads, created if missing and never truncated. The
+// combined build runs on a fresh container; the per-project builds run after
+// it, appending, or alone on a fresh one when its container did not complete.
+var roslynScriptPrologue = "mkdir -p " + roslynOutDir + "\n" +
+	": >> " + roslynFailedPath + "\n" +
+	": >> " + roslynOutPath + "\n" +
+	": >> " + roslynErrPath + "\n"
+
+// roslynFastScript renders the combined build: one parallel MSBuild call over
+// the generated solution (roslynSolution), so each project is evaluated and
+// compiled once, in dependency order, on every core — instead of one cold
+// build per project that re-evaluates its whole reference graph.
+//
+// The command line is fixed text: the solution's path is a cicd constant and
+// the project paths are inside the file Go wrote, never in shell source
+// (TestRoslynFastScriptIsFixedText). It reads /dev/null and always exits 0:
+// the build's exit status says nothing per project, and Go reads the logs and
+// the build markers instead. Whatever it left un-analysed is built again by
+// roslynFallbackScript.
+func roslynFastScript() string {
+	return roslynScriptPrologue +
+		"dotnet build " + roslynSolutionPath + " -m " + strings.Join(roslynBuildArgs, " ") +
+		" </dev/null >>" + roslynOutPath + " 2>>" + roslynErrPath + "\n" +
+		"exit 0"
+}
+
+// roslynFallbackScript renders the per-project builds the combined build
+// could not stand in for: each project the fast path left un-analysed
+// (roslynFallback), built on its own.
 //
 // The project list is written by Go to roslynProjectsPath and read line by
 // line into a quoted "$p": a project path is consumer-controlled and is an
 // argument here, never shell source. The fixed arguments are cicd constants
 // (TestRoslynScriptIsShellSafe). Each project is built on its own so each has
 // its own exit status, and every failure is written down by name; the script
-// always exits 0 and Go classifies.
+// always exits 0 and Go classifies. It appends to the status files, so the
+// combined build's console is not lost.
 //
 // Each build reads /dev/null, not the loop's stdin: the loop's stdin is the
 // project list, and a credential provider or MSBuild node that reads stdin
 // would swallow the projects after it, which would then be neither built nor
 // named as failed.
-func roslynBuildScript() string {
-	return "mkdir -p " + roslynOutDir + "\n" +
-		": > " + roslynFailedPath + "\n" +
-		": > " + roslynOutPath + "\n" +
-		": > " + roslynErrPath + "\n" +
+func roslynFallbackScript() string {
+	return roslynScriptPrologue +
 		"while IFS= read -r p; do\n" +
 		"  [ -n \"$p\" ] || continue\n" +
 		"  if ! dotnet build \"$p\" " + strings.Join(roslynBuildArgs, " ") +
@@ -182,6 +251,79 @@ func roslynProjectsFile(projects []string) string {
 		b.WriteString(roslynMount + "/" + p + "\n")
 	}
 	return b.String()
+}
+
+// Project-type ids a classic solution file names each entry by. The SDK picks
+// the build from the project file itself; the id only has to be one MSBuild's
+// solution parser recognises as a buildable project.
+const (
+	roslynCSharpProjectType = "{9A19103F-16F7-4668-BE54-9A1E7A4F7556}"
+	roslynVBProjectType     = "{778DAE3C-4631-46EA-AA77-85C1314464D9}"
+)
+
+// roslynSolution renders the solution the fast path builds: every project in
+// one file, so one parallel MSBuild invocation builds each project once and in
+// dependency order, instead of one cold build per project.
+//
+// The classic format, not .slnx: the 8.0 SDK band cicd pins cannot read
+// .slnx. The file lives outside the scanned tree, so the consumer's own
+// Directory.Solution.props/targets do not apply, as they did not to the
+// per-project builds. Paths are absolute container paths written by Go; the
+// shell only ever sees the solution's fixed path.
+//
+// A path a solution entry cannot quote (a double quote, or a line break) is
+// not written and is returned in unlisted, so it can still be built on its
+// own. Every project is either in the solution or in unlisted.
+func roslynSolution(projects []string) (sln string, unlisted []string) {
+	type entry struct{ guid, kind, name, path string }
+	var entries []entry
+	for _, p := range projects {
+		if strings.ContainsAny(p, "\"\r\n") {
+			unlisted = append(unlisted, p)
+			continue
+		}
+		kind := roslynCSharpProjectType
+		if strings.HasSuffix(strings.ToLower(p), ".vbproj") {
+			kind = roslynVBProjectType
+		}
+		base := p[strings.LastIndex(p, "/")+1:]
+		if i := strings.LastIndex(base, "."); i > 0 {
+			base = base[:i]
+		}
+		// MSBuild refuses a solution with two entries of one name (MSB5004),
+		// and a monorepo has a Tests.csproj in many folders: the name carries
+		// the start of the entry's path-derived id, so each is its own.
+		guid := roslynProjectGUID(p)
+		entries = append(entries, entry{guid, kind, base + "-" + guid[1:9], roslynMount + "/" + p})
+	}
+
+	var b strings.Builder
+	b.WriteString("\nMicrosoft Visual Studio Solution File, Format Version 12.00\n")
+	b.WriteString("# Visual Studio Version 17\n")
+	b.WriteString("VisualStudioVersion = 17.0.31903.59\n")
+	b.WriteString("MinimumVisualStudioVersion = 10.0.40219.1\n")
+	for _, e := range entries {
+		fmt.Fprintf(&b, "Project(\"%s\") = \"%s\", \"%s\", \"%s\"\nEndProject\n", e.kind, e.name, e.path, e.guid)
+	}
+	b.WriteString("Global\n")
+	b.WriteString("\tGlobalSection(SolutionConfigurationPlatforms) = preSolution\n")
+	b.WriteString("\t\tDebug|Any CPU = Debug|Any CPU\n")
+	b.WriteString("\tEndGlobalSection\n")
+	b.WriteString("\tGlobalSection(ProjectConfigurationPlatforms) = postSolution\n")
+	for _, e := range entries {
+		fmt.Fprintf(&b, "\t\t%s.Debug|Any CPU.ActiveCfg = Debug|Any CPU\n", e.guid)
+		fmt.Fprintf(&b, "\t\t%s.Debug|Any CPU.Build.0 = Debug|Any CPU\n", e.guid)
+	}
+	b.WriteString("\tEndGlobalSection\n")
+	b.WriteString("EndGlobal\n")
+	return b.String(), unlisted
+}
+
+// roslynProjectGUID is a solution entry's project id: derived from the
+// mount-relative path, so the same tree renders the same solution.
+func roslynProjectGUID(path string) string {
+	h := sha256.Sum256([]byte(path))
+	return strings.ToUpper(fmt.Sprintf("{%x-%x-%x-%x-%x}", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16]))
 }
 
 // --- scope ------------------------------------------------------------------
@@ -447,11 +589,167 @@ func roslynLevel(s Severity) string {
 // roslynOutcome is what the build container reported back.
 type roslynOutcome struct {
 	Band, BandNote string
-	// Failed is every project whose build exited non-zero, mount-relative.
+	// Failed is every project whose build did not succeed, mount-relative:
+	// read from the build markers, and from the exit status of each
+	// per-project build the fallback ran.
 	Failed []string
+	// Fallback is every project the combined build left un-analysed and that
+	// was then built on its own, mount-relative. Empty when none was.
+	Fallback []string
+	// FastFailed is why the combined build's container could not be read,
+	// "" when it could (or never ran). When set, Fallback is every project.
+	FastFailed string
+	// Unlisted is every project the solution could not name, so never in the
+	// combined build; each is also in Fallback.
+	Unlisted []string
 	// Output is the build's console (errors only) and Stderr its stderr.
 	Output, Stderr string
 	Logs           []roslynLog
+}
+
+// roslynAnalysedProjects is the one answer to "was this project analysed":
+// a project in build is analysed when a log attributed to it parses and has a
+// run with at least one security rule switched on. The fallback selection and
+// the verdict both ask it here, so they cannot disagree about which projects
+// were reached.
+func roslynAnalysedProjects(build []string, logs []roslynLog) map[string]bool {
+	inBuild := setOf(build)
+	analysed := map[string]bool{}
+	for _, log := range logs {
+		if !inBuild[log.Project] || analysed[log.Project] {
+			continue
+		}
+		var doc roslynDoc
+		if json.Unmarshal(log.SARIF, &doc) != nil {
+			continue
+		}
+		for _, run := range doc.Runs {
+			if on, _ := run.securityRules(); len(on) > 0 {
+				analysed[log.Project] = true
+				break
+			}
+		}
+	}
+	return analysed
+}
+
+// roslynFastResult is what the combined build left, read back before any
+// per-project build runs.
+type roslynFastResult struct {
+	// Err is set when the combined build's container could not be read; the
+	// fields below are then empty.
+	Err error
+	// Logs are its compiler logs; Started its .started markers (id →
+	// project); Failed the projects with a build instance that started and
+	// did not finish in it (roslynMarkerFailures).
+	Logs    []roslynLog
+	Started map[string]string
+	Failed  []string
+}
+
+// roslynFastNeeded says the combined build has something to build: at least
+// one project the solution could name.
+func roslynFastNeeded(build, unlisted []string) bool {
+	return len(unlisted) < len(build)
+}
+
+// roslynFallback is every project that gets a build of its own after the
+// combined build, sorted, each once. Uncapped: a slower run that analyses
+// every project is the point.
+//
+//   - Every project, when the combined build's container could not be read
+//     (or there was none): nothing is known about any of them.
+//   - Otherwise each one the combined build left un-analysed (the verdict's
+//     own predicate), each one whose build failed inside it — the failure may
+//     belong to the combined call alone (a parallel race, a dead node, a
+//     build step that reads $(SolutionDir)), and the old loop built it alone
+//     — and each one the solution could not name (unlisted).
+func roslynFallback(build, unlisted []string, fast roslynFastResult) []string {
+	if !roslynFastNeeded(build, unlisted) || fast.Err != nil {
+		return sortedKeys(setOf(build))
+	}
+	analysed := roslynAnalysedProjects(build, fast.Logs)
+	failed := setOf(fast.Failed)
+	// Unlisted explicitly: compiled as another project's reference, it could
+	// otherwise read as analysed without ever having been built as itself.
+	retry := setOf(unlisted)
+	for _, p := range build {
+		if !analysed[p] || failed[p] {
+			retry[p] = true
+		}
+	}
+	return sortedKeys(retry)
+}
+
+// roslynFailures is the final Failed list: every project whose build did not
+// succeed, each judged by its last build. fast.Started holds the .started
+// markers the combined build wrote, started and built every marker after the
+// per-project builds, failedFile the per-project builds' failures by exit
+// status, retried the projects those builds rebuilt. A retried project is
+// judged by its own build alone; one not retried keeps the combined build's
+// verdict.
+func roslynFailures(fast roslynFastResult, started map[string]string, built map[string]bool, failedFile, retried []string) []string {
+	wasRetried := setOf(retried)
+	later := map[string]string{}
+	for id, p := range started {
+		if _, inFast := fast.Started[id]; !inFast {
+			later[id] = p
+		}
+	}
+	failed := setOf(failedFile)
+	for _, p := range roslynMarkerFailures(fast.Started, built) {
+		if !wasRetried[p] {
+			failed[p] = true
+		}
+	}
+	for _, p := range roslynMarkerFailures(later, built) {
+		failed[p] = true
+	}
+	return sortedKeys(failed)
+}
+
+// setOf is the set of items.
+func setOf(items []string) map[string]bool {
+	set := make(map[string]bool, len(items))
+	for _, item := range items {
+		set[item] = true
+	}
+	return set
+}
+
+// roslynFastFailedWarning says the combined build's container did not
+// complete, so its logs could not be read and every project was built on its
+// own instead: the slowest path, and the reason for it.
+func roslynFastFailedWarning(reason string) string {
+	return fmt.Sprintf("%s: the combined build did not complete (%s); every project was built one at a time "+
+		"instead", roslynToolName, roslynTrimMount(firstLine(reason)))
+}
+
+// roslynFallbackWarnings say the run needed the per-project builds, and for
+// which projects: the slow path, disclosed so a slow run explains itself. A
+// project the solution could not name (unlisted) was never in the combined
+// build, so it is named on its own and counted on neither side of "left N of
+// M"; listed is the number of projects the combined build was asked to build.
+func roslynFallbackWarnings(fallback, unlisted []string, listed int) []string {
+	isUnlisted := setOf(unlisted)
+	var left []string
+	for _, p := range fallback {
+		if !isUnlisted[p] {
+			left = append(left, p)
+		}
+	}
+	var w []string
+	if len(left) > 0 {
+		w = append(w, fmt.Sprintf("%s: the combined build left %d of %d C#/VB projects without an analyzer log or "+
+			"a clean build; they were rebuilt one at a time: %s", roslynToolName, len(left), listed,
+			strings.Join(firstN(left, roslynExamplesShown), ", ")))
+	}
+	if len(unlisted) > 0 {
+		w = append(w, fmt.Sprintf("%s: %d C#/VB %s could not be listed in the generated solution and %s built "+
+			"one at a time: %s", roslynToolName, len(unlisted), pick(len(unlisted), "project", "projects"),
+			pick(len(unlisted), "was", "were"), strings.Join(firstN(unlisted, roslynExamplesShown), ", ")))
+	}
+	return w
 }
 
 // roslynResult is the leg's contribution to the envelope.
@@ -527,15 +825,14 @@ func analyseRoslyn(s roslynScope, out roslynOutcome) roslynResult {
 	if out.BandNote != "" {
 		res.Warnings = append(res.Warnings, roslynToolName+": "+out.BandNote)
 	}
+	if out.FastFailed != "" {
+		res.Warnings = append(res.Warnings, roslynFastFailedWarning(out.FastFailed))
+	} else {
+		res.Warnings = append(res.Warnings, roslynFallbackWarnings(out.Fallback, out.Unlisted, len(s.Build)-len(out.Unlisted))...)
+	}
 
-	failed := map[string]bool{}
-	for _, p := range out.Failed {
-		failed[p] = true
-	}
-	inBuild := map[string]bool{}
-	for _, p := range s.Build {
-		inBuild[p] = true
-	}
+	failed := setOf(out.Failed)
+	inBuild := setOf(s.Build)
 
 	type kept struct {
 		result roslynDocResult
@@ -546,7 +843,7 @@ func analyseRoslyn(s roslynScope, out roslynOutcome) roslynResult {
 		seen       = map[string]bool{}
 		rulesOn    = map[string]roslynDocRule{}
 		offIn      = map[string]map[string]bool{} // rule → projects that switched it off
-		analysed   = map[string]bool{}
+		analysed   = roslynAnalysedProjects(s.Build, out.Logs)
 		partial    = map[string]bool{}
 		unreadable int
 		outside    = map[string]bool{}
@@ -568,9 +865,6 @@ func analyseRoslyn(s roslynScope, out roslynOutcome) roslynResult {
 				// Analyzers did not run on this compile at all; it analysed
 				// nothing, whatever results it carries.
 				continue
-			}
-			if inBuild[log.Project] {
-				analysed[log.Project] = true
 			}
 			for id, r := range on {
 				rulesOn[id] = r
