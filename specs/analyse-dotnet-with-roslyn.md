@@ -39,7 +39,10 @@ every file; the analyzers need a build and see across calls.
   `dotnet build` per project, which re-evaluated each project's whole
   reference graph and left the runner's cores idle: on a large .NET consumer
   monorepo that loop was most of a source scan of over twenty minutes, on the
-  critical path of both the precommit and commit pipelines.
+  critical path of both the precommit and commit pipelines. Every decision —
+  the solution, the markers, which projects are rebuilt and the warnings — is
+  in `src/security/roslyn.go`; `src/security/roslynexec.go` only runs the two
+  builds and reads back what they left.
 - **Then per project, for whatever the combined call missed.** Every project
   the combined build left un-analysed — by the same predicate the verdict uses
   (`roslynAnalysedProjects`) — and every project whose build failed inside it
@@ -171,7 +174,7 @@ over every project with 94 security rules enabled.
   `Directory.Solution.props`/`.targets` do not apply, as they did not before.
 - **A broken run is slower than before.** When the combined build analyses
   nothing (a failed restore, a dead container), the per-project builds follow
-  it, so the run costs the failed fast attempt plus the old loop. Disclosed by
+  it, so the run costs the failed combined attempt plus the old loop. Disclosed by
   the fallback warning.
 - **A project path with a `"`** cannot be written into a solution entry. It
   skips the combined build, is built on its own, and is named as such.
