@@ -1,0 +1,21 @@
+src/security/roslyn_test.go
+  s_200a36919dc913::t_7ac719664aeb7f 491
+src/security/roslyn.go
+  s_200a36919dc913::t_aaa5666523558e 214
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be9f104be33c2a0fdd38cbbfb89af22eb8bd6b7c",
+  "prompts": {},
+  "sessions": {
+    "s_200a36919dc913": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e562eb37-f284-4cd9-9a01-a4f42c97fe2c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Mikael Ottesen Hansen <miohansen@gmail.com>"
+    }
+  }
+}
