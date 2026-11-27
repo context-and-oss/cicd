@@ -488,7 +488,7 @@ func TestRoslynFastScriptIsFixedText(t *testing.T) {
 			t.Errorf("fast script lacks %q:\n%s", want, s)
 		}
 	}
-	for _, banned := range []string{"$p", "read ", roslynProjectsPath} {
+	for _, banned := range []string{"$p", "read ", roslynProjectsPath, "|| true", "set -e"} {
 		if strings.Contains(s, banned) {
 			t.Errorf("fast script reads a project list (%q):\n%s", banned, s)
 		}

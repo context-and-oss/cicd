@@ -211,7 +211,7 @@ var roslynScriptPrologue = "mkdir -p " + roslynOutDir + "\n" +
 func roslynFastScript() string {
 	return roslynScriptPrologue +
 		"dotnet build " + roslynSolutionPath + " -m " + strings.Join(roslynBuildArgs, " ") +
-		" </dev/null >>" + roslynOutPath + " 2>>" + roslynErrPath + " || true\n" +
+		" </dev/null >>" + roslynOutPath + " 2>>" + roslynErrPath + "\n" +
 		"exit 0"
 }
 
