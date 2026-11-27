@@ -119,17 +119,23 @@ dagger -m ./src/security call scan-sbom \
 - `roslyn.go` — **untagged**: the .NET security-analyzer leg's every decision.
   Which projects it can build (legacy, MAUI and workload-only are named and
   counted, never dropped; F# is named), the build script and the injected
-  targets file that writes one SARIF log per compile with a project sidecar,
-  and the projection: security rules only, in-tree locations only, cicd's own
+  targets file that writes one SARIF log per compile with a project sidecar
+  and a `.started`/`.built` marker per build, the generated solution built in
+  one parallel `dotnet build -m` (`roslynSolution`), the per-project fallback
+  (`roslynFallback`, `roslynFailures`), and the projection: security rules
+  only, in-tree locations only, cicd's own
   severity table (`roslynSeverity`, never the repository's level), switched-off
   rules as `NARROWED RULES`, in-source suppressions disclosed and not counted,
   compile errors as partial, and no log at all as a non-run. A project counts as
   analysed only when a log ran a security rule; its build exit status does not
   decide. See [specs/analyse-dotnet-with-roslyn.md](../../specs/analyse-dotnet-with-roslyn.md).
 - `roslynexec.go` — the same leg's container: discovery, the pinned SDK band
-  (the restore's resolver), a private NuGet cache, the build, and reading back
-  the status files and logs. Holds no decisions. The real-SDK regression is
-  `scripts/smoke/roslyn-analyzers.sh` over `testdata/roslyn-sast`.
+  (the restore's resolver), a private NuGet cache, the combined build, the
+  per-project fallback chained on it (or on a fresh container when the
+  combined one did not complete), and reading back the status files, logs and
+  markers. Holds no decisions. The real-SDK regression is
+  `scripts/smoke/roslyn-analyzers.sh` over `testdata/roslyn-sast` and
+  `testdata/roslyn-sast-fallback`.
 - `opengrep.go` — **untagged**: the pinned Opengrep release (version, per-arch
   asset and sha256), the pinned PyYAML wheel the rule helpers import,
   `opengrepAssetsFor()` (a platform it has no digest for is a non-run, never

@@ -304,7 +304,10 @@ analyzers start, so the build reports success or failure with no analysis
 behind it. The witness is the analyzer log. A project is analysed when one of
 its compile logs ran at least one enabled security rule. A compile that
 reported a compiler error was analysed over an incomplete program and is
-partial. Projects to build with no log from any of them is a non-run.
+partial. Projects to build with no log from any of them is a non-run. A
+speed-up never costs a project its analysis: every project the one parallel
+build left without an analyzer log or a clean build is built again on its
+own (see the spec for the mechanism).
 
 Three further doors, each closed in `roslyn.go`:
 

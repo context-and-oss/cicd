@@ -29,9 +29,39 @@ every file; the analyzers need a build and see across calls.
   no row otherwise. Its SARIF run is merged into the envelope's report under
   its own driver name and `automationDetails.id`, so the evidence bundle's
   Code Scanning upload treats it as its own category.
-- **It builds the code.** Each buildable project gets one `dotnet build` in the
-  pinned SDK band the tree asks for (`dotnetResolveBand`, the restore's
-  resolver), with `AnalysisModeSecurity=All` and the analyzers forced on.
+- **It builds the code, in one parallel call first.** Every buildable project
+  is listed in a generated classic-format solution (`roslynSolution`; the 8.0
+  band cannot read `.slnx`) outside the tree, and built by one
+  `dotnet build -m` in the pinned SDK band the tree asks for
+  (`dotnetResolveBand`, the restore's resolver), with `AnalysisModeSecurity=All`
+  and the analyzers forced on. One call evaluates each project once and
+  compiles in dependency order on every core. It replaced one cold
+  `dotnet build` per project, which re-evaluated each project's whole
+  reference graph and left the runner's cores idle: on a large .NET consumer
+  monorepo that loop was most of a source scan of over twenty minutes, on the
+  critical path of both the precommit and commit pipelines.
+- **Then per project, for whatever the combined call missed.** Every project
+  the combined build left un-analysed — by the same predicate the verdict uses
+  (`roslynAnalysedProjects`) — and every project whose build failed inside it
+  is built again on its own, uncapped, as before (`roslynFallback`). A
+  rebuilt project is judged by its own build alone (`roslynFailures`), so a
+  failure that belonged to the combined call does not follow it. Solution
+  entries carry a path-derived suffix, because MSBuild refuses a solution with
+  two projects of one name. One failed restore stops a whole solution build, so
+  without this one broken project would cost the analysis of every other.
+  The run says when it took this path and for which projects. If the combined
+  build's container did not complete at all, every project is built on its own
+  on a fresh container, and the run says that too. Coverage is never lower than
+  the per-project loop's; only the time of a broken run is.
+- **Per-project build failure from markers, not exit status.** One call has
+  one exit status. The injected targets file writes a `.started` marker before
+  `BeforeBuild`, the first target `Build` depends on (a hook on `Build` itself
+  runs only after the compile succeeded: MSBuild runs `DependsOnTargets`
+  before `BeforeTargets`, measured), and a `.built` marker after `Build`.
+  MSBuild runs an `AfterTargets` target only when the target it follows
+  succeeded, so a start without a finish is a failed build
+  (`roslynMarkerFailures`). Never parsed from console lines. The combined and
+  the per-project builds carry the same `roslynBuildArgs`.
   A cicd-owned targets file, injected through
   `CustomAfterMicrosoftCommonTargets`, points `ErrorLog` at a per-compile SARIF
   file and writes a sidecar naming the project, so a log is attributed to the
@@ -134,6 +164,25 @@ over every project with 94 security rules enabled.
   builds every testdata .NET project; measured, all eight build and read clean.
 - **Committed `obj/` can skip the compile.** An up-to-date check that skips
   `CoreCompile` writes no log, and the project reads as not analysed.
+- **A solution build is not quite a project build.** The combined build sets
+  `$(SolutionDir)`, `$(SolutionName)` and friends to the generated solution's
+  values, outside the tree; a repository whose MSBuild branches on them sees
+  different values than in a per-project build. The consumer's own
+  `Directory.Solution.props`/`.targets` do not apply, as they did not before.
+- **A broken run is slower than before.** When the combined build analyses
+  nothing (a failed restore, a dead container), the per-project builds follow
+  it, so the run costs the failed fast attempt plus the old loop. Disclosed by
+  the fallback warning.
+- **A project path with a `"`** cannot be written into a solution entry. It
+  skips the combined build, is built on its own, and is named as such.
+- **PARTIAL now means "the build itself failed".** The `.built` marker is
+  written when `Build` finishes, before a consumer target that runs after
+  `Build` from `Directory.Build.targets`. Such a target failing no longer marks
+  the project partial, as the per-project exit status did. The compile, and so
+  the analysis, had completed; a later packaging or copy step is not part of
+  what the analyzers saw.
+- **The solution builds every project as `Debug|Any CPU`**, where a
+  per-project build took the project's own default platform.
 
 There is no switch to turn the leg off. The case that can stay red is an SDK
 project cicd should build and cannot; the remedy is `exclude` for that
@@ -150,11 +199,22 @@ cicd already uses for the restore. Nothing is downloaded or redistributed.
   boundaries, the projection (security only, deduplicated across compiles,
   suppressions excluded, cicd's level stamped), compile errors as partial, the
   non-run error, unbuilt projects named, nothing to build as skipped,
-  locations kept inside the tree, the targets file well formed, and the build
-  script driven against a stub `dotnet` with a hostile project path.
+  locations kept inside the tree, the targets file well formed (with the build
+  markers), the generated solution (types, stable ids, configuration mapping,
+  an unquotable path routed to the fallback), failures from markers across a
+  multi-targeted project, the fallback selection sharing the verdict's
+  predicate, a retried project judged by its own build, the fallback
+  disclosures (unlisted projects never blamed on the combined build), the
+  combined build's script as fixed text, and the fallback script driven
+  against a stub `dotnet` with a hostile project path, appending to the
+  combined build's console.
 - `scripts/smoke/roslyn-analyzers.sh`, run by the `module-test` security cell
   and `make smoke`: the real SDK over `testdata/roslyn-sast`, asserting every
-  row, result and warning above and that the default gate fails.
+  row, result and warning above, that the default gate fails, and that the
+  combined build analyses every project that can build — only `broken/`,
+  whose build failed, is rebuilt on its own, never `web/`; then over
+  `testdata/roslyn-sast-fallback`, where a failed restore stops the combined
+  build and the fallback still analyses the project that builds.
 
 ## Residue
 

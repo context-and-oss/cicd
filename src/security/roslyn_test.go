@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -430,18 +431,39 @@ func TestRoslynURIsStayInsideTheTree(t *testing.T) {
 func TestRoslynTargetsIsWellFormed(t *testing.T) {
 	var v struct {
 		XMLName xml.Name
-		Target  struct {
+		Targets []struct {
 			Name          string `xml:"Name,attr"`
 			BeforeTargets string `xml:"BeforeTargets,attr"`
-		}
+			AfterTargets  string `xml:"AfterTargets,attr"`
+		} `xml:"Target"`
 	}
 	if err := xml.Unmarshal([]byte(roslynTargets), &v); err != nil {
 		t.Fatal(err)
 	}
-	if v.XMLName.Local != "Project" || v.Target.BeforeTargets != "CoreCompile" {
-		t.Errorf("targets = %+v", v)
+	if v.XMLName.Local != "Project" {
+		t.Errorf("root = %q", v.XMLName.Local)
 	}
-	for _, want := range []string{roslynOutDir + "/$(CicdRoslynLogId).sarif,version=2.1", "$(MSBuildProjectFullPath)"} {
+	// One target points the compiler's log; one marks every build that
+	// started and one every build that finished. MSBuild runs an AfterTargets
+	// target only when the target it follows succeeded, so a start with no
+	// finish is a build that failed.
+	hooks := map[string]bool{}
+	for _, tg := range v.Targets {
+		hooks["before:"+tg.BeforeTargets+"|after:"+tg.AfterTargets] = true
+	}
+	// The start hooks BeforeBuild, not Build: see roslynTargets for why.
+	for _, want := range []string{"before:CoreCompile|after:", "before:BeforeBuild|after:", "before:|after:Build"} {
+		if !hooks[want] {
+			t.Errorf("targets lack the hook %s: %+v", want, v.Targets)
+		}
+	}
+	if len(v.Targets) != 3 {
+		t.Errorf("want three targets, got %d", len(v.Targets))
+	}
+	for _, want := range []string{
+		roslynOutDir + "/$(CicdRoslynLogId).sarif,version=2.1", "$(MSBuildProjectFullPath)",
+		roslynOutDir + "/$(CicdRoslynBuildId).started", roslynOutDir + "/$(CicdRoslynBuildId).built",
+	} {
 		if !strings.Contains(roslynTargets, want) {
 			t.Errorf("targets lacks %q", want)
 		}
@@ -451,9 +473,35 @@ func TestRoslynTargetsIsWellFormed(t *testing.T) {
 	}
 }
 
-// TestRoslynScriptIsShellSafe drives the real script with a stub dotnet:
-// project paths are arguments, never source; every project is built on its
-// own; each failure is written down by name; the script exits 0.
+// TestRoslynFastScriptIsFixedText: the combined build names only the
+// solution's fixed path, so no project path reaches its shell; it carries
+// every global property the per-project builds carry, builds in parallel,
+// reads no stdin, starts the status files fresh and always exits 0.
+func TestRoslynFastScriptIsFixedText(t *testing.T) {
+	s := roslynFastScript()
+	for _, want := range append([]string{
+		"dotnet build " + roslynSolutionPath + " -m ", "</dev/null",
+		": >> " + roslynFailedPath, ": >> " + roslynOutPath, ": >> " + roslynErrPath,
+		"mkdir -p " + roslynOutDir,
+	}, roslynBuildArgs...) {
+		if !strings.Contains(s, want) {
+			t.Errorf("fast script lacks %q:\n%s", want, s)
+		}
+	}
+	for _, banned := range []string{"$p", "read ", roslynProjectsPath} {
+		if strings.Contains(s, banned) {
+			t.Errorf("fast script reads a project list (%q):\n%s", banned, s)
+		}
+	}
+	if !strings.HasSuffix(s, "exit 0") {
+		t.Errorf("fast script does not always exit 0:\n%s", s)
+	}
+}
+
+// TestRoslynScriptIsShellSafe drives the real fallback script with a stub
+// dotnet: project paths are arguments, never source; every project is built
+// on its own; each failure is written down by name; the script exits 0; and
+// what the combined build already wrote is kept, not truncated.
 func TestRoslynScriptIsShellSafe(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "bin")
@@ -468,7 +516,7 @@ func TestRoslynScriptIsShellSafe(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "dotnet"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := roslynBuildScript()
+	script := roslynFallbackScript()
 	for _, p := range []string{roslynProjectsPath, roslynFailedPath, roslynOutPath, roslynErrPath, roslynDir} {
 		script = strings.ReplaceAll(script, p, filepath.Join(dir, strings.TrimPrefix(p, "/")))
 	}
@@ -480,6 +528,10 @@ func TestRoslynScriptIsShellSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(listPath, []byte(list), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The combined build ran first and left its console behind.
+	if err := os.WriteFile(filepath.Join(dir, strings.TrimPrefix(roslynOutPath, "/")), []byte("combined: error MSB0000: fast\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("sh", "-c", script)
@@ -505,8 +557,319 @@ func TestRoslynScriptIsShellSafe(t *testing.T) {
 	if !strings.Contains(string(out), "error CS0001") {
 		t.Errorf("the build console is where MSBuild writes errors, and it was not kept: %q", out)
 	}
+	if !strings.HasPrefix(string(out), "combined: error MSB0000: fast\n") {
+		t.Errorf("the fallback truncated the combined build's console: %q", out)
+	}
+	// Run alone (the combined build's container did not complete), with
+	// nothing failing, it still leaves every status file Go reads.
+	if err := os.WriteFile(filepath.Join(bin, "dotnet"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{roslynFailedPath, roslynOutPath, roslynErrPath} {
+		_ = os.Remove(filepath.Join(dir, strings.TrimPrefix(p, "/")))
+	}
+	alone := exec.Command("sh", "-c", script)
+	alone.Env = cmd.Env
+	if b, err := alone.CombinedOutput(); err != nil {
+		t.Fatalf("script: %v\n%s", err, b)
+	}
+	for _, p := range []string{roslynFailedPath, roslynOutPath, roslynErrPath} {
+		if _, err := os.Stat(filepath.Join(dir, strings.TrimPrefix(p, "/"))); err != nil {
+			t.Errorf("status file %s was not created: %v", p, err)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(dir, strings.TrimPrefix(roslynOutDir, "/"))); err != nil {
 		t.Errorf("the log directory was not created: %v", err)
+	}
+}
+
+// TestRoslynMarkersFailAProjectOnAnyFailedInstance: one MSBuild call has one
+// exit status, so a project's build failure is read from its markers. A
+// multi-targeted project builds as several instances; any one that started
+// and did not finish fails the project. A marker outside the tree is ignored.
+func TestRoslynMarkersFailAProjectOnAnyFailedInstance(t *testing.T) {
+	started := map[string]string{
+		"a1": "web/Web.csproj", "a2": "web/Web.csproj",
+		"b1": "lib/Lib.csproj",
+		"c1": "",
+	}
+	built := map[string]bool{"a1": true, "b1": true}
+	if got := roslynMarkerFailures(started, built); strings.Join(got, ",") != "web/Web.csproj" {
+		t.Errorf("failed = %v", got)
+	}
+	if got := roslynMarkerFailures(started, map[string]bool{"a1": true, "a2": true, "b1": true}); len(got) != 0 {
+		t.Errorf("every instance finished, failed = %v", got)
+	}
+	both := roslynMarkerFailures(map[string]string{"x": "b/B.csproj", "y": "a/A.csproj", "z": "a/A.csproj"}, nil)
+	if strings.Join(both, ",") != "a/A.csproj,b/B.csproj" {
+		t.Errorf("failed = %v, want sorted and unique", both)
+	}
+}
+
+// TestRoslynFallbackSelectsTheUnanalysed: every project the combined build
+// left without an analyzer log gets a build of its own, and only those.
+func TestRoslynFallbackSelectsTheUnanalysed(t *testing.T) {
+	build := []string{"a/A.csproj", "b/B.csproj", "c/C.csproj"}
+	logs := []roslynLog{{Project: "a/A.csproj", SARIF: compilerLog(t, fixtureRules, nil)}}
+	if got := roslynFallback(build, nil, roslynFastResult{Logs: logs}); strings.Join(got, ",") != "b/B.csproj,c/C.csproj" {
+		t.Errorf("fallback = %v", got)
+	}
+	all := append(logs,
+		roslynLog{Project: "b/B.csproj", SARIF: compilerLog(t, fixtureRules, nil)},
+		roslynLog{Project: "c/C.csproj", SARIF: compilerLog(t, fixtureRules, nil)})
+	if got := roslynFallback(build, nil, roslynFastResult{Logs: all}); len(got) != 0 {
+		t.Errorf("every project was analysed, fallback = %v", got)
+	}
+}
+
+// TestRoslynFallbackRetriesAFailedCombinedBuild: a project whose build failed
+// inside the combined call may have failed for a reason only that call has
+// (a parallel race, a dead node). It gets a build of its own, as the old loop
+// gave it, even though it left a log.
+func TestRoslynFallbackRetriesAFailedCombinedBuild(t *testing.T) {
+	build := []string{"a/A.csproj", "b/B.csproj"}
+	logs := []roslynLog{
+		{Project: "a/A.csproj", SARIF: compilerLog(t, fixtureRules, nil)},
+		{Project: "b/B.csproj", SARIF: compilerLog(t, fixtureRules, nil)},
+	}
+	got := roslynFallback(build, nil, roslynFastResult{Logs: logs, Failed: []string{"b/B.csproj", "elsewhere/X.csproj"}})
+	if strings.Join(got, ",") != "b/B.csproj" {
+		t.Errorf("fallback = %v", got)
+	}
+}
+
+// TestRoslynFallbackAfterADeadCombinedBuild: when the combined build's
+// container could not be read, nothing is known about any project, so every
+// project is built on its own.
+func TestRoslynFallbackAfterADeadCombinedBuild(t *testing.T) {
+	build := []string{"b/B.csproj", "a/A.csproj"}
+	got := roslynFallback(build, nil, roslynFastResult{Err: errors.New("killed")})
+	if strings.Join(got, ",") != "a/A.csproj,b/B.csproj" {
+		t.Errorf("fallback = %v", got)
+	}
+}
+
+// TestRoslynFastBuildRunsOnlyWithSomethingToBuild: a tree whose every project
+// the solution cannot name skips the combined build.
+func TestRoslynFastBuildRunsOnlyWithSomethingToBuild(t *testing.T) {
+	if roslynFastNeeded([]string{`q"/A.csproj`}, []string{`q"/A.csproj`}) {
+		t.Error("a combined build with nothing in the solution")
+	}
+	if !roslynFastNeeded([]string{"a/A.csproj", `q"/B.csproj`}, []string{`q"/B.csproj`}) {
+		t.Error("no combined build for a nameable project")
+	}
+}
+
+// TestRoslynFailuresJudgeARetriedProjectByItsOwnBuild: a project the
+// fallback rebuilt is failed or not by that rebuild alone; the combined
+// build's failure does not follow it. A project not retried keeps its
+// combined-build verdict.
+func TestRoslynFailuresJudgeARetriedProjectByItsOwnBuild(t *testing.T) {
+	fastStarted := map[string]string{"f1": "a/A.csproj", "f2": "c/C.csproj"}
+	started := map[string]string{"f1": "a/A.csproj", "f2": "c/C.csproj", "r1": "a/A.csproj", "r2": "b/B.csproj"}
+	built := map[string]bool{"r1": true, "r2": true}
+	got := roslynFailures(roslynFastResult{Started: fastStarted}, started, built, nil, []string{"a/A.csproj", "b/B.csproj"})
+	if strings.Join(got, ",") != "c/C.csproj" {
+		t.Errorf("failed = %v, want only the un-retried combined failure", got)
+	}
+	got = roslynFailures(roslynFastResult{Started: fastStarted}, started, map[string]bool{"r2": true}, []string{"d/D.csproj"}, []string{"a/A.csproj", "b/B.csproj"})
+	if strings.Join(got, ",") != "a/A.csproj,c/C.csproj,d/D.csproj" {
+		t.Errorf("failed = %v", got)
+	}
+	// No combined build (fresh container): every marker is the fallback's.
+	got = roslynFailures(roslynFastResult{}, map[string]string{"r1": "a/A.csproj"}, nil, nil, []string{"a/A.csproj"})
+	if strings.Join(got, ",") != "a/A.csproj" {
+		t.Errorf("failed = %v", got)
+	}
+}
+
+// TestRoslynFallbackUsesTheAnalysedPredicate: a log that ran no security rule
+// did not analyse its project. The retry and the verdict ask the same
+// question, so a project the verdict would call not analysed is retried.
+func TestRoslynFallbackUsesTheAnalysedPredicate(t *testing.T) {
+	build := []string{"a/A.csproj", "b/B.csproj"}
+	logs := []roslynLog{
+		{Project: "a/A.csproj", SARIF: compilerLog(t, fixtureRules, nil)},
+		{Project: "b/B.csproj", SARIF: compilerLog(t, []fixtureRule{{id: "CA1822", category: "Performance"}}, nil)},
+		{Project: "b/B.csproj", SARIF: []byte("not json")},
+	}
+	if got := roslynFallback(build, nil, roslynFastResult{Logs: logs}); strings.Join(got, ",") != "b/B.csproj" {
+		t.Errorf("fallback = %v", got)
+	}
+	res := analyseRoslyn(roslynScope{Build: build}, roslynOutcome{Logs: logs})
+	if !hasWarning(res.Warnings, "not analysed", "b/B.csproj") {
+		t.Errorf("the verdict does not name b as not analysed: %v", res.Warnings)
+	}
+}
+
+// TestRoslynFallbackIncludesUnlisted: a project the solution could not name
+// was never in the combined build, so it is built on its own.
+func TestRoslynFallbackIncludesUnlisted(t *testing.T) {
+	build := []string{"a/A.csproj", `q"/B.csproj`}
+	logs := []roslynLog{{Project: "a/A.csproj", SARIF: compilerLog(t, fixtureRules, nil)}}
+	if got := roslynFallback(build, []string{`q"/B.csproj`}, roslynFastResult{Logs: logs}); len(got) != 1 || got[0] != `q"/B.csproj` {
+		t.Errorf("fallback = %v", got)
+	}
+}
+
+// TestRoslynFallbackIsDisclosed: a run that needed the per-project builds
+// says so and names them, because it is the slow path; one that did not
+// says nothing.
+func TestRoslynFallbackIsDisclosed(t *testing.T) {
+	// The legacy project was never in the combined build, so it is not in
+	// the sentence's denominator either.
+	scope := roslynScope{
+		Build:     []string{"a/A.csproj", "b/B.csproj"},
+		Uncovered: []roslynUncovered{{Path: "legacy/L.csproj", Reason: "legacy"}},
+	}
+	logs := []roslynLog{
+		{Project: "a/A.csproj", SARIF: compilerLog(t, fixtureRules, nil)},
+		{Project: "b/B.csproj", SARIF: compilerLog(t, fixtureRules, nil)},
+	}
+	res := analyseRoslyn(scope, roslynOutcome{Logs: logs, Fallback: []string{"b/B.csproj"}})
+	want := "roslyn-analyzers: the combined build left 1 of 2 C#/VB projects without an analyzer log or a " +
+		"clean build; they were rebuilt one at a time: b/B.csproj"
+	if !hasWarning(res.Warnings, want) {
+		t.Errorf("no fallback warning %q in %v", want, res.Warnings)
+	}
+	if res := analyseRoslyn(scope, roslynOutcome{Logs: logs}); hasWarning(res.Warnings, "combined build") {
+		t.Errorf("a run without a fallback disclosed one: %v", res.Warnings)
+	}
+}
+
+// TestRoslynUnlistedProjectsAreNotBlamedOnTheCombinedBuild: a project the
+// solution could not name was never in the combined build. It is named as
+// such, and neither side of "left N of M" counts it.
+func TestRoslynUnlistedProjectsAreNotBlamedOnTheCombinedBuild(t *testing.T) {
+	q := `q"/Q.csproj`
+	scope := roslynScope{Build: []string{"a/A.csproj", "b/B.csproj", q}}
+	logs := []roslynLog{
+		{Project: "a/A.csproj", SARIF: compilerLog(t, fixtureRules, nil)},
+		{Project: "b/B.csproj", SARIF: compilerLog(t, fixtureRules, nil)},
+		{Project: q, SARIF: compilerLog(t, fixtureRules, nil)},
+	}
+	res := analyseRoslyn(scope, roslynOutcome{Logs: logs, Fallback: []string{"b/B.csproj", q}, Unlisted: []string{q}})
+	if !hasWarning(res.Warnings, "the combined build left 1 of 2 ", "b/B.csproj") {
+		t.Errorf("want the combined build blamed for b alone, out of the two it built: %v", res.Warnings)
+	}
+	if hasWarning(res.Warnings, "combined build left", q) {
+		t.Errorf("an unlisted project was blamed on the combined build: %v", res.Warnings)
+	}
+	if !hasWarning(res.Warnings, "could not be listed in the generated solution", q) {
+		t.Errorf("the unlisted project is not named: %v", res.Warnings)
+	}
+
+	// Nothing listed: no combined build ran, so none is described.
+	only := roslynScope{Build: []string{q}}
+	res = analyseRoslyn(only, roslynOutcome{Logs: logs[2:], Fallback: []string{q}, Unlisted: []string{q}})
+	if hasWarning(res.Warnings, "combined build") {
+		t.Errorf("a combined build that never ran was described: %v", res.Warnings)
+	}
+}
+
+// TestRoslynFastFailureIsDisclosed: when the combined build's container did
+// not complete, every project was built on its own, and the run says why —
+// once. It does not also claim the combined build "left" projects without a
+// log: nothing about its logs is known.
+func TestRoslynFastFailureIsDisclosed(t *testing.T) {
+	scope := roslynScope{Build: []string{"a/A.csproj"}}
+	logs := []roslynLog{{Project: "a/A.csproj", SARIF: compilerLog(t, fixtureRules, nil)}}
+	res := analyseRoslyn(scope, roslynOutcome{Logs: logs, Fallback: scope.Build, FastFailed: "process killed\nmore"})
+	if !hasWarning(res.Warnings, "roslyn-analyzers:", "combined build did not complete", "process killed", "one at a time") {
+		t.Errorf("no fast-failure warning in %v", res.Warnings)
+	}
+	if hasWarning(res.Warnings, "combined build left") {
+		t.Errorf("a dead combined build was described as one that left projects behind: %v", res.Warnings)
+	}
+}
+
+func hasWarning(warnings []string, needles ...string) bool {
+	for _, w := range warnings {
+		all := true
+		for _, n := range needles {
+			all = all && strings.Contains(w, n)
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRoslynSolutionListsEveryProject: the generated solution names every
+// buildable project by its absolute container path, with the right project
+// type, a stable id, and a configuration mapping so none is left unselected.
+func TestRoslynSolutionListsEveryProject(t *testing.T) {
+	sln, unlisted := roslynSolution([]string{"web/Web.csproj", "lib dir/Lib.vbproj"})
+	if len(unlisted) != 0 {
+		t.Fatalf("unlisted = %v", unlisted)
+	}
+	web, lib := roslynProjectGUID("web/Web.csproj"), roslynProjectGUID("lib dir/Lib.vbproj")
+	for _, want := range []string{
+		"Microsoft Visual Studio Solution File, Format Version 12.00",
+		`Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Web-` + web[1:9] + `", "` + roslynMount + `/web/Web.csproj", "` + web + `"`,
+		`Project("{778DAE3C-4631-46EA-AA77-85C1314464D9}") = "Lib-` + lib[1:9] + `", "` + roslynMount + `/lib dir/Lib.vbproj", "` + lib + `"`,
+		"Debug|Any CPU = Debug|Any CPU",
+		web + ".Debug|Any CPU.ActiveCfg = Debug|Any CPU",
+		web + ".Debug|Any CPU.Build.0 = Debug|Any CPU",
+		lib + ".Debug|Any CPU.ActiveCfg = Debug|Any CPU",
+		lib + ".Debug|Any CPU.Build.0 = Debug|Any CPU",
+	} {
+		if !strings.Contains(sln, want) {
+			t.Errorf("solution lacks %q:\n%s", want, sln)
+		}
+	}
+	if strings.Count(sln, "EndProject\n") != 2 {
+		t.Errorf("want two project entries:\n%s", sln)
+	}
+	if web != roslynProjectGUID("web/Web.csproj") {
+		t.Error("the project id is not stable")
+	}
+	if web == lib {
+		t.Error("two projects share an id")
+	}
+	if len(web) != 38 || web[0] != '{' || web != strings.ToUpper(web) {
+		t.Errorf("project id %q is not a braced upper-case GUID", web)
+	}
+}
+
+// TestRoslynSolutionNamesAreUnique: MSBuild refuses a solution with two
+// projects of one name (MSB5004), which would fail the whole combined build.
+// A monorepo has a Tests.csproj in many folders; each entry gets its own name.
+func TestRoslynSolutionNamesAreUnique(t *testing.T) {
+	sln, _ := roslynSolution([]string{"a/Tests.csproj", "b/Tests.csproj", "c/Tests.vbproj"})
+	names := map[string]bool{}
+	for _, line := range strings.Split(sln, "\n") {
+		if !strings.HasPrefix(line, "Project(") {
+			continue
+		}
+		name := strings.Split(line, `"`)[3]
+		if names[name] {
+			t.Errorf("two solution entries are named %q:\n%s", name, sln)
+		}
+		names[name] = true
+		if !strings.HasPrefix(name, "Tests") {
+			t.Errorf("entry name %q no longer says which project it is", name)
+		}
+	}
+	if len(names) != 3 {
+		t.Errorf("want three entries, got %v", names)
+	}
+}
+
+// TestRoslynSolutionLeavesOutWhatItCannotExpress: a path a solution entry
+// cannot quote is not written into it, and is handed back so it can still be
+// built on its own.
+func TestRoslynSolutionLeavesOutWhatItCannotExpress(t *testing.T) {
+	sln, unlisted := roslynSolution([]string{"ok/A.csproj", `q"uote/B.csproj`})
+	if len(unlisted) != 1 || unlisted[0] != `q"uote/B.csproj` {
+		t.Fatalf("unlisted = %v", unlisted)
+	}
+	if strings.Contains(sln, "uote") {
+		t.Error("an unexpressible path reached the solution")
+	}
+	if !strings.Contains(sln, roslynMount+"/ok/A.csproj") {
+		t.Error("the expressible project was dropped")
 	}
 }
 

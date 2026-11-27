@@ -1,0 +1,8 @@
+using System.Security.Cryptography;
+
+namespace Fixture.Fallback;
+
+public static class Hashing
+{
+    public static byte[] Weak(byte[] data) => SHA1.HashData(data);
+}

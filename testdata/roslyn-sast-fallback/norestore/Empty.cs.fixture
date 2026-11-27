@@ -1,0 +1,5 @@
+namespace Fixture.NoRestore;
+
+public static class Empty
+{
+}

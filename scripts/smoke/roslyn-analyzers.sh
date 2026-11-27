@@ -51,5 +51,37 @@ has('PARTIAL SCAN', 'broken/Broken.csproj')
 has('NARROWED RULES', 'CA5394')
 has('1 finding suppressed in source')
 assert not any('PARTIAL SCAN' in w and 'web/Web.csproj' in w for w in warnings), warnings
+# The combined build analysed both buildable projects. Only broken/, whose
+# build failed inside it, is rebuilt on its own; web/ never is.
+has('the combined build left 1 of 2', 'rebuilt one at a time: broken/Broken.csproj')
+assert not any('combined build' in w and 'web/Web.csproj' in w for w in warnings), warnings
 PY
 echo "roslyn-analyzers smoke: ok"
+
+# Second scenario: a project whose restore fails stops the combined solution
+# build. The per-project fallback must still analyse the project that can
+# build, and the evidence must say the slow path ran.
+fallback="$work/fallback"
+python3 -I scripts/smoke/materialise-fixtures.py testdata/roslyn-sast-fallback "$fallback"
+dagger -m ./src/security call scan-source --src "$fallback" --code-only --fail-on NONE \
+  --commit-sha local --branch main --repo-url https://example.com \
+  export --path "$work/fallback.json"
+python3 - "$work/fallback.json" <<'PY'
+import json, sys
+x = json.load(open(sys.argv[1]))
+assert not x.get('errors'), x.get('errors')
+
+row = next(s for s in x['sources'] if s['tool'] == 'roslyn-analyzers')
+assert row['examined']['count'] == 1 and row['examined']['total'] == 2, row['examined']
+
+runs = [r for r in x['sarifReport']['runs'] if r['tool']['driver']['name'] == 'roslyn-analyzers']
+results = {(r['ruleId'], r['locations'][0]['physicalLocation']['artifactLocation']['uri']) for r in runs[0]['results']}
+assert ('CA5350', 'web/Hashing.cs') in results, results
+
+warnings = [w for w in x.get('warnings', []) if w.startswith('roslyn-analyzers:')]
+def has(*needles):
+    assert any(all(n in w for n in needles) for w in warnings), (needles, warnings)
+has('the combined build left 2 of 2', 'rebuilt one at a time', 'norestore/NoRestore.csproj', 'web/Web.csproj')
+has('not analysed', 'norestore/NoRestore.csproj')
+PY
+echo "roslyn-analyzers fallback smoke: ok"
